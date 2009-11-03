@@ -624,7 +624,7 @@ directory_add_helper (void *arg)
 	 directory and then watch its contents.  */
       error_t err = nftw (filename, callback, 256, FTW_PHYS | FTW_DEPTH);
       if (err < 0)
-	error (0, errno, "ftw (%s)", filename);
+	error (0, errno, "ftw (%s) %d", filename, errno);
 
       debug (0, "Processed %s (%d watches)", filename, total_watches);
 
