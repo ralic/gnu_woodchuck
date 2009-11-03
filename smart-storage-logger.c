@@ -356,6 +356,24 @@ notice_add_helper (void *arg)
 	      errmsg = NULL;
 	    }
 
+	  struct stat statbuf;
+	  statbuf.st_size = 0;
+	  if (stat (filename, &statbuf) == 0)
+	    statbuf.st_size ++;
+
+	  sqlite3_exec_printf
+	    (access_db,
+	     "insert into log values (%"PRId64", %"PRId64", %"PRId64");",
+	     NULL, NULL, &errmsg,
+	     uid, last_access, (uint64_t) statbuf.st_size);
+	  if (errmsg)
+	    {
+	      debug (0, "%s: %s", filename, errmsg);
+	      sqlite3_free (errmsg);
+	      errmsg = NULL;
+	    }
+
+
 	  if (needs_update)
 	    {
 	      last_access = n;
@@ -377,16 +395,8 @@ notice_add_helper (void *arg)
 		    a[i].count ++;
 		}
 
-	      struct stat statbuf;
-	      statbuf.st_size = 0;
-	      if (stat (filename, &statbuf) == 0)
-		statbuf.st_size ++;
-
 	      int err = sqlite3_exec_printf
 		(access_db,
-		 "begin transaction;"
-		 //"delete from accesses where uid = %"PRId64";"
-		 //"insert into accesses values"
 		 "insert or replace into accesses values"
 		 " (%"PRId64", %"PRId64", %"PRId64", %"PRId64", "
 		 "  %"PRId64", %d, %"PRId64", %d, "
@@ -397,12 +407,8 @@ notice_add_helper (void *arg)
 		 "  %"PRId64", %d, %"PRId64", %d, "
 		 "  %"PRId64", %d, %"PRId64", %d, "
 		 "  %"PRId64", %d, %"PRId64", %d, "
-		 "  %"PRId64", %d, %"PRId64", %d);"
-
-		 "insert into log values (%"PRId64", %"PRId64", %"PRId64");"
-		 "commit transaction;",
+		 "  %"PRId64", %d, %"PRId64", %d);",
 		 NULL, NULL, &errmsg,
-		 //uid,
 		 uid, created, last_access, (uint64_t) statbuf.st_size,
 		 a[0].start, a[0].count, a[0].startprev, a[0].countprev,
 		 a[1].start, a[1].count, a[1].startprev, a[1].countprev,
@@ -412,8 +418,7 @@ notice_add_helper (void *arg)
 		 a[5].start, a[5].count, a[5].startprev, a[5].countprev,
 		 a[6].start, a[6].count, a[6].startprev, a[6].countprev,
 		 a[7].start, a[7].count, a[7].startprev, a[7].countprev,
-		 a[8].start, a[8].count, a[8].startprev, a[8].countprev,
-		 uid, last_access, (uint64_t) statbuf.st_size);
+		 a[8].start, a[8].count, a[8].startprev, a[8].countprev);
 
 	      if (err)
 		sqlite3_exec (access_db, "rollback transaction;",
