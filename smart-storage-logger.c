@@ -316,11 +316,13 @@ notice_add_helper (void *arg)
 	  int access_callback (void *cookie, int argc, char **argv,
 			       char **names)
 	  {
-	    created = atol (argv[0]);
-	    last_access = atol (argv[1]);
+	    // uid = atol (argv[0]);
+	    created = atol (argv[1]);
+	    last_access = atol (argv[2]);
+	    // size = atol (argv[3]);
 
-	    debug (0, "%s updated %"PRId64" seconds ago.",
-		   filename, n - last_access);
+	    debug (0, "%s updated %"PRId64" seconds ago (%"PRId64"-%"PRId64").",
+		   filename, n - last_access, n, last_access);
 
 	    if (last_access + 60 * 60 > n)
 	      /* The last access was less than an hour in the past.  Don't
@@ -333,11 +335,11 @@ notice_add_helper (void *arg)
 	    int i;
 	    for (i = 0; i < sizeof (a) / sizeof (a[0]); i ++)
 	      {
-		assert (2 + i * 4 + 1 < argc);
-		a[i].start = atol (argv[2 + i * 4]);
-		a[i].count = atol (argv[2 + i * 4 + 1]);
-		a[i].startprev = atol (argv[2 + i * 4 + 2]);
-		a[i].countprev = atol (argv[2 + i * 4 + 3]);
+		assert (4 + i * 4 + 1 < argc);
+		a[i].start = atol (argv[4 + i * 4]);
+		a[i].count = atol (argv[4 + i * 4 + 1]);
+		a[i].startprev = atol (argv[4 + i * 4 + 2]);
+		a[i].countprev = atol (argv[4 + i * 4 + 3]);
 	      }
 
 	    return 0;
