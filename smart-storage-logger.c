@@ -438,7 +438,18 @@ notice_add_helper (void *arg)
 
 	      int err = sqlite3_exec_printf
 		(access_db,
-		 "insert or replace into accesses values"
+		 "insert or replace into accesses "
+		 " (uid, created, last_access, size_plus_one,"
+		 "  start1, count1, start1prev, count1prev,"
+		 "  start2, count2, start2prev, count2prev,"
+		 "  start4, count4, start4prev, count4prev,"
+		 "  start8, count8, start8prev, count8prev,"
+		 "  start16, count16, start16prev, count16prev,"
+		 "  start32, count32, start32prev, count32prev,"
+		 "  start64, count64, start64prev, count64prev,"
+		 "  start128, count128, start128prev, count128prev,"
+		 "  start256, count256, start256prev, count256prev)"
+		 " values"
 		 " (%"PRId64", %"PRId64", %"PRId64", %"PRId64", "
 		 "  %"PRId64", %d, %"PRId64", %d, "
 		 "  %"PRId64", %d, %"PRId64", %d, "
