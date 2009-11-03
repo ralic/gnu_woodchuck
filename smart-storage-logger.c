@@ -342,6 +342,8 @@ notice_add_helper (void *arg)
 		a[i].countprev = atol (argv[4 + i * 4 + 3]);
 	      }
 
+	    assert (4 + i * 4 == argc);
+
 	    return 0;
 	  }
 
