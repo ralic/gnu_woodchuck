@@ -63,6 +63,44 @@ now (void)
   return (uint64_t) tv.tv_sec * 1000ULL
     + (uint64_t) tv.tv_usec / 1000ULL;
 }
+
+#define TIME_FMT "%"PRId64" %s"
+#define TIME_PRINTF(ms)				\
+  ({						\
+    int64_t ms_ = (ms);				\
+    int neg = ms_ < 0;				\
+    if (neg)					\
+      ms_ = -ms_;				\
+						\
+    if (ms_ > 10 * 24 * 60 * 60 * 1000)		\
+      ms_ /= 24 * 60 * 60 * 1000;		\
+    else if (ms_ > 10 * 60 * 60 * 1000)		\
+      ms_ /= 60 * 60 * 1000;			\
+    else if (ms_ > 10 * 60 * 1000)		\
+      ms_ /= 60 * 1000;				\
+    else if (ms_ > 10 * 1000)			\
+      ms_ /= 1000;				\
+						\
+    if (neg)					\
+      ms_ = -ms_;				\
+    ms_;					\
+  }),						\
+  ({						\
+    int64_t ms_ = (ms);				\
+    if (ms_ < 0)				\
+  	ms_ = -ms_;				\
+    char *s_ = "ms";				\
+    if (ms_ > 10 * 24 * 60 * 60 * 1000)		\
+      s_ = "days";				\
+    else if (ms_ > 10 * 60 * 60 * 1000)		\
+      s_ = "hours";				\
+    else if (ms_ > 10 * 60 * 1000)		\
+      s_ = "mins";				\
+    else if (ms_ > 10 * 1000)			\
+      s_ = "secs";				\
+						\
+    s_;						\
+  })
 
 /* A convenience function.  */
 static int
@@ -321,8 +359,9 @@ notice_add_helper (void *arg)
 	    last_access = atol (argv[2]);
 	    // size = atol (argv[3]);
 
-	    debug (0, "%s updated %"PRId64" seconds ago (%"PRId64"-%"PRId64").",
-		   filename, n - last_access, n, last_access);
+	    debug (0, "%s updated "TIME_FMT" ago (%"PRId64"-%"PRId64").",
+		   filename, TIME_PRINTF ((n - last_access) * 1000),
+		   n, last_access);
 
 	    if (last_access + 60 * 60 > n)
 	      /* The last access was less than an hour in the past.  Don't
