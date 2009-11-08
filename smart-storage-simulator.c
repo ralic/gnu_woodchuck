@@ -159,9 +159,9 @@ access_notice (struct status *status,
 	/* This is an access.  Add the file to the end of the
 	   access list.  */
 	{
-	  if (access_time - file->access_time < 60 * 60)
-	    /* Only count at most one access per hour.  */
-	    return;
+	  /* Only count at most one access per hour.  (We should have
+	     filtered this out already.)  */
+	  assert (access_time - file->access_time >= 60 * 60);
 
 	  file_list_unlink (&status->files, file);
 
@@ -498,6 +498,27 @@ main (int argc, char *argv[])
 	{
 	  file_list_unlink (&access_log, f);
 	  free (f);
+	}
+    }
+
+  /* Compress records such that there is at most one record for any 60
+     minutes period.  Use the time from the earliest access and the
+     size from the last access.  */
+  for (f = file_list_head (&access_log); f; f = file_list_next (f))
+    {
+      struct file *next = file_list_next (f);
+      struct file *q;
+      while ((q = next) && q->access_time - f->access_time < 60 * 60)
+	{
+	  next = file_list_next (q);
+
+	  if (strcmp (f->filename, q->filename) == 0)
+	    {
+	      /* Take the size at the end.  */
+	      f->size = q->size;
+	      file_list_unlink (&access_log, q);
+	      free (q);
+	    }
 	}
     }
 
