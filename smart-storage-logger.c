@@ -657,13 +657,12 @@ directory_add_helper (void *arg)
 
 	if (inotify_fd >= 0)
 	  {
-	    /* We can get IN_OPEN and IN_MODIFY events for files in
-	       directories if we are only watching directories.  We
-	       cannot get IN_ACCESS events in this case.  */
 	    int watch = inotify_add_watch (inotify_fd, filename,
 					   IN_CREATE | IN_DELETE
 					   | IN_DELETE_SELF
-					   | IN_OPEN | IN_MODIFY);
+					   | IN_OPEN | IN_MODIFY
+					   | IN_CLOSE_WRITE
+					   | IN_CLOSE_NOWRITE);
 	    if (watch < 0)
 	      switch (errno)
 		{
