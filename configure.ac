@@ -13,7 +13,8 @@ AM_PROG_CC_C_O
 AM_PROG_AS
 AC_PROG_RANLIB
 
-AC_CHECK_LIB([sqlite3], [sqlite3_close])
+AC_CHECK_LIB([sqlite3], [sqlite3_close], [],
+	     [AC_ERROR([libsqlite3 not found.  Please install sqlite3.])])
 
 AC_CONFIG_FILES([Makefile])
 AC_OUTPUT
