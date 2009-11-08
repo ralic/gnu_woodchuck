@@ -139,6 +139,9 @@ access_db_init (void)
     error (1, 0, "sqlite3_open (%s): %s",
 	   filename, sqlite3_errmsg (access_db));
 
+  /* Sleep up to an hour if the database is busy...  */
+  sqlite3_busy_timeout (access_db, 60 * 60 * 1000);
+
   char *errmsg = NULL;
   err = sqlite3_exec (access_db,
 		      "begin transaction;"
