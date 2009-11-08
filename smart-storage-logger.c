@@ -591,7 +591,7 @@ directory_add_helper (void *arg)
 	    int watch = inotify_add_watch (inotify_fd, filename,
 					   IN_CREATE | IN_DELETE
 					   | IN_DELETE_SELF
-					   | IN_OPEN | IN_MODIFY
+					   | IN_OPEN
 					   | IN_CLOSE_WRITE
 					   | IN_CLOSE_NOWRITE);
 	    if (watch < 0)
