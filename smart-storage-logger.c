@@ -36,6 +36,7 @@
 #include "debug.h"
 #include "list.h"
 #include "btree.h"
+#include "util.h"
 
 static int inotify_fd;
 
@@ -52,75 +53,6 @@ under_dot_dir (const char *filename)
   return (strncmp (filename, dot_dir, dot_dir_len) == 0
 	  && (filename[dot_dir_len] == '\0'
 	      || filename[dot_dir_len] == '/'));
-}
-
-/* Return the time since the epoch with millisecond resolution.  */
-static inline uint64_t
-now (void)
-{
-  struct timeval tv;
-  gettimeofday (&tv, NULL);
-  return (uint64_t) tv.tv_sec * 1000ULL
-    + (uint64_t) tv.tv_usec / 1000ULL;
-}
-
-#define TIME_FMT "%"PRId64" %s"
-#define TIME_PRINTF(ms)				\
-  ({						\
-    int64_t ms_ = (ms);				\
-    int neg = ms_ < 0;				\
-    if (neg)					\
-      ms_ = -ms_;				\
-						\
-    if (ms_ > 10 * 24 * 60 * 60 * 1000)		\
-      ms_ /= 24 * 60 * 60 * 1000;		\
-    else if (ms_ > 10 * 60 * 60 * 1000)		\
-      ms_ /= 60 * 60 * 1000;			\
-    else if (ms_ > 10 * 60 * 1000)		\
-      ms_ /= 60 * 1000;				\
-    else if (ms_ > 10 * 1000)			\
-      ms_ /= 1000;				\
-						\
-    if (neg)					\
-      ms_ = -ms_;				\
-    ms_;					\
-  }),						\
-  ({						\
-    int64_t ms_ = (ms);				\
-    if (ms_ < 0)				\
-  	ms_ = -ms_;				\
-    char *s_ = "ms";				\
-    if (ms_ > 10 * 24 * 60 * 60 * 1000)		\
-      s_ = "days";				\
-    else if (ms_ > 10 * 60 * 60 * 1000)		\
-      s_ = "hours";				\
-    else if (ms_ > 10 * 60 * 1000)		\
-      s_ = "mins";				\
-    else if (ms_ > 10 * 1000)			\
-      s_ = "secs";				\
-						\
-    s_;						\
-  })
-
-/* A convenience function.  */
-static int
-sqlite3_exec_printf (sqlite3 *db, const char *sql,
-		     int (*callback)(void*,int,char**,char**), void *cookie,
-		     char **errmsg, ...)
-{
-  va_list ap;
-  va_start (ap, errmsg);
-
-  char *s = sqlite3_vmprintf (sql, ap);
-  debug (5, "%s", s);
-
-  int ret = sqlite3_exec (db, s, callback, cookie, errmsg);
-
-  sqlite3_free (s);
-
-  va_end (ap);
-
-  return ret;
 }
 
 static sqlite3 *
@@ -387,9 +319,8 @@ notice_add_helper (void *arg)
 	    last_access = atol (argv[2]);
 	    // size = atol (argv[3]);
 
-	    debug (0, "%s updated "TIME_FMT" ago (%"PRId64"-%"PRId64").",
-		   filename, TIME_PRINTF ((n - last_access) * 1000),
-		   n, last_access);
+	    debug (0, "%s updated "TIME_FMT" ago.",
+		   filename, TIME_PRINTF ((n - last_access) * 1000));
 
 	    if (last_access + 60 * 60 > n)
 	      /* The last access was less than an hour in the past.  Don't
