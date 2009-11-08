@@ -324,6 +324,31 @@ notice_add_helper (void *arg)
 	      errmsg = NULL;
 	    }
 
+	  if ((notice->mask & IN_ISDIR))
+	    /* Ignore all directories.  */
+	    {
+	      if (uid)
+		/* Purge references to the directory.  (For cleaning
+		   up old databases.)  */
+		{
+		  char *errmsg = NULL;
+		  sqlite3_exec_printf
+		    (access_db,
+		     "delete from files where uid = %"PRId64";"
+		     "delete from accesses where uid = %"PRId64";"
+		     "delete from log where uid = %"PRId64";",
+		     NULL, NULL, &errmsg, uid, uid, uid);
+		  if (errmsg)
+		    {
+		      debug (0, "%s: %s", filename, errmsg);
+		      sqlite3_free (errmsg);
+		      errmsg = NULL;
+		    }
+		}
+	      goto out;
+	    }
+
+
 	  if (! uid)
 	    {
 	      sqlite3_exec_printf
@@ -486,6 +511,7 @@ notice_add_helper (void *arg)
 		}
 	    }
 
+	out:
 	  free (notice);
 	  notice = next;
 	}
