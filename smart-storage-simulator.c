@@ -470,6 +470,8 @@ main (int argc, char *argv[])
       errmsg = NULL;
     }
 
+  int record_count = 0;
+
   /* Prune any directories.  */
   struct file *f;
   struct file *next = file_list_head (&access_log);
@@ -477,35 +479,37 @@ main (int argc, char *argv[])
     {
       next = file_list_next (f);
 
-      bool is_directory = false;
-      int callback (void *cookie, int cargc, char **cargv, char **names)
-      {
-	is_directory = true;
-	return 0;
-      }
+      int len = strlen (f->filename);
 
-      sqlite3_exec_printf
-	(access_db,
-	 "select * from files where filename like '%q/%%' limit 1",
-	 callback, NULL, &errmsg, f->filename);
-      if (errmsg)
-	{
-	  debug (0, "%s: %s", filename, errmsg);
-	  sqlite3_free (errmsg);
-	  errmsg = NULL;
-	}
+      bool is_directory = false;
+      struct file *q;
+      for (q = file_list_head (&access_log); q; q = file_list_next (q))
+	if (strncmp (f->filename, q->filename, len) == 0
+	    && q->filename[len] == '/')
+	  {
+	    is_directory = true;
+	    break;
+	  }
+      
       if (is_directory || f->size == 1 || f->size == 4097)
 	{
 	  file_list_unlink (&access_log, f);
 	  free (f);
 	}
+      else
+	record_count ++;
     }
+
+  debug (0, "%d records", record_count);
 
   /* Compress records such that there is at most one record for any 60
      minutes period.  Use the time from the earliest access and the
      size from the last access.  */
+  int i = 0;
   for (f = file_list_head (&access_log); f; f = file_list_next (f))
     {
+      i ++;
+
       struct file *next = file_list_next (f);
       struct file *q;
       while ((q = next) && q->access_time - f->access_time < 60 * 60)
@@ -518,6 +522,7 @@ main (int argc, char *argv[])
 	      f->size = q->size;
 	      file_list_unlink (&access_log, q);
 	      free (q);
+	      record_count --;
 	    }
 	}
     }
