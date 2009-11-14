@@ -149,6 +149,7 @@ struct notice_node
 {
   btree_node_t tree_node;
   int mask;
+  uint64_t time;
   char filename[];
 };
 
@@ -181,6 +182,7 @@ notice_add (const char *filename, int mask)
       int l = strlen (filename);
       n = calloc (sizeof (*n) + l + 1, 1);
       memcpy (n->filename, filename, l + 1);
+      n->time = now ();
 
       struct notice_node *o = btree_notice_insert (notice_tree, n);
       assert (! o);
@@ -293,7 +295,7 @@ notice_add_helper (void *arg)
 		uid = sqlite3_last_insert_rowid (access_db);
 	    }
 
-	  uint64_t n = now () / 1000;
+	  uint64_t n = notice->time / 1000;
 
 	  /* Now, stamp the file.  */
 	  /* Find the file's access record.  */
