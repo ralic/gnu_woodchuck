@@ -123,7 +123,7 @@ i2log2 (uint64_t i)
 }
 
 /* A convenience function.  */
-static int
+static inline int
 sqlite3_exec_printf (sqlite3 *db, const char *sql,
 		     int (*callback)(void*,int,char**,char**), void *cookie,
 		     char **errmsg, ...)
