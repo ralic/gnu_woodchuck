@@ -36,16 +36,15 @@
 
 #include "debug.h"
 #include "list.h"
-#include "btree.h"
 #include "util.h"
+
+static uint64_t cache_space;
 
 /* Files.  */
 struct file
 {
-  char *filename;
   uint64_t access_time;
   uint64_t size;
-  struct list_node node;
 
   struct
   {
@@ -57,27 +56,70 @@ struct file
 
   /* This is used by the optimal policy.  */
   uint64_t next_access;
+
+  struct list_node node;
+  uint32_t hash;
+  short filename_len;
+  char filename[];
 };
 
+build_assert (offsetof (struct file, hash) + sizeof (uint32_t)
+	      == offsetof (struct file, filename_len));
+build_assert (offsetof (struct file, filename_len) + sizeof (short)
+	      == offsetof (struct file, filename));
+
 LIST_CLASS(file, struct file, node, true)
+
+static uint64_t bytes_allocated;
 
 struct file *
 file_new (char *filename, uint64_t access_time, uint64_t size)
 {
-  struct file *file = calloc (sizeof (*file), 1);
-  file->filename = strdup (filename);
+  int len = strlen (filename);
+  int s = sizeof (struct file) + len + 1;
+  bytes_allocated += s;
+  struct file *file = calloc (s, 1);
+  file->filename_len = len;
+  memcpy (file->filename, filename, len + 1);
+
+  /* This is a very simple hash.  It is based on the observation that
+     filenames will tend to differ at the end.  */
+  file->hash = 0;
+  int i;
+  for (i = 1; i <= 6; i ++)
+    if (len >= i * sizeof (uint32_t))
+      file->hash
+	^= * (uint32_t *) &file->filename[len - i * sizeof (uint32_t)];
+
   file->access_time = access_time;
   file->size = size;
   return file;
 }
 
+static void
+file_free (struct file *file)
+{
+  bytes_allocated -= sizeof (*file) + file->filename_len + 1;
+  free (file);
+}
+
+static bool
+file_same (struct file *a, struct file *b)
+{
+  return memcmp (&a->hash, &b->hash,
+		 sizeof (a->hash) + sizeof (a->filename_len)
+		 + a->filename_len) == 0;
+}
+
 static struct file *
 file_list_find (struct file_list *list, char *filename)
 {
+  int l = strlen (filename);
+
   /* If we are adding it, it should not be on the list.  */
   struct file *f;
   for (f = file_list_head (list); f; f = file_list_next (f))
-    if (strcmp (f->filename, filename) == 0)
+    if (l == f->filename_len && memcmp (f->filename, filename, l) == 0)
       return f;
   return NULL;
 }
@@ -92,7 +134,7 @@ file_list_remove (struct file_list *list, char *filename)
     return false;
 
   file_list_unlink (list, f);
-  free (f);
+  file_free (f);
 
   return true;
 }
@@ -113,8 +155,10 @@ struct status
 
   /* Bytes in the cache.  */
   uint64_t bytes_count;
-  /* Total bytes.  */
-  uint64_t bytes_total;
+  /* Total bytes required to keep everything in the cache.  */
+  uint64_t bytes_max;
+  /* The number of bytes that had to be read from the network.  */
+  uint64_t bytes_fetched;
 
   /* Number of files in the cache.  */
   int file_count;
@@ -129,15 +173,11 @@ struct status
   /* Time of the last access.  */
   uint64_t access_time;
 
+  /* The sum of the times since the previous access.  */
+  uint64_t iir;
+
   file_evict_t evict;
 };
-
-/* Total space available.  */
-#define SPACE (1ULL * 1024 * 1024 * 1024)
-/* Keep about 1 GB free.  */
-#define SPACE_LOW_WATER (1ULL * 1024 * 1024 * 1024)
-/* Free until there are about 3 GB free.  */
-#define SPACE_HIGH_WATER (3ULL * 1024 * 1024 * 1024)
 
 static void
 access_notice (struct status *status,
@@ -169,6 +209,7 @@ access_notice (struct status *status,
 	  file->size = size;
 
 	  status->hits ++;
+	  status->iir += access_time - file->access_time;
 	  status->hits_bytes += size;
 
 	  debug (0, "%s (change: "BYTES_FMT", cache: "BYTES_FMT"): hit!"
@@ -178,6 +219,8 @@ access_notice (struct status *status,
 		 TIME_PRINTF (1000 * (access_time - file->access_time)));
 
 	  file->access_time = access_time;
+
+	  status->bytes_max += growth;
 	}
       else
 	{
@@ -188,18 +231,28 @@ access_notice (struct status *status,
 	    {
 	      real_miss = true;
 	      file_list_unlink (&status->evictions, file);
+	      file->size = size;
 	      status->misses ++;
+
+	      status->bytes_max += size - file->size;
+	      status->iir += access_time - file->access_time;
+	      file->access_time = access_time;
 	    }
 	  else
+	    /* File is new.  */
 	    {
 	      real_miss = false;
 	      file = file_new (filename, access_time, size);
 	      status->files_total ++;
+
+	      status->bytes_max += size;
 	    }
 
 	  growth = size;
 
 	  status->file_count ++;
+
+	  status->bytes_fetched += size;
 
 	  debug (0, "%s (size: "BYTES_FMT", cache: "BYTES_FMT", %d): %s!",
 		 filename, BYTES_PRINTF (growth),
@@ -229,7 +282,7 @@ access_notice (struct status *status,
       status->access_time = access_time;
 
       /* See if we need to free something.  */
-      while (status->bytes_count > SPACE)
+      while (status->bytes_count > cache_space)
 	/* Free something.  */
 	{
 	  struct file *loser = status->evict (status);
@@ -259,9 +312,17 @@ access_notice (struct status *status,
       if (growth < 0)
 	assert (status->bytes_count >= - growth);
       status->bytes_count += growth;
-      status->bytes_total += growth;
 
       file_list_enqueue (&status->files, file);
+
+      uint64_t t = 0;
+      for (file = file_list_head (&status->files);
+	   file;
+	   file = file_list_next (file))
+	t += file->size;
+      assertx (t == status->bytes_count,
+	       "%"PRId64" != %"PRId64,
+	       t, status->bytes_count);
     }
 }
 
@@ -271,22 +332,58 @@ main (int argc, char *argv[])
   void usage (int status)
   {
     fprintf (stderr,
-	     "Usage: %s ACCESS_DB [PREFIX...]\n", argv[0]);
+	     "Usage: %s CACHE_SIZE ACCESS_DB [PREFIX...]\n", argv[0]);
     exit (status);
   }
 
-  if (argc == 1)
+  if (argc <= 2)
     {
       usage (1);
     }
 
-  char *filename = argv[1];
+  char *tail = NULL;
+  cache_space = strtol (argv[1], &tail, 10);
+  if (cache_space == 0)
+    {
+      fprintf (stderr, "Cache space must be >0.\n");
+      usage (1);
+    }
+  if (tail)
+    switch (*tail)
+      {
+      case 'G': case 'g':
+	cache_space *= 1024 * 1024 * 1024;
+	break;
+      case 'M': case 'm':
+	cache_space *= 1024 * 1024;
+	break;
+      case 'K': case 'k':
+	cache_space *= 1024;
+	break;
+      default:
+	;
+      }
+  debug (0, "Cache size set to "BYTES_FMT, BYTES_PRINTF (cache_space));
+
+  char *filename = argv[2];
   sqlite3 *access_db;
   int err = sqlite3_open (filename, &access_db);
   if (err)
     error (1, 0, "sqlite3_open (%s): %s",
 	   filename, sqlite3_errmsg (access_db));
   sqlite3_busy_timeout (access_db, 60 * 60 * 1000);
+
+  char *errmsg = NULL;
+  sqlite3_exec (access_db,
+		"PRAGMA legacy_file_format = false;"
+		"create index if not exists time on log (time);",
+		NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%s: %s", filename, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
 
   struct file *lru_evict (struct status *status)
   {
@@ -348,7 +445,7 @@ main (int argc, char *argv[])
 	      if (! accesses)
 		return;
 
-	      assert (start < status->access_time);
+	      assert (start <= status->access_time);
 	      uint64_t end = MIN (start + length - 1, status->access_time);
 	      length = end - start + 1;
 
@@ -410,7 +507,7 @@ main (int argc, char *argv[])
       {
 	struct file *l;
 	for (l = access_log_entry; l; l = file_list_next (l))
-	  if (strcmp (f->filename, l->filename) == 0)
+	  if (file_same (f, l))
 	    {
 	      f->next_access = l->access_time;
 	      break;
@@ -435,6 +532,8 @@ main (int argc, char *argv[])
   memset (&opt, 0, sizeof (opt));
   opt.evict = optimal_evict;
 
+  int prefix_len = 0;
+  int record_count = 0;
   int callback (void *cookie, int cargc, char **cargv, char **names)
   {
     assert (cargc == 4);
@@ -444,25 +543,68 @@ main (int argc, char *argv[])
     uint64_t size_plus_one = atol (cargv[2]);
     char *filename = cargv[3];
 
-    int i;
-    for (i = 2; i < argc; i ++)
-      if (strncmp (argv[i], filename, strlen (argv[i])) == 0)
-	break;
-
-    if (i != argc)
-      file_list_enqueue (&access_log, file_new (filename, access_time,
-						size_plus_one));
+    file_list_enqueue (&access_log, file_new (filename + prefix_len,
+					      access_time,
+					      size_plus_one));
+    record_count ++;
 
     return 0;
   }
 
-  char *errmsg = NULL;
-  sqlite3_exec (access_db,
-		"select uid, time, size_plus_one, filename from log "
-		" join (select uid, filename from files) "
-		" using (uid) "
-		"order by time;",
-		callback, NULL, &errmsg);
+  uint64_t start = now ();
+
+  char q[16 * 1024];
+  q[0] = 0;
+  if (argc > 2)
+    {
+      char *p = q;
+      void append (const char *s)
+      {
+	int l = strlen (s);
+	if ((uintptr_t) p - (uintptr_t) q + l >= sizeof (q))
+	  error (ENOMEM, 1, "Out of memory.");
+	memcpy (p, s, l);
+	p += l;
+      }
+
+      append ("where ");
+      int i;
+      int shortest = 0;
+      for (i = 3; i < argc; i ++)
+	{
+	  if (i > 3)
+	    append (" or ");
+
+	  append ("filename like '");
+	  append (argv[i]);
+	  append ("%'");
+
+	  int l = strlen (argv[i]);
+	  if (i == 3)
+	    shortest = l;
+	  else
+	    shortest = MIN (l, shortest);
+	}
+      append (" ");
+      *p = 0;
+      debug (0, "--%s--", q);
+
+      /* Find the common prefix.  */
+      for (prefix_len = 0; prefix_len < shortest; prefix_len ++)
+	for (i = 4; i < argc; i ++)
+	  if (argv[i][prefix_len] != argv[3][prefix_len])
+	    break;
+
+      debug (0, "prefix: %*s (%d)", prefix_len, argv[3], prefix_len);
+    }
+
+  sqlite3_exec_printf
+    (access_db,
+     "select uid, time, size_plus_one, filename from log "
+     " join (select uid, filename from files) "
+     " using (uid) %s"
+     "order by time;",
+     callback, NULL, &errmsg, q);
   if (errmsg)
     {
       debug (0, "%s: %s", filename, errmsg);
@@ -470,20 +612,92 @@ main (int argc, char *argv[])
       errmsg = NULL;
     }
 
-  int record_count = 0;
+  uint64_t end = now ();
+  debug (0, "%d records ("BYTES_FMT" bytes) ("TIME_FMT")",
+	 record_count, BYTES_PRINTF (bytes_allocated),
+	 TIME_PRINTF (end - start));
+  start = end;
+
+  int processed = 0;
+  uint64_t last = end;
+  int records = record_count;
+  struct file *f;
+  /* Compress records such that there is at most one record for any 60
+     minutes period.  Use the time from the earliest access and the
+     size from the last access.  */
+  for (f = file_list_head (&access_log); f; f = file_list_next (f))
+    {
+      struct file *next = file_list_next (f);
+      struct file *q;
+      while ((q = next) && q->access_time - f->access_time < 60 * 60)
+	{
+	  next = file_list_next (q);
+
+	  if (file_same (f, q))
+	    {
+	      /* Take the size at the end.  */
+	      f->size = q->size;
+	      file_list_unlink (&access_log, q);
+	      file_free (q);
+	      record_count --;
+
+	      processed ++;
+	    }
+	}
+
+      processed ++;
+      if (now () - last > 5000)
+	{
+	  end = now ();
+	  last = end;
+	  debug (0, "Processed %d records %d%%, deleted %d ("TIME_FMT")",
+		 processed, (100 * processed) / records,
+		 records - record_count,
+		 TIME_PRINTF (end - start));
+	}
+    }
+
+  end = now ();
+  debug (0, "%d records temporal after compression ("TIME_FMT")",
+	 record_count, TIME_PRINTF (end - start));
+  start = end;
+
+  struct file_list files;
+  memset (&files, 0, sizeof (files));
+  int file_count = 0;
+
+  int r = 0;
+  for (f = file_list_head (&access_log); f; f = file_list_next (f))
+    {
+      r ++;
+      if (! file_list_find (&files, f->filename))
+	{
+	  file_list_push (&files, file_new (f->filename, 0, 0));
+	  file_count ++;
+	  if (r % 1000 == 0)
+	    debug (0, "%d files, %d/%d records", file_count, r, record_count);
+	}
+    }
+
+  end = now ();
+  debug (0, "Identified %d unique files ("TIME_FMT")",
+	 r, TIME_PRINTF (end - start));
+  start = end;
+
 
   /* Prune any directories.  */
-  struct file *f;
   struct file *next = file_list_head (&access_log);
   while ((f = next))
     {
       next = file_list_next (f);
 
+      assert (f->filename);
       int len = strlen (f->filename);
+      assert (len > 0);
 
       bool is_directory = false;
       struct file *q;
-      for (q = file_list_head (&access_log); q; q = file_list_next (q))
+      for (q = file_list_head (&files); q; q = file_list_next (q))
 	if (strncmp (f->filename, q->filename, len) == 0
 	    && q->filename[len] == '/')
 	  {
@@ -494,38 +708,15 @@ main (int argc, char *argv[])
       if (is_directory || f->size == 1 || f->size == 4097)
 	{
 	  file_list_unlink (&access_log, f);
-	  free (f);
-	}
-      else
-	record_count ++;
-    }
-
-  debug (0, "%d records", record_count);
-
-  /* Compress records such that there is at most one record for any 60
-     minutes period.  Use the time from the earliest access and the
-     size from the last access.  */
-  int i = 0;
-  for (f = file_list_head (&access_log); f; f = file_list_next (f))
-    {
-      i ++;
-
-      struct file *next = file_list_next (f);
-      struct file *q;
-      while ((q = next) && q->access_time - f->access_time < 60 * 60)
-	{
-	  next = file_list_next (q);
-
-	  if (strcmp (f->filename, q->filename) == 0)
-	    {
-	      /* Take the size at the end.  */
-	      f->size = q->size;
-	      file_list_unlink (&access_log, q);
-	      free (q);
-	      record_count --;
-	    }
+	  file_free (f);
+	  record_count --;
 	}
     }
+
+  end = now ();
+  debug (0, "%d files, %d records, after directory pruning ("TIME_FMT")",
+	 file_count, record_count, TIME_PRINTF (end - start));
+  start = end;
 
 
   for (access_log_entry = file_list_head (&access_log);
@@ -546,15 +737,23 @@ main (int argc, char *argv[])
     access_notice (&lfu, access_log_entry->filename,
 		   access_log_entry->access_time, access_log_entry->size);
 
-  printf ("OPT performance: %d files ("BYTES_FMT"), %d hits, %d misses (subsequent)\n",
-	  opt.files_total, BYTES_PRINTF (opt.bytes_total),
-	  opt.hits, opt.misses);
-  printf ("LRU performance: %d files ("BYTES_FMT"), %d hits, %d misses (subsequent)\n",
-	  lru.files_total, BYTES_PRINTF (lru.bytes_total),
-	  lru.hits, lru.misses);
-  printf ("LFU performance: %d files ("BYTES_FMT"), %d hits, %d misses (subsequent)\n",
-	  lfu.files_total, BYTES_PRINTF (lfu.bytes_total),
-	  lfu.hits, lfu.misses);
+  printf ("%d files: "BYTES_FMT"\n",
+	  opt.files_total, BYTES_PRINTF (opt.bytes_max));
+  printf ("OPT performance: "BYTES_FMT", %d hits ("TIME_FMT"), "
+	  "%d misses (subsequent)\n",
+	  BYTES_PRINTF (opt.bytes_fetched),
+	  opt.hits, TIME_PRINTF (1000 * opt.iir / (opt.hits + opt.misses)),
+	  opt.misses);
+  printf ("LRU performance: "BYTES_FMT", %d hits ("TIME_FMT"), "
+	  "%d misses (subsequent)\n",
+	  BYTES_PRINTF (lru.bytes_fetched),
+	  lru.hits, TIME_PRINTF (1000 * lru.iir / (lru.hits + lru.misses)),
+	  lru.misses);
+  printf ("LFU performance: "BYTES_FMT", %d hits  ("TIME_FMT"), "
+	  "%d misses (subsequent)\n",
+	  BYTES_PRINTF (lfu.bytes_fetched),
+	  lfu.hits, TIME_PRINTF (1000 * lfu.iir / (lfu.hits + lfu.misses)),
+	  lfu.misses);
 
   return 0;
 }
