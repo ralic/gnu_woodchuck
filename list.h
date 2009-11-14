@@ -1,6 +1,8 @@
 #ifndef LIST_H
 #define LIST_H 1
 
+#define NCHECK
+
 #include <stddef.h>
 #include <stdbool.h>
 
