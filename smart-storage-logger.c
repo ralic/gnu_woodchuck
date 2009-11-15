@@ -761,12 +761,12 @@ main (int argc, char *argv[])
 		    *wn->filename ? "/" : "", wn->filename,
 		    element ? "/" : "", element ?: "");
 
-	  debug (0, "%s: %s (%x)",
-		 filename, events, ev->mask);
-	  free (events);
-
 	  if (! under_dot_dir (filename))
 	    {
+	      debug (0, "%s: %s (%x)",
+		     filename, events, ev->mask);
+	      free (events);
+
 	      if ((ev->mask & IN_CREATE))
 		directory_add (strdup (filename));
 
