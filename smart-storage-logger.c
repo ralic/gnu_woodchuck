@@ -603,7 +603,7 @@ directory_add_helper (void *arg)
 		  return 0;
 		default:
 		  inotify_fd = -1;
-		  error (1, errno, "inotify_add_watch (%s) -> %d (%d total)",
+		  error (0, errno, "inotify_add_watch (%s) -> %d (%d total)",
 			 filename, watch, total_watches);
 		}
 
@@ -702,22 +702,26 @@ main (int argc, char *argv[])
 
 
   /* Create the helper threads.  */
-  pthread_t tid;
-  int err = pthread_create (&tid, NULL, directory_add_helper, NULL);
+  pthread_t tid[2];
+  int err = pthread_create (&tid[0], NULL, directory_add_helper, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
-  pthread_detach (tid);
 
-  err = pthread_create (&tid, NULL, notice_add_helper, NULL);
+  err = pthread_create (&tid[1], NULL, notice_add_helper, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
-  pthread_detach (tid);
 
 
   char buffer[16 * 4096];
   int have = 0;
   while (1)
     {
+      if (inotify_fd == -1)
+	/* While scanning, we ran out of space for watches.  This will
+	   cause an error message to be displayed and the program to
+	   exit--eventually.  */
+	break;
+
       int len = read (inotify_fd, &buffer[have], sizeof (buffer) - have);
       debug (5, "read: %d", len);
       if (len < 0)
@@ -790,6 +794,8 @@ main (int argc, char *argv[])
 	  ev = (void *) ev + sizeof (*ev) + ev->len;
 	}
     }
+
+  pthread_join (tid[0]);
 
   return 0;
 }
