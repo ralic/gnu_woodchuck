@@ -795,7 +795,7 @@ main (int argc, char *argv[])
 	}
     }
 
-  pthread_join (tid[0]);
+  pthread_join (tid[0], NULL);
 
   return 0;
 }
