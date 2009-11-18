@@ -46,12 +46,17 @@ struct file
   uint64_t access_time;
   uint64_t size;
 
+  uint64_t start;
+  /* Accesses between start and now.  */
+  int count;
   struct
   {
-    uint64_t start;
-    int count;
-    uint64_t startprev;
-    int countprev;
+    /* Covers either 2^i days or 2 * 2^i * days depending if
+       prev_valid is true or false.  Range 0 ends with START.  Ranges
+       are (temporally) adjacent with accesses[1] happening
+       immediately before accesses[0].  */
+    int count[2];
+    bool prev_valid;
   } accesses[9];
 
   union
@@ -214,6 +219,7 @@ struct status
       struct l1l2_list b2;
       uint64_t b2_size;
       uint64_t p;
+      uint64_t p_max;
     } arc;
   };
 
@@ -367,6 +373,7 @@ access_notice (struct status *status,
 	    status->arc.p += size;
 	    if (status->arc.p > cache_space)
 	      status->arc.p = cache_space;
+	    status->arc.p_max = MAX (status->arc.p_max, status->arc.p);
 		
 	    break;
 
@@ -398,21 +405,52 @@ access_notice (struct status *status,
 	  }
 
       /* Update the access stats.  */
-      uint64_t range = 24 * 60 * 60;
-      int i;
-      for (i = 0; i < sizeof (file->accesses) / sizeof (file->accesses[0]);
-	   i ++, range *= 2)
+      if (file->start == 0)
+	/* First access.  */
 	{
-	  if (access_time > file->accesses[i].start + range)
+	  file->start = access_time;
+	  file->accesses[0].count[0] = 1;
+	}
+      else
+	{
+	  int days = (access_time - file->start) / (24 * 60 * 60);
+	  if (days > 0)
 	    {
-	      file->accesses[i].startprev = file->accesses[i].start;
-	      file->accesses[i].countprev = file->accesses[i].count;
+	      int d;
+	      for (d = 0; d < days; d ++)
+		{
+		  int carry = file->count;
+		  file->count = 0;
 
-	      file->accesses[i].start = access_time;
-	      file->accesses[i].count = 1;
+		  int i;
+		  for (i = 0;
+		       i < sizeof (file->accesses) / sizeof (file->accesses[0]);
+		       i ++)
+		    {
+		      if (file->accesses[i].prev_valid)
+			{
+			  int c = file->accesses[i].count[0]
+			    + file->accesses[i].count[1];
+			  file->accesses[i].prev_valid = false;
+			  file->accesses[i].count[0] = carry;
+			  file->accesses[i].count[1] = 0;
+			  carry = c;
+			}
+		      else
+			{
+			  file->accesses[i].prev_valid = true;
+			  file->accesses[i].count[1]
+			    = file->accesses[i].count[0];
+			  file->accesses[i].count[0] = carry;
+			  break;
+			}
+		    }
+		}
+
+	      file->start += (uint64_t) days * 24 * 60 * 60;
 	    }
-	  else
-	    file->accesses[i].count ++;
+
+	  file->count ++;
 	}
 
       assert (access_time >= status->access_time);
@@ -454,7 +492,7 @@ access_notice (struct status *status,
 		l1l2_list_unlink (&status->arc.t1, loser);
 		status->arc.t1_size -= loser->size;
 
-		l1l2_list_push (&status->arc.b1, loser);
+		l1l2_list_enqueue (&status->arc.b1, loser);
 		status->arc.b1_size += loser->size;
 
 		loser->arc.status = arc_b1;
@@ -465,7 +503,7 @@ access_notice (struct status *status,
 		l1l2_list_unlink (&status->arc.t2, loser);
 		status->arc.t2_size -= loser->size;
 
-		l1l2_list_push (&status->arc.b2, loser);
+		l1l2_list_enqueue (&status->arc.b2, loser);
 		status->arc.b2_size += loser->size;
 
 		loser->arc.status = arc_b2;
@@ -488,12 +526,12 @@ access_notice (struct status *status,
 	  switch (file->arc.status)
 	    {
 	    case arc_t1:
-	      l1l2_list_push (&status->arc.t1, file);
+	      l1l2_list_enqueue (&status->arc.t1, file);
 	      status->arc.t1_size += size;
 	      break;
 
 	    case arc_t2:
-	      l1l2_list_push (&status->arc.t2, file);
+	      l1l2_list_enqueue (&status->arc.t2, file);
 	      status->arc.t2_size += size;
 	      break;
 
@@ -651,114 +689,64 @@ main (int argc, char *argv[])
 
   struct file *lfu_evict (struct status *status)
   {
-    /* Returns the amount by which the first region overlaps with the
-       second.  (From 0.0 to 1.0.)  */
-    double overlap (uint64_t start1, uint64_t length1,
-		    uint64_t start2, uint64_t length2)
-    {
-      uint64_t end1 = MIN (start1 + length1 - 1, status->access_time);
-      uint64_t end2 = MIN (start2 + length2 - 1, status->access_time);
-
-      if (start2 <= start1 && start1 <= end2)
-	/* START1 falls between the second region.  */
-	{
-	  if (start2 <= end1 && end1 <= end2)
-	    /* END1 does as well.  Thus, overlap is 100%  */
-	    return 1.0;
-	  else
-	    /* The start of the first region overlaps with the end of
-	       the second.  */
-	    return ((double) (end2 - start1 + 1)) / length1;
-	}
-      else if (start2 <= end1 && end1 <= end2)
-	/* START1 does not fall between the second region but END1
-	   does.  The end of the first region overlaps with the start
-	   of the second.  */
-	return ((double) (end1 - start2 + 1)) / length1;
-      else
-	return 0.0;
-    }
-
     struct file *loser = NULL;
     double loser_score = 0;
 
     struct file *f;
     for (f = file_list_head (&status->files); f; f = file_list_next (f))
       {
-	debug (0, "Considering %s", f->filename);
+	debug (5, "Considering %s", f->filename);
 	double score = 0;
 
+	int i = -1;
+
+	void process (uint64_t start, uint64_t length, double accesses)
+	{
+	  if (! accesses)
+	    return;
+
+	  assert (start <= status->access_time);
+	  uint64_t end = MIN (start + length - 1, status->access_time);
+	  length = end - start + 1;
+
+	  uint64_t mid = (start / 2) + (end / 2);
+	  uint64_t delta = status->access_time - mid;
+	  assertx (status->access_time >= mid,
+		   "(%"PRId64"-%"PRId64")/2 -> %"PRId64,
+		   start, end, delta);
+
+	  double factor = 1.0;
+	  if (accesses > 0)
+	    factor = MAX (1.0, log2 ((double) delta / (20 * 60 * 60)));
+	  double s = score;
+	  score += accesses / factor;
+
+	  if (accesses > 0)
+	    debug (5, "Period %d: "TIME_FMT"+"TIME_FMT" ("TIME_FMT"): "
+		   "accesses: %.1lf / %.1lf -> %.1lf; "
+		   "score: %.1lf -> %.1lf",
+		   i, TIME_PRINTF (1000 * (status->access_time - end)),
+		   TIME_PRINTF (1000 * length), TIME_PRINTF (1000 * delta),
+		   accesses, factor, accesses / factor, s, score);
+	}
+
+	process (f->start, status->access_time - f->start, f->count);
+
+	uint64_t start = f->start;
 	uint64_t range = 24 * 60 * 60;
-	int i;
 	for (i = 0; i < sizeof (f->accesses) / sizeof (f->accesses[0]);
 	     i ++, range *= 2)
 	  {
-	    void process (uint64_t start, uint64_t length, double accesses)
-	    {
-	      if (! accesses)
-		return;
-
-	      assert (start <= status->access_time);
-	      uint64_t end = MIN (start + length - 1, status->access_time);
-	      length = end - start + 1;
-
-	      uint64_t mid = (start / 2) + (end / 2);
-	      uint64_t delta = status->access_time - mid;
-	      assertx (status->access_time >= mid,
-		       "(%"PRId64"-%"PRId64")/2 -> %"PRId64,
-		       start, end, delta);
-
-	      if (i > 0)
-		/* Ignore accesses we've already counted.  */
-		{
-		  double o = overlap (f->accesses[i - 1].start, range / 2,
-				      start, range);
-		  double b = accesses;
-		  double d = f->accesses[i - 1].count * o;
-		  accesses -= d;
-		  if (o > 0.0001)
-		    debug (5, "Overlap: %.2lf with %d: %.1lf - %.1lf -> %.1lf",
-			   o, f->accesses[i - 1].count, b, d, accesses);
-
-		  o = overlap (f->accesses[i - 1].startprev, range / 2,
-			       start, range);
-		  b = accesses;
-		  d = f->accesses[i - 1].countprev * o;
-		  accesses -= d;
-		  if (o > 0.0001)
-		    debug (5, "Overlap: %.2lf with %d: %.1lf - %.1lf -> %.1lf",
-			   o, f->accesses[i - 1].countprev, b, d, accesses);
-
-		  if (accesses < 0)
-		    {
-		      debug (0, "accesses dropped below 0: %0.1lf.",
-			     accesses);
-		      accesses = 0;
-		    }
-		}
-
-	      double s = score;
-
-	      double factor = 1.0;
-	      if (accesses > 0)
-		factor = MAX (1.0, log2 ((double) delta / (20 * 60 * 60)));
-	      score += accesses / factor;
-
-	      if (accesses > 0)
-		debug (0, "Period %d: "TIME_FMT"+"TIME_FMT" ("TIME_FMT"): "
-		       "accesses: %.1lf / %.1lf -> %.1lf; "
-		       "score: %.1lf -> %.1lf",
-		       i, TIME_PRINTF (1000 * (status->access_time - end)),
-		       TIME_PRINTF (1000 * length), TIME_PRINTF (1000 * delta),
-		       accesses, factor, accesses / factor, s, score);
-	    }
-
-	    process (f->accesses[i].start, range, f->accesses[i].count);
-	    process (f->accesses[i].startprev, range,
-		     f->accesses[i].countprev);
+	    start -= range;
+	    process (start, range, f->accesses[i].count[0]);
+	    if (f->accesses[i].prev_valid)
+	      {
+		start -= range;
+		process (start, range, f->accesses[i].count[1]);
+	      }
 	  }
 
-	debug (0, DEBUG_BOLD ("%s's score: %.1lf"), f->filename, score);
+	debug (5, DEBUG_BOLD ("%s's score: %.1lf"), f->filename, score);
 
 	if (! loser || score < loser_score)
 	  {
@@ -992,10 +980,10 @@ main (int argc, char *argv[])
 		     access_log_entry->access_time, access_log_entry->size);
   }
 
-  run (&opt);
-  run (&lru);
-  run (&lfu);
-  run (&arc);
+  printf ("Running OPT\n"); run (&opt);
+  printf ("Running LRU\n"); run (&lru);
+  printf ("Running LFU\n"); run (&lfu);
+  printf ("Running ARC\n"); run (&arc);
 
   void print (const char *name, struct status *status)
   {
@@ -1015,8 +1003,10 @@ main (int argc, char *argv[])
   print ("OPT", &opt);
   print ("LRU", &lru);
   print ("LFU", &lfu);
-  printf ("ARC parameter: "BYTES_FMT" (%"PRId64"%%)\n",
-	  BYTES_PRINTF (arc.arc.p), (100 * arc.arc.p) / cache_space);
+  printf ("ARC parameter: "BYTES_FMT" (%"PRId64"%%), "
+	  "max: "BYTES_FMT" (%"PRId64"%%)\n",
+	  BYTES_PRINTF (arc.arc.p), (100 * arc.arc.p) / cache_space,
+	  BYTES_PRINTF (arc.arc.p_max), (100 * arc.arc.p_max) / cache_space);
   print ("ARC", &arc);
 
   return 0;
