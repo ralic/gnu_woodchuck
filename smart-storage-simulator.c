@@ -469,7 +469,14 @@ access_notice (struct status *status,
 		     BYTES_PRINTF (status->bytes_count),
 		     status->file_count - 1);
 	    }
-	  assert (loser);
+	  assertx (loser,
+		   "cache bytes: "BYTES_FMT" (%d entries)/"BYTES_FMT"; "
+		   "new file %d: "BYTES_FMT" (=> "BYTES_FMT")",
+		   BYTES_PRINTF (status->bytes_count), status->file_count - 1,
+		   BYTES_PRINTF (cache_space),
+		   filename,
+		   BYTES_PRINTF (growth),
+		   BYTES_PRINTF (status->bytes_count + growth));
 	  assert (loser != file);
 	  file_list_unlink (&status->files, loser);
 
