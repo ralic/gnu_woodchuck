@@ -1005,8 +1005,10 @@ main (int argc, char *argv[])
 	    status->misses);
   }
 
-  printf ("%d files: "BYTES_FMT"\n",
-	  opt.files_total, BYTES_PRINTF (opt.bytes_max));
+  printf ("%d files: "BYTES_FMT", "TIME_FMT"\n",
+	  opt.files_total, BYTES_PRINTF (opt.bytes_max),
+	  TIME_PRINTF ((file_list_tail (&access_log)->access_time
+			- file_list_head (&access_log)->access_time) * 1000));
   print ("OPT", &opt);
   print ("LRU", &lru);
   print ("LFU", &lfu);
