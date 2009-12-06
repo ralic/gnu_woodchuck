@@ -600,6 +600,9 @@ directory_add_helper (void *arg)
 	      switch (errno)
 		{
 		case EACCES:
+		case ENOENT:
+		case EPERM:
+		  /* Ignore.  */
 		  return 0;
 		default:
 		  inotify_fd = -1;
@@ -749,7 +752,8 @@ main (int argc, char *argv[])
 	  char *events = inotify_mask_to_string (ev->mask);
 
 	  struct watch_node *wn = btree_watch_find (&watch_btree, &ev->wd);
-	  assert (wn);
+	  if (! wn)
+	    goto out;
 
 	  char *element = ev->name;
 	  if (ev->len == 0)
@@ -790,6 +794,7 @@ main (int argc, char *argv[])
 
 	  free (filename);
 
+	out:
 	  len -= sizeof (*ev) + ev->len;
 	  ev = (void *) ev + sizeof (*ev) + ev->len;
 	}
