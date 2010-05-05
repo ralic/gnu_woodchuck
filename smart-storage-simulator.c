@@ -46,16 +46,45 @@ struct file
   uint64_t access_time;
   uint64_t size;
 
+  uint64_t start;
+  /* Accesses between start and now.  */
+  int count;
   struct
   {
-    uint64_t start;
-    int count;
-    uint64_t startprev;
-    int countprev;
+    /* Covers either 2^i days or 2 * 2^i * days depending if
+       prev_valid is true or false.  Range 0 ends with START.  Ranges
+       are (temporally) adjacent with accesses[1] happening
+       immediately before accesses[0].  */
+    int count[2];
+    bool prev_valid;
   } accesses[9];
 
-  /* This is used by the optimal policy.  */
-  uint64_t next_access;
+  union
+  {
+    struct
+    {
+      /* The time of the following access.  */
+      uint64_t next_access;
+    } opt;
+    struct
+    {
+      /* ARC maintains four lists:
+
+	   - objects used once that are in memory (t1)
+	   - objects used once and have been recently evicted (b1)
+	   - objects that have been used more than once and are in memory (t2)
+	   - objects used more and have been recently evicted (b2).  */
+      enum
+	{
+	  arc_none = 0,
+	  arc_t1,
+	  arc_b1,
+	  arc_t2,
+	  arc_b2,
+	} status;
+      struct list_node node;
+    } arc;
+  };
 
   struct list_node node;
   uint32_t hash;
@@ -78,7 +107,8 @@ file_new (char *filename, uint64_t access_time, uint64_t size)
   int len = strlen (filename);
   int s = sizeof (struct file) + len + 1;
   bytes_allocated += s;
-  struct file *file = calloc (s, 1);
+  struct file *file = malloc (s);
+  memset (file, 0, sizeof (*file));
   file->filename_len = len;
   memcpy (file->filename, filename, len + 1);
 
@@ -138,6 +168,21 @@ file_list_remove (struct file_list *list, char *filename)
 
   return true;
 }
+
+LIST_CLASS(l1l2, struct file, arc.node, true)
+
+static struct file *
+l1l2_list_find (struct l1l2_list *list, char *filename)
+{
+  int l = strlen (filename);
+
+  /* If we are adding it, it should not be on the list.  */
+  struct file *f;
+  for (f = l1l2_list_head (list); f; f = l1l2_list_next (f))
+    if (l == f->filename_len && memcmp (f->filename, filename, l) == 0)
+      return f;
+  return NULL;
+}
 
 /* The access log.  */
 struct file_list access_log;
@@ -152,6 +197,31 @@ struct status
   struct file_list evictions;
   /* Files in the cache.  Maintained in LRU order.  */
   struct file_list files;
+
+  /* Policy specific data.  */
+  enum
+    {
+      policy_opt,
+      policy_lru,
+      policy_lfu,
+      policy_arc,
+    } policy;
+  union
+  {
+    struct
+    {
+      struct l1l2_list t1;
+      uint64_t t1_size;
+      struct l1l2_list b1;
+      uint64_t b1_size;
+      struct l1l2_list t2;
+      uint64_t t2_size;
+      struct l1l2_list b2;
+      uint64_t b2_size;
+      uint64_t p;
+      uint64_t p_max;
+    } arc;
+  };
 
   /* Bytes in the cache.  */
   uint64_t bytes_count;
@@ -176,6 +246,7 @@ struct status
   /* The sum of the times since the previous access.  */
   uint64_t iir;
 
+  /* The eviction routine.  */
   file_evict_t evict;
 };
 
@@ -194,6 +265,7 @@ access_notice (struct status *status,
       /* The number of bytes this file has grown by (possible
 	 negative).  */
       int64_t growth;
+      uint64_t size_prev = 0;
       struct file *file = file_list_find (&status->files, filename);
       if (file)
 	/* This is an access.  Add the file to the end of the
@@ -202,10 +274,11 @@ access_notice (struct status *status,
 	  /* Only count at most one access per hour.  (We should have
 	     filtered this out already.)  */
 	  assert (access_time - file->access_time >= 60 * 60);
+	  growth = size - file->size;
 
 	  file_list_unlink (&status->files, file);
 
-	  growth = size - file->size;
+	  size_prev = file->size;
 	  file->size = size;
 
 	  status->hits ++;
@@ -221,6 +294,9 @@ access_notice (struct status *status,
 	  file->access_time = access_time;
 
 	  status->bytes_max += growth;
+
+	  if (status->policy == policy_arc)
+	    assert (file->arc.status == arc_t1 || file->arc.status == arc_t2);
 	}
       else
 	{
@@ -231,12 +307,18 @@ access_notice (struct status *status,
 	    {
 	      real_miss = true;
 	      file_list_unlink (&status->evictions, file);
+	      size_prev = file->size;
 	      file->size = size;
 	      status->misses ++;
 
 	      status->bytes_max += size - file->size;
 	      status->iir += access_time - file->access_time;
 	      file->access_time = access_time;
+
+	      if (status->policy == policy_arc)
+		assert (file->arc.status == arc_none
+			|| file->arc.status == arc_b1
+			|| file->arc.status == arc_b2);
 	    }
 	  else
 	    /* File is new.  */
@@ -246,6 +328,9 @@ access_notice (struct status *status,
 	      status->files_total ++;
 
 	      status->bytes_max += size;
+
+	      if (status->policy == policy_arc)
+		assert (file->arc.status == arc_none);
 	    }
 
 	  growth = size;
@@ -260,29 +345,119 @@ access_notice (struct status *status,
 		 real_miss ? "miss" : "new");
 	}
 
-      /* Update the access stats.  */
-      uint64_t range = 24 * 60 * 60;
-      int i;
-      for (i = 0; i < sizeof (file->accesses) / sizeof (file->accesses[0]);
-	   i ++, range *= 2)
-	{
-	  if (access_time > file->accesses[i].start + range)
-	    {
-	      file->accesses[i].startprev = file->accesses[i].start;
-	      file->accesses[i].countprev = file->accesses[i].count;
+      if (status->policy == policy_arc)
+	/* Remove the file from its current list and update its
+	   status.  Do not yet add it to its new list: it must not be
+	   evicted immediately.  */
+	switch (file->arc.status)
+	  {
+	  case arc_none:
+	    file->arc.status = arc_t1;
+	    break;
 
-	      file->accesses[i].start = access_time;
-	      file->accesses[i].count = 1;
+	  case arc_t1:
+	    assert (l1l2_list_find (&status->arc.t1, file->filename));
+	    l1l2_list_unlink (&status->arc.t1, file);
+	    status->arc.t1_size -= size_prev;
+
+	    file->arc.status = arc_t2;
+	    break;
+
+	  case arc_b1:
+	    assert (l1l2_list_find (&status->arc.b1, file->filename));
+	    l1l2_list_unlink (&status->arc.b1, file);
+	    status->arc.b1_size -= size_prev;
+
+	    file->arc.status = arc_t2;
+
+	    status->arc.p += size;
+	    if (status->arc.p > cache_space)
+	      status->arc.p = cache_space;
+	    status->arc.p_max = MAX (status->arc.p_max, status->arc.p);
+		
+	    break;
+
+	  case arc_t2:
+	    assert (l1l2_list_find (&status->arc.t2, file->filename));
+	    l1l2_list_unlink (&status->arc.t2, file);
+	    status->arc.t2_size -= size_prev;
+
+	    file->arc.status = arc_t2;
+
+	    break;
+
+	  case arc_b2:
+	    assert (l1l2_list_find (&status->arc.b2, file->filename));
+	    l1l2_list_unlink (&status->arc.b2, file);
+	    status->arc.b2_size -= size_prev;
+
+	    file->arc.status = arc_t2;
+
+	    if (status->arc.p >= size)
+	      status->arc.p -= size;
+	    else 
+	      status->arc.p = 0;
+
+	    break;
+	  default:
+	    assertx (0, "Bad arc status: %d", file->arc.status);
+	    abort ();
+	  }
+
+      /* Update the access stats.  */
+      if (file->start == 0)
+	/* First access.  */
+	{
+	  file->start = access_time;
+	  file->accesses[0].count[0] = 1;
+	}
+      else
+	{
+	  int days = (access_time - file->start) / (24 * 60 * 60);
+	  if (days > 0)
+	    {
+	      int d;
+	      for (d = 0; d < days; d ++)
+		{
+		  int carry = file->count;
+		  file->count = 0;
+
+		  int i;
+		  for (i = 0;
+		       i < sizeof (file->accesses) / sizeof (file->accesses[0]);
+		       i ++)
+		    {
+		      if (file->accesses[i].prev_valid)
+			{
+			  int c = file->accesses[i].count[0]
+			    + file->accesses[i].count[1];
+			  file->accesses[i].prev_valid = false;
+			  file->accesses[i].count[0] = carry;
+			  file->accesses[i].count[1] = 0;
+			  carry = c;
+			}
+		      else
+			{
+			  file->accesses[i].prev_valid = true;
+			  file->accesses[i].count[1]
+			    = file->accesses[i].count[0];
+			  file->accesses[i].count[0] = carry;
+			  break;
+			}
+		    }
+		}
+
+	      file->start += (uint64_t) days * 24 * 60 * 60;
 	    }
-	  else
-	    file->accesses[i].count ++;
+
+	  file->count ++;
 	}
 
       assert (access_time >= status->access_time);
       status->access_time = access_time;
 
       /* See if we need to free something.  */
-      while (status->bytes_count > cache_space)
+      while (status->bytes_count + growth > cache_space)
 	/* Free something.  */
 	{
 	  struct file *loser = status->evict (status);
@@ -294,7 +469,15 @@ access_notice (struct status *status,
 		     BYTES_PRINTF (status->bytes_count),
 		     status->file_count - 1);
 	    }
-	  assert (loser);
+	  assertx (loser,
+		   "cache bytes: "BYTES_FMT" (%d entries)/"BYTES_FMT"; "
+		   "new file %d: "BYTES_FMT" (=> "BYTES_FMT")",
+		   BYTES_PRINTF (status->bytes_count), status->file_count - 1,
+		   BYTES_PRINTF (cache_space),
+		   filename,
+		   BYTES_PRINTF (growth),
+		   BYTES_PRINTF (status->bytes_count + growth));
+	  assert (loser != file);
 	  file_list_unlink (&status->files, loser);
 
 	  debug (0, "%s (size: "BYTES_FMT"): evicted!"
@@ -307,6 +490,36 @@ access_notice (struct status *status,
 	  status->file_count --;
 	  status->bytes_count -= loser->size;
 	  file_list_enqueue (&status->evictions, loser);
+
+	  if (status->policy == policy_arc)
+	    switch (loser->arc.status)
+	      {
+	      case arc_t1:
+		assert (l1l2_list_find (&status->arc.t1, loser->filename));
+		l1l2_list_unlink (&status->arc.t1, loser);
+		status->arc.t1_size -= loser->size;
+
+		l1l2_list_enqueue (&status->arc.b1, loser);
+		status->arc.b1_size += loser->size;
+
+		loser->arc.status = arc_b1;
+		break;
+
+	      case arc_t2:
+		assert (l1l2_list_find (&status->arc.t2, loser->filename));
+		l1l2_list_unlink (&status->arc.t2, loser);
+		status->arc.t2_size -= loser->size;
+
+		l1l2_list_enqueue (&status->arc.b2, loser);
+		status->arc.b2_size += loser->size;
+
+		loser->arc.status = arc_b2;
+		break;
+
+	      default:
+		assertx (0, "Bad arc status: %d", loser->arc.status);
+		abort ();
+	      }
 	}
 
       if (growth < 0)
@@ -314,6 +527,56 @@ access_notice (struct status *status,
       status->bytes_count += growth;
 
       file_list_enqueue (&status->files, file);
+
+      if (status->policy == policy_arc)
+	{
+	  switch (file->arc.status)
+	    {
+	    case arc_t1:
+	      l1l2_list_enqueue (&status->arc.t1, file);
+	      status->arc.t1_size += size;
+	      break;
+
+	    case arc_t2:
+	      l1l2_list_enqueue (&status->arc.t2, file);
+	      status->arc.t2_size += size;
+	      break;
+
+	    default:
+	      assertx (0, "Bad arc status: %d", file->arc.status);
+	      abort ();
+	    }
+
+	  assertx (status->arc.t1_size + status->arc.t2_size
+		   == status->bytes_count,
+		   "%"PRId64"+%"PRId64"=%"PRId64" ?= %"PRId64,
+		   status->arc.t1_size, status->arc.t2_size,
+		   status->arc.t1_size + status->arc.t2_size,
+		   status->bytes_count);
+
+	  /* Remove entries from the bottom lists: neither list should
+	     contain more than CACHE_SPACE bytes.  */
+	  assertx (status->arc.t1_size <= cache_space,
+		   BYTES_FMT"/"BYTES_FMT" vs. "BYTES_FMT,
+		   BYTES_PRINTF (status->arc.t1_size),
+		   BYTES_PRINTF (status->arc.t2_size),
+		   BYTES_PRINTF (cache_space));
+	  while (status->arc.t1_size + status->arc.b1_size > cache_space)
+	    {
+	      struct file *loser = l1l2_list_dequeue (&status->arc.b1);
+	      assert (loser->arc.status == arc_b1);
+	      loser->arc.status = arc_none;
+	      status->arc.b1_size -= loser->size;
+	    }
+	  assert (status->arc.t2_size <= cache_space);
+	  while (status->arc.t2_size + status->arc.b2_size > cache_space)
+	    {
+	      struct file *loser = l1l2_list_dequeue (&status->arc.b2);
+	      assert (loser->arc.status == arc_b2);
+	      loser->arc.status = arc_none;
+	      status->arc.b2_size -= loser->size;
+	    }
+	}
 
       uint64_t t = 0;
       for (file = file_list_head (&status->files);
@@ -385,6 +648,41 @@ main (int argc, char *argv[])
       errmsg = NULL;
     }
 
+
+  struct file *optimal_evict (struct status *status)
+  {
+    struct file *f;
+    for (f = file_list_head (&status->files); f; f = file_list_next (f))
+      {
+	struct file *l;
+	for (l = access_log_entry; l; l = file_list_next (l))
+	  if (file_same (f, l))
+	    {
+	      f->opt.next_access = l->access_time;
+	      break;
+	    }
+	if (! l)
+	  f->opt.next_access = -1;
+      }
+
+    struct file *loser = NULL;
+    for (f = file_list_head (&status->files); f; f = file_list_next (f))
+      if (! loser || loser->opt.next_access < f->opt.next_access)
+	{
+	  loser = f;
+	  if (f->opt.next_access == -1)
+	    break;
+	}
+
+    return loser;
+  }
+
+  struct status opt;
+  memset (&opt, 0, sizeof (opt));
+  opt.policy = policy_opt;
+  opt.evict = optimal_evict;
+
+
   struct file *lru_evict (struct status *status)
   {
     return file_list_head (&status->files);
@@ -392,38 +690,12 @@ main (int argc, char *argv[])
 
   struct status lru;
   memset (&lru, 0, sizeof (lru));
+  lru.policy = policy_lru;
   lru.evict = lru_evict;
+
 
   struct file *lfu_evict (struct status *status)
   {
-    /* Returns the amount by which the first region overlaps with the
-       second.  (From 0.0 to 1.0.)  */
-    double overlap (uint64_t start1, uint64_t length1,
-		    uint64_t start2, uint64_t length2)
-    {
-      uint64_t end1 = MIN (start1 + length1 - 1, status->access_time);
-      uint64_t end2 = MIN (start2 + length2 - 1, status->access_time);
-
-      if (start2 <= start1 && start1 <= end2)
-	/* START1 falls between the second region.  */
-	{
-	  if (start2 <= end1 && end1 <= end2)
-	    /* END1 does as well.  Thus, overlap is 100%  */
-	    return 1.0;
-	  else
-	    /* The start of the first region overlaps with the end of
-	       the second.  */
-	    return ((double) (end2 - start1 + 1)) / length1;
-	}
-      else if (start2 <= end1 && end1 <= end2)
-	/* START1 does not fall between the second region but END1
-	   does.  The end of the first region overlaps with the start
-	   of the second.  */
-	return ((double) (end1 - start2 + 1)) / length1;
-      else
-	return 0.0;
-    }
-
     struct file *loser = NULL;
     double loser_score = 0;
 
@@ -433,58 +705,55 @@ main (int argc, char *argv[])
 	debug (5, "Considering %s", f->filename);
 	double score = 0;
 
+	int i = -1;
+
+	void process (uint64_t start, uint64_t length, double accesses)
+	{
+	  if (! accesses)
+	    return;
+
+	  assert (start <= status->access_time);
+	  uint64_t end = MIN (start + length - 1, status->access_time);
+	  length = end - start + 1;
+
+	  uint64_t mid = (start / 2) + (end / 2);
+	  uint64_t delta = status->access_time - mid;
+	  assertx (status->access_time >= mid,
+		   "(%"PRId64"-%"PRId64")/2 -> %"PRId64,
+		   start, end, delta);
+
+	  double factor = 1.0;
+	  if (accesses > 0)
+	    factor = MAX (1.0, log2 ((double) delta / (20 * 60 * 60)));
+	  double s = score;
+	  score += accesses / factor;
+
+	  if (accesses > 0)
+	    debug (5, "Period %d: "TIME_FMT"+"TIME_FMT" ("TIME_FMT"): "
+		   "accesses: %.1lf / %.1lf -> %.1lf; "
+		   "score: %.1lf -> %.1lf",
+		   i, TIME_PRINTF (1000 * (status->access_time - end)),
+		   TIME_PRINTF (1000 * length), TIME_PRINTF (1000 * delta),
+		   accesses, factor, accesses / factor, s, score);
+	}
+
+	process (f->start, status->access_time - f->start, f->count);
+
+	uint64_t start = f->start;
 	uint64_t range = 24 * 60 * 60;
-	int i;
 	for (i = 0; i < sizeof (f->accesses) / sizeof (f->accesses[0]);
 	     i ++, range *= 2)
 	  {
-	    void process (uint64_t start, uint64_t length, double accesses)
-	    {
-	      double a = accesses;
-
-	      if (! accesses)
-		return;
-
-	      assert (start <= status->access_time);
-	      uint64_t end = MIN (start + length - 1, status->access_time);
-	      length = end - start + 1;
-
-	      uint64_t mid = (start / 2) + (end / 2);
-	      uint64_t delta = status->access_time - mid;
-	      assertx (status->access_time >= mid,
-		       "(%"PRId64"-%"PRId64")/2 -> %"PRId64,
-		       start, end, delta);
-
-	      if (i > 0)
-		/* Ignore accesses we've already counted.  */
-		{
-		  accesses -= f->accesses[i - 1].count
-		    * overlap (f->accesses[i - 1].start, range / 2,
-			       start, range);
-
-		  accesses -= f->accesses[i - 1].countprev
-		    * overlap (f->accesses[i - 1].startprev, range / 2,
-			       start, range);
-		}
-
-	      double s = score;
-
-	      double factor = 1.0;
-	      if (accesses > 0)
-		factor = MAX (1.0, log2 ((double) delta / (20 * 60 * 60)));
-	      score += accesses / factor;
-
-	      debug (5, "Period %d: "TIME_FMT"+"TIME_FMT" ("TIME_FMT"): "
-		     "accesses: %.1lf -> %.1lf; "
-		     "score: %.1lf -> %.1lf (%"PRId64"->%.1lf)",
-		     i, TIME_PRINTF (1000 * (status->access_time - end)),
-		     TIME_PRINTF (1000 * length), TIME_PRINTF (1000 * delta),
-		     a, accesses, s, score, delta, factor);
-	    }
-
-	    process (f->accesses[i].start, range, f->accesses[i].count);
-	    process (f->accesses[i].startprev, range, f->accesses[i].countprev);
+	    start -= range;
+	    process (start, range, f->accesses[i].count[0]);
+	    if (f->accesses[i].prev_valid)
+	      {
+		start -= range;
+		process (start, range, f->accesses[i].count[1]);
+	      }
 	  }
+
+	debug (5, DEBUG_BOLD ("%s's score: %.1lf"), f->filename, score);
 
 	if (! loser || score < loser_score)
 	  {
@@ -498,39 +767,29 @@ main (int argc, char *argv[])
 
   struct status lfu;
   memset (&lfu, 0, sizeof (lfu));
+  lfu.policy = policy_lfu;
   lfu.evict = lfu_evict;
 
-  struct file *optimal_evict (struct status *status)
+
+  struct file *arc_evict (struct status *status)
   {
-    struct file *f;
-    for (f = file_list_head (&status->files); f; f = file_list_next (f))
+    if (status->arc.t1_size > status->arc.p)
+      return l1l2_list_head (&status->arc.t1);
+    else
       {
-	struct file *l;
-	for (l = access_log_entry; l; l = file_list_next (l))
-	  if (file_same (f, l))
-	    {
-	      f->next_access = l->access_time;
-	      break;
-	    }
-	if (! l)
-	  f->next_access = -1;
+	struct file *loser;
+	loser = l1l2_list_head (&status->arc.t2);
+	if (! loser)
+	  loser = l1l2_list_head (&status->arc.t1);
+	return loser;
       }
-
-    struct file *loser = NULL;
-    for (f = file_list_head (&status->files); f; f = file_list_next (f))
-      if (! loser || loser->next_access < f->next_access)
-	{
-	  loser = f;
-	  if (f->next_access == -1)
-	    break;
-	}
-
-    return loser;
   }
 
-  struct status opt;
-  memset (&opt, 0, sizeof (opt));
-  opt.evict = optimal_evict;
+  struct status arc;
+  memset (&arc, 0, sizeof (arc));
+  arc.policy = policy_arc;
+  arc.evict = arc_evict;
+
 
   int prefix_len = 0;
   int record_count = 0;
@@ -719,41 +978,45 @@ main (int argc, char *argv[])
   start = end;
 
 
-  for (access_log_entry = file_list_head (&access_log);
-       access_log_entry;
-       access_log_entry = file_list_next (access_log_entry))
-    access_notice (&opt, access_log_entry->filename,
-		   access_log_entry->access_time, access_log_entry->size);
+  void run (struct status *status)
+  {
+    for (access_log_entry = file_list_head (&access_log);
+	 access_log_entry;
+	 access_log_entry = file_list_next (access_log_entry))
+      access_notice (status, access_log_entry->filename,
+		     access_log_entry->access_time, access_log_entry->size);
+  }
 
-  for (access_log_entry = file_list_head (&access_log);
-       access_log_entry;
-       access_log_entry = file_list_next (access_log_entry))
-    access_notice (&lru, access_log_entry->filename,
-		   access_log_entry->access_time, access_log_entry->size);
+  printf ("Running OPT\n"); run (&opt);
+  printf ("Running LRU\n"); run (&lru);
+  printf ("Running LFU\n"); run (&lfu);
+  printf ("Running ARC\n"); run (&arc);
 
-  for (access_log_entry = file_list_head (&access_log);
-       access_log_entry;
-       access_log_entry = file_list_next (access_log_entry))
-    access_notice (&lfu, access_log_entry->filename,
-		   access_log_entry->access_time, access_log_entry->size);
+  void print (const char *name, struct status *status)
+  {
+    printf ("%s performance: "BYTES_FMT", %d hits ("TIME_FMT"), "
+	    "%d misses (subsequent)\n",
+	    name, BYTES_PRINTF (status->bytes_fetched),
+	    status->hits,
+	    TIME_PRINTF (status->hits + status->misses > 0
+			 ? (1000 * status->iir
+			    / (status->hits + status->misses))
+			 : 0),
+	    status->misses);
+  }
 
-  printf ("%d files: "BYTES_FMT"\n",
-	  opt.files_total, BYTES_PRINTF (opt.bytes_max));
-  printf ("OPT performance: "BYTES_FMT", %d hits ("TIME_FMT"), "
-	  "%d misses (subsequent)\n",
-	  BYTES_PRINTF (opt.bytes_fetched),
-	  opt.hits, TIME_PRINTF (1000 * opt.iir / (opt.hits + opt.misses)),
-	  opt.misses);
-  printf ("LRU performance: "BYTES_FMT", %d hits ("TIME_FMT"), "
-	  "%d misses (subsequent)\n",
-	  BYTES_PRINTF (lru.bytes_fetched),
-	  lru.hits, TIME_PRINTF (1000 * lru.iir / (lru.hits + lru.misses)),
-	  lru.misses);
-  printf ("LFU performance: "BYTES_FMT", %d hits  ("TIME_FMT"), "
-	  "%d misses (subsequent)\n",
-	  BYTES_PRINTF (lfu.bytes_fetched),
-	  lfu.hits, TIME_PRINTF (1000 * lfu.iir / (lfu.hits + lfu.misses)),
-	  lfu.misses);
+  printf ("%d files: "BYTES_FMT", "TIME_FMT"\n",
+	  opt.files_total, BYTES_PRINTF (opt.bytes_max),
+	  TIME_PRINTF ((file_list_tail (&access_log)->access_time
+			- file_list_head (&access_log)->access_time) * 1000));
+  print ("OPT", &opt);
+  print ("LRU", &lru);
+  print ("LFU", &lfu);
+  printf ("ARC parameter: "BYTES_FMT" (%"PRId64"%%), "
+	  "max: "BYTES_FMT" (%"PRId64"%%)\n",
+	  BYTES_PRINTF (arc.arc.p), (100 * arc.arc.p) / cache_space,
+	  BYTES_PRINTF (arc.arc.p_max), (100 * arc.arc.p_max) / cache_space);
+  print ("ARC", &arc);
 
   return 0;
 }
