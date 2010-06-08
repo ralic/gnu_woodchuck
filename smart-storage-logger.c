@@ -40,13 +40,21 @@
 
 static int inotify_fd;
 
+/* The directory under which we monitor files for changes (not
+   including a trailing slash).  */
 static char *base;
+/* strlen (base).  */
 static int base_len;
 
+/* The directory (under the user's home directory) in which we store
+   the log file.  */
 #define DOT_DIR ".smart-storage"
+/* The directory's absolute path.  */
 static char *dot_dir;
+/* strlen (dot_dir).  */
 static int dot_dir_len;
 
+/* Returns whether FILENAME is DOT_DIR or is under DOT_DIR.  */
 static bool
 under_dot_dir (const char *filename)
 {
@@ -62,14 +70,22 @@ access_db_init (void)
      exists.  */
   mkdir (dot_dir, 0750);
 
+  char *subdir = NULL;
+  if (asprintf (&subdir, "%s/logs", dot_dir) < 0)
+    error (1, 0, "out of memory");
+  mkdir (subdir, 0750);
+  free (subdir);
+
   char *filename = NULL;
-  asprintf (&filename, "%s/access.db", dot_dir);
+  if (asprintf (&filename, "%s/logs/access.db", dot_dir) < 0)
+    error (1, 0, "out of memory");
 
   sqlite3 *access_db;
   int err = sqlite3_open (filename, &access_db);
   if (err)
     error (1, 0, "sqlite3_open (%s): %s",
 	   filename, sqlite3_errmsg (access_db));
+  free (filename);
 
   /* Sleep up to an hour if the database is busy...  */
   sqlite3_busy_timeout (access_db, 60 * 60 * 1000);
@@ -93,40 +109,6 @@ access_db_init (void)
 		      " (uid INTEGER,"
 		      "  time INTEGER,"
 		      "  size_plus_one INTEGER);"
-
-		      /* LAST_ACCESS is the last recorded access.  We
-			 count at most one access per hour.  STARTX is
-			 the time that the period was started.  COUNTX
-			 is the number of accesses in that period.  X
-			 is the number of days that that period
-			 summarizes.  All periods overlap.  When an
-			 access occurs and it occurs outside the
-			 period, then the period must be
-			 reinitialized.  */
-		      "create table accesses "
-		      " (uid INTEGER PRIMARY KEY,"
-		      "  created INTEGER,"
-		      "  last_access INTEGER,"
-		      "  size_plus_one INTEGER,"
-		      "  start1 INTEGER, count1 INTEGER,"
-		      "  start1prev INTEGER, count1prev INTEGER,"
-		      "  start2 INTEGER, count2 INTEGER,"
-		      "  start2prev INTEGER, count2prev INTEGER,"
-		      "  start4 INTEGER, count4 INTEGER,"
-		      "  start4prev INTEGER, count4prev INTEGER,"
-		      "  start8 INTEGER, count8 INTEGER,"
-		      "  start8prev INTEGER, count8prev INTEGER,"
-		      "  start16 INTEGER, count16 INTEGER,"
-		      "  start16prev INTEGER, count16prev INTEGER,"
-		      "  start32 INTEGER, count32 INTEGER,"
-		      "  start32prev INTEGER, count32prev INTEGER,"
-		      "  start64 INTEGER, count64 INTEGER,"
-		      "  start64prev INTEGER, count64prev INTEGER,"
-		      "  start128 INTEGER, count128 INTEGER,"
-		      "  start128prev INTEGER, count128prev INTEGER,"
-		      "  start256 INTEGER, count256 INTEGER,"
-		      "  start256prev INTEGER, count256prev INTEGER"
-		      " );"
 
 		      "commit transaction;",
 		      NULL, NULL, &errmsg);
@@ -227,6 +209,100 @@ notice_add_helper (void *arg)
       pthread_mutex_unlock (&notice_lock);
 
       int processed = 0;
+
+      void flush (const char *command_string1, const char *command_string2)
+      {
+	const char *c[2] = { command_string1, command_string2 };
+
+	int i;
+	for (i = 0; i < sizeof (c) / sizeof (c[0]); i ++)
+	  if (c[i] && c[i][0] != 0)
+	    break;
+	if (i == sizeof (c) / sizeof (c[0]))
+	  /* All strings are empty.  Nothing to do.  */
+	  return;
+
+	/* Wrap the command in a transaction.  */
+	char *errmsg = NULL;
+	sqlite3_exec (access_db, "begin transaction", NULL, NULL, &errmsg);
+	if (errmsg)
+	  {
+	    debug (0, "begin transaction: %s", errmsg);
+	    sqlite3_free (errmsg);
+	    errmsg = NULL;
+
+	    return;
+	  }
+
+	/* Execute the commands.  */
+	for (i = 0; i < sizeof (c) / sizeof (c[0]); i ++)
+	  {
+	    if (! c[i] || c[i][0] == 0)
+	      continue;
+
+	    sqlite3_exec (access_db, c[i], NULL, NULL, &errmsg);
+	    if (errmsg)
+	      {
+		debug (0, "%s -> %s", c[i], errmsg);
+		sqlite3_free (errmsg);
+		errmsg = NULL;
+	      }
+	  }
+	
+	sqlite3_exec (access_db, "end transaction", NULL, NULL, &errmsg);
+	if (errmsg)
+	  {
+	    debug (0, "end transaction: %s", errmsg);
+	    sqlite3_free (errmsg);
+	    errmsg = NULL;
+
+	    return;
+	  }
+      }
+
+      char command_buffer[16 * 4096];
+      int command_buffer_used = 0;
+
+      /* Whether there is space for a string of length LEN (LEN does
+	 not include the NUL terminator).  */
+      bool have_space (int len)
+      {
+	return len + 1 <= sizeof (command_buffer) - command_buffer_used;
+      }
+
+      void append_hard (const char *s, int len)
+      {
+	assert (have_space (len));
+	assert (! memchr (s, 0, len));
+
+	memcpy (&command_buffer[command_buffer_used], s, len);
+	command_buffer_used += len;
+      }
+
+      void append (char *command, bool force_flush)
+      {
+	int len = command ? strlen (command) : 0;
+	if (force_flush || ! have_space (len))
+	  /* Need to flush the buffer first.  */
+	  {
+	    /* NUL terminate the string.  */
+	    command_buffer[command_buffer_used] = 0;
+	    command_buffer_used = 0;
+	    /* Flush the commands.  */
+	    debug (1, "Flushing after %d records (`%s', `%s')",
+		   processed, command_buffer, command);
+	    flush (command_buffer, command);
+	    return;
+	  }
+
+	if (! have_space (len))
+	  /* The command is longer than we have space for.  Execute it
+	     directly.  */
+	  flush (command, NULL);
+	else
+	  append_hard (command, len);
+      }
+
       do
 	{
 	  processed ++;
@@ -234,6 +310,10 @@ notice_add_helper (void *arg)
 
 	  const char *filename = notice->filename;
 	  assert (filename);
+
+	  if ((notice->mask & IN_ISDIR))
+	    /* Ignore all directories.  */
+	    goto out;
 
 	  uint64_t uid = 0;
 
@@ -258,197 +338,42 @@ notice_add_helper (void *arg)
 	      errmsg = NULL;
 	    }
 
-	  if ((notice->mask & IN_ISDIR))
-	    /* Ignore all directories.  */
-	    {
-	      if (uid)
-		/* Purge references to the directory.  (For cleaning
-		   up old databases.)  */
-		{
-		  char *errmsg = NULL;
-		  sqlite3_exec_printf
-		    (access_db,
-		     "delete from files where uid = %"PRId64";"
-		     "delete from accesses where uid = %"PRId64";"
-		     "delete from log where uid = %"PRId64";",
-		     NULL, NULL, &errmsg, uid, uid, uid);
-		  if (errmsg)
-		    {
-		      debug (0, "%s: %s", filename, errmsg);
-		      sqlite3_free (errmsg);
-		      errmsg = NULL;
-		    }
-		}
-	      goto out;
-	    }
-
-
 	  if (! uid)
+	    /* It seems the file hasn't been seen before.  Insert it
+	       into the database.  */
 	    {
-	      sqlite3_exec_printf
-		(access_db,
-		 "insert into files (filename) values (%Q);",
-		 NULL, NULL, &errmsg, filename);
-	      if (errmsg)
-		error (1, 0, "%s:%d: %s", __FILE__, __LINE__, errmsg);
-	      else
-		uid = sqlite3_last_insert_rowid (access_db);
+	      /* Append the string to the command buffer then flush.
+		 We must flush as we need the result
+		 last_insert_rowid.  */
+	      char *sql = sqlite3_mprintf
+		("insert into files (filename) values (%Q);", filename);
+	      append (sql, true);
+	      sqlite3_free (sql);
+
+	      uid = sqlite3_last_insert_rowid (access_db);
 	    }
 
-	  uint64_t n = notice->time / 1000;
-
-	  /* Now, stamp the file.  */
-	  /* Find the file's access record.  */
-	  struct access
-	  {
-	    uint64_t start;
-	    int count;
-	    uint64_t startprev;
-	    int countprev;
-	  };
-	  struct access a[9];
-	  memset (a, 0, sizeof (a));
-	  uint64_t last_access = n;
-	  uint64_t created = n;
-
-	  bool needs_update = true;
-
-	  int access_callback (void *cookie, int argc, char **argv,
-			       char **names)
-	  {
-	    // uid = atol (argv[0]);
-	    created = atol (argv[1]);
-	    last_access = atol (argv[2]);
-	    // size = atol (argv[3]);
-
-	    debug (0, "%s updated "TIME_FMT" ago.",
-		   filename, TIME_PRINTF ((n - last_access) * 1000));
-
-	    if (last_access + 60 * 60 > n)
-	      /* The last access was less than an hour in the past.  Don't
-		 update.  */
-	      {
-		needs_update = false;
-		return 0;
-	      }
-
-	    int i;
-	    for (i = 0; i < sizeof (a) / sizeof (a[0]); i ++)
-	      {
-		assert (4 + i * 4 + 1 < argc);
-		a[i].start = atol (argv[4 + i * 4]);
-		a[i].count = atol (argv[4 + i * 4 + 1]);
-		a[i].startprev = atol (argv[4 + i * 4 + 2]);
-		a[i].countprev = atol (argv[4 + i * 4 + 3]);
-	      }
-
-	    assert (4 + i * 4 == argc);
-
-	    return 0;
-	  }
-
-	  /* Read the record if the last time.  */
-	  sqlite3_exec_printf (access_db,
-			       "select * from accesses where uid = %"PRId64";",
-			       access_callback, NULL, &errmsg, uid);
-	  if (errmsg)
-	    {
-	      debug (0, "%s: %s", filename, errmsg);
-	      sqlite3_free (errmsg);
-	      errmsg = NULL;
-	    }
-
+	  /* Recall: a size of 0 means deleted; any other value
+	     corresponds to the size of the file plus one.  */
 	  struct stat statbuf;
 	  statbuf.st_size = 0;
 	  if (stat (filename, &statbuf) == 0)
 	    statbuf.st_size ++;
 
-	  sqlite3_exec_printf
-	    (access_db,
-	     "insert into log values (%"PRId64", %"PRId64", %"PRId64");",
-	     NULL, NULL, &errmsg,
-	     uid, last_access, (uint64_t) statbuf.st_size);
-	  if (errmsg)
-	    {
-	      debug (0, "%s: %s", filename, errmsg);
-	      sqlite3_free (errmsg);
-	      errmsg = NULL;
-	    }
-
-
-	  if (needs_update)
-	    {
-	      last_access = n;
-
-	      uint64_t range = 24 * 60 * 60;
-	      int i;
-	      for (i = 0; i < sizeof (a) / sizeof (a[0]);
-		   i ++, range *= 2)
-		{
-		  if (last_access > a[i].start + range)
-		    {
-		      a[i].startprev = a[i].start;
-		      a[i].countprev = a[i].count;
-
-		      a[i].start = last_access;
-		      a[i].count = 1;
-		    }
-		  else
-		    a[i].count ++;
-		}
-
-	      int err = sqlite3_exec_printf
-		(access_db,
-		 "insert or replace into accesses "
-		 " (uid, created, last_access, size_plus_one,"
-		 "  start1, count1, start1prev, count1prev,"
-		 "  start2, count2, start2prev, count2prev,"
-		 "  start4, count4, start4prev, count4prev,"
-		 "  start8, count8, start8prev, count8prev,"
-		 "  start16, count16, start16prev, count16prev,"
-		 "  start32, count32, start32prev, count32prev,"
-		 "  start64, count64, start64prev, count64prev,"
-		 "  start128, count128, start128prev, count128prev,"
-		 "  start256, count256, start256prev, count256prev)"
-		 " values"
-		 " (%"PRId64", %"PRId64", %"PRId64", %"PRId64", "
-		 "  %"PRId64", %d, %"PRId64", %d, "
-		 "  %"PRId64", %d, %"PRId64", %d, "
-		 "  %"PRId64", %d, %"PRId64", %d, "
-		 "  %"PRId64", %d, %"PRId64", %d, "
-		 "  %"PRId64", %d, %"PRId64", %d, "
-		 "  %"PRId64", %d, %"PRId64", %d, "
-		 "  %"PRId64", %d, %"PRId64", %d, "
-		 "  %"PRId64", %d, %"PRId64", %d, "
-		 "  %"PRId64", %d, %"PRId64", %d);",
-		 NULL, NULL, &errmsg,
-		 uid, created, last_access, (uint64_t) statbuf.st_size,
-		 a[0].start, a[0].count, a[0].startprev, a[0].countprev,
-		 a[1].start, a[1].count, a[1].startprev, a[1].countprev,
-		 a[2].start, a[2].count, a[2].startprev, a[2].countprev,
-		 a[3].start, a[3].count, a[3].startprev, a[3].countprev,
-		 a[4].start, a[4].count, a[4].startprev, a[4].countprev,
-		 a[5].start, a[5].count, a[5].startprev, a[5].countprev,
-		 a[6].start, a[6].count, a[6].startprev, a[6].countprev,
-		 a[7].start, a[7].count, a[7].startprev, a[7].countprev,
-		 a[8].start, a[8].count, a[8].startprev, a[8].countprev);
-
-	      if (err)
-		sqlite3_exec (access_db, "rollback transaction;",
-			      NULL, NULL, NULL);
-	      if (errmsg)
-		{
-		  debug (0, "%s: %s", filename, errmsg);
-		  sqlite3_free (errmsg);
-		  errmsg = NULL;
-		}
-	    }
+	  char *sql = sqlite3_mprintf
+	    ("insert into log values (%"PRId64",%"PRId64",%"PRId64");",
+	     uid, notice->time / 1000, (uint64_t) statbuf.st_size);
+	  append (sql, false);
+	  sqlite3_free (sql);
 
 	out:
 	  free (notice);
 	  notice = next;
 	}
       while (notice);
+
+      append (NULL, true);
+      assert (command_buffer_used == 0);
 
       debug (0, "Processed %d notices", processed);
 
@@ -510,7 +435,9 @@ directory_dequeue (void)
 static void *directory_add_helper (void *arg);
 
 /* Recursively add all files starting at the filename designated by
-   FILENAME.  */
+   FILENAME.  FILENAME must be dominated by BASE (the root of the
+   monitored hierarchy).  FILENAME is assumed to be in malloc'd
+   storage.  This function assumes ownership of that memory.  */
 static void
 directory_add (char *filename)
 {

@@ -36,10 +36,10 @@ extern int output_debug;
   do									\
     {									\
       do_debug (level)							\
-	printf ("%s:%d:(%p): " fmt "\n",				\
-		__func__, __LINE__,					\
-		__builtin_return_address (0),				\
-		##__VA_ARGS__);						\
+	fprintf (stderr, "%s:%d:(%p): " fmt "\n",			\
+		 __func__, __LINE__,					\
+		 __builtin_return_address (0),				\
+		 ##__VA_ARGS__);					\
     }									\
   while (0)
 
@@ -50,7 +50,7 @@ extern int output_debug;
     {									\
       extern int output_debug __attribute__ ((weak));			\
       if (&output_debug)						\
-	printf ("%s debugging disabled but not everywhere.", __FILE__);	\
+	fprintf (stderr, "%s debugging disabled but not everywhere.", __FILE__);	\
     }
 
 
