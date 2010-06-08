@@ -1,5 +1,5 @@
 /* smart-storage-logger.c - Smart storage logger.
-   Copyright (C) 2009 Neal H. Walfield <neal@walfield.org>
+   Copyright (C) 2009, 2010 Neal H. Walfield <neal@walfield.org>
 
    Smart storage is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -193,7 +193,7 @@ notice_add_helper (void *arg)
       struct notice_node *notice = btree_notice_first (notice_tree);
       if (! notice)
 	{
-	  debug (0, "No notices to process.");
+	  debug (1, "No notices to process.");
 	  pthread_cond_wait (&notice_cond, &notice_lock);
 	  pthread_mutex_unlock (&notice_lock);
 	  continue;
@@ -313,7 +313,10 @@ notice_add_helper (void *arg)
 
 	  if ((notice->mask & IN_ISDIR))
 	    /* Ignore all directories.  */
-	    goto out;
+	    {
+	      debug (2, "Skipping directory %s", filename);
+	      goto out;
+	    }
 
 	  uint64_t uid = 0;
 
@@ -360,6 +363,7 @@ notice_add_helper (void *arg)
 	  if (stat (filename, &statbuf) == 0)
 	    statbuf.st_size ++;
 
+	  debug (1, "%d: %s: %"PRId64, processed, filename, uid);
 	  char *sql = sqlite3_mprintf
 	    ("insert into log values (%"PRId64",%"PRId64",%"PRId64");",
 	     uid, notice->time / 1000, (uint64_t) statbuf.st_size);
@@ -375,7 +379,7 @@ notice_add_helper (void *arg)
       append (NULL, true);
       assert (command_buffer_used == 0);
 
-      debug (0, "Processed %d notices", processed);
+      debug (1, "Processed %d notices", processed);
 
       btree_notice_tree_init (my_notice_tree);
     }
@@ -488,7 +492,7 @@ directory_add_helper (void *arg)
 	}
       pthread_mutex_unlock (&directory_lock);
 
-      debug (0, "Processing %s", filename);
+      debug (1, "Processing %s", filename);
 
       int callback (const char *filename, const struct stat *stat,
 		    int flag, struct FTW *ftw)
@@ -576,7 +580,7 @@ directory_add_helper (void *arg)
       if (err < 0)
 	error (0, errno, "ftw (%s) %d", filename, errno);
 
-      debug (0, "Processed %s (%d watches)", filename, total_watches);
+      debug (1, "Processed %s (%d watches)", filename, total_watches);
 
       free (filename);
     }
@@ -615,6 +619,8 @@ inotify_mask_to_string (uint32_t mask)
 int
 main (int argc, char *argv[])
 {
+  output_debug = 0;
+
   inotify_fd = inotify_init ();
   if (inotify_fd < 0)
     {
@@ -676,7 +682,9 @@ main (int argc, char *argv[])
 	    }
 
 	  
-	  char *events = inotify_mask_to_string (ev->mask);
+	  char *events = NULL;
+	  do_debug (2)
+	    events = inotify_mask_to_string (ev->mask);
 
 	  struct watch_node *wn = btree_watch_find (&watch_btree, &ev->wd);
 	  if (! wn)
@@ -694,29 +702,33 @@ main (int argc, char *argv[])
 
 	  if (! under_dot_dir (filename))
 	    {
-	      debug (0, "%s: %s (%x)",
-		     filename, events, ev->mask);
+	      debug (1, "%s: %s (%x)", filename, events, ev->mask);
 	      free (events);
 
 	      if ((ev->mask & IN_CREATE))
+		/* Directory was created.  */
 		directory_add (strdup (filename));
 
 	      if ((ev->mask & IN_DELETE_SELF))
+		/* Directory was removed.  */
 		{
-		  debug (0, "Deleted: %s: %s (%x)",
+		  debug (1, "Deleted: %s: %s (%x)",
 			 filename, events, ev->mask);
 
 		  inotify_rm_watch (inotify_fd, ev->wd);
 		}
 
 	      if ((ev->mask & IN_IGNORED))
+		/* Watch was ignored either explicitly or implicitly.  */
 		{
 		  btree_watch_detach (&watch_btree, wn);
 		  free (wn);
 		  total_watches --;
 		}
 
-	      notice_add (filename, ev->mask);
+	      if (! (ev->mask & IN_ISDIR))
+		/* Ignore directories.  */
+		notice_add (filename, ev->mask);
 	    }
 
 	  free (filename);
