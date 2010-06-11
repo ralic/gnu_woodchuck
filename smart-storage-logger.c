@@ -668,7 +668,7 @@ battery_monitor (void *arg)
   DBusConnection *connection = dbus_bus_get (DBUS_BUS_SYSTEM, &error);
   if (connection == NULL)
     {
-      debug (0, "Failed to open connection to bus: %s\n", error.message);
+      debug (0, "Failed to open connection to bus: %s", error.message);
       dbus_error_free (&error);
       return NULL;
     }
@@ -687,7 +687,7 @@ battery_monitor (void *arg)
     (connection, message, -1 /* Don't timeout.  */, &error);
   if (dbus_error_is_set (&error))
     {
-      debug (0, "Error sending to Hal: %s\n", error.message);
+      debug (0, "Error sending to Hal: %s", error.message);
       dbus_error_free (&error);
       return NULL;
     }
@@ -699,7 +699,7 @@ battery_monitor (void *arg)
 			       &devices, &count,
 			       DBUS_TYPE_INVALID))
     {
-      debug (0, "Failed to list batteries: %s\n", error.message);
+      debug (0, "Failed to list batteries: %s", error.message);
       dbus_error_free (&error);
       return NULL;
     }
@@ -708,15 +708,32 @@ battery_monitor (void *arg)
 
   /* Print the results */
 
-  bool lookup (const char *device, const char *method,
-	       const char *property, int type, void *locp)
+  /* Avoid nested functions with more than 4 arguments to work around
+     a bug in Maemo 5's gcc:
+     <https://bugs.maemo.org/show_bug.cgi?id=7699>. */
+  struct lookup
   {
+    const char *device;
+    const char *method;
+    const char *property;
+    int type;
+    void *locp;
+  };
+
+  bool lookup (struct lookup *lookup)
+  {
+    const char *device = lookup->device;
+    const char *method = lookup->method;
+    const char *property = lookup->property;
+    int type = lookup->type;
+    void *locp = lookup->locp;
+
     /* dbus-send --system --print-reply --dest=org.freedesktop.Hal
        /org/freedesktop/Hal/devices/computer_power_supply_battery_BAT0
        org.freedesktop.Hal.Device.GetPropertyStringList
        string:'battery.voltage.current'  */
 
-    debug (3, "%s->%s (%s)", device, method, property);
+    debug (2, "%s->%s (%s)", device, method, property);
 
     DBusMessage *message = dbus_message_new_method_call
       (/* Service.  */ "org.freedesktop.Hal",
@@ -734,7 +751,7 @@ battery_monitor (void *arg)
       (connection, message, 60 * 1000, &error);
     if (dbus_error_is_set (&error))
       {
-	debug (0, "Error sending to Hal: %s\n", error.message);
+	debug (0, "Error sending to Hal: %s", error.message);
 	dbus_error_free (&error);
 	return false;
       }
@@ -742,7 +759,7 @@ battery_monitor (void *arg)
     if (! dbus_message_get_args (reply, &error, 
 				 type, locp, DBUS_TYPE_INVALID))
       {
-	debug (0, "Failed to list batteries: %s\n", error.message);
+	debug (0, "Failed to list batteries: %s", error.message);
 	dbus_error_free (&error);
 	return false;
       }
@@ -753,8 +770,9 @@ battery_monitor (void *arg)
   char *lookups (const char *device, const char *property)
   {
     char *result;
-    if (lookup (device, "GetPropertyString", property,
-		DBUS_TYPE_STRING, &result))
+    struct lookup l = { device, "GetPropertyString", property,
+			DBUS_TYPE_STRING, &result };
+    if (lookup (&l))
       return result;
     else
       return NULL;
@@ -763,8 +781,9 @@ battery_monitor (void *arg)
   int lookupi (const char *device, const char *property)
   {
     int result;
-    if (lookup (device, "GetPropertyInteger", property,
-		DBUS_TYPE_INT32, &result))
+    struct lookup l = { device, "GetPropertyInteger", property,
+			DBUS_TYPE_INT32, &result };
+    if (lookup (&l))
       return result;
     else
       return -1;
@@ -773,8 +792,9 @@ battery_monitor (void *arg)
   bool lookupb (const char *device, const char *property)
   {
     int result;
-    if (lookup (device, "GetPropertyBoolean", property,
-		DBUS_TYPE_BOOLEAN, &result))
+    struct lookup l = { device, "GetPropertyBoolean", property,
+			DBUS_TYPE_BOOLEAN, &result };
+    if (lookup (&l))
       return result;
     else
       return -1;
@@ -790,12 +810,12 @@ battery_monitor (void *arg)
     int last_full;
   } battery[count];
 
-  printf ("Batteries (%d):\n", count);
+  debug (0, "Batteries (%d):", count);
   int i;
   for (i = 0; i < count; i ++)
     {
       const char *device = devices[i];
-      printf ("  %s\n", device);
+      debug (0, "  %s\n", device);
 
       /* Set up a signal watcher for the device.  */
       char *match = NULL;
@@ -808,11 +828,12 @@ battery_monitor (void *arg)
 
       if (match)
 	{
+	  debug (2, "Adding match %s", match);
 	  dbus_bus_add_match (connection, match, &error);
 	  free (match);
 	  if (dbus_error_is_set (&error))
 	    {
-	      debug (0, "Error adding match: %s\n", error.message);
+	      debug (0, "Error adding match: %s", error.message);
 	      dbus_error_free (&error);
 	    }
 	}
@@ -835,15 +856,23 @@ battery_monitor (void *arg)
 	  continue;
 	}
 
+      debug (0, "ID is %d", battery[i].id);
+
       if (battery[i].id != -1)
 	/* Already in the DB.  */
 	continue;
 
       /* Add it to the DB.  */
+
       int voltage_design = lookupi (device, "battery.voltage.design");
       char *voltage_unit = lookups (device, "battery.voltage.unit");
       int reporting_design = lookupi (device, "battery.reporting.design");
       char *reporting_unit = lookups (device, "battery.reporting.unit");
+
+      debug (0, "Battery %i (%s) ID: %d; "
+	     "voltage design: %d %s; reporting design: %d %s",
+	     i, device, battery[i].id,
+	     voltage_design, voltage_unit, reporting_design, reporting_unit);
 
       sqlite3_exec_printf (db,
 			   "insert into batteries"
@@ -878,7 +907,7 @@ battery_monitor (void *arg)
     return DBUS_HANDLER_RESULT_HANDLED;
   }
   if (! dbus_connection_add_filter (connection, callback, NULL, NULL))
-    debug (0, "Failed to add filter: out of memory\n");
+    debug (0, "Failed to add filter: out of memory");
 
   while (dbus_connection_read_write_dispatch (connection,
 					      /* No timeout.  */ -1))
