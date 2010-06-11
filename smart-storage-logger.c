@@ -62,23 +62,31 @@ under_dot_dir (const char *filename)
 	  && (filename[dot_dir_len] == '\0'
 	      || filename[dot_dir_len] == '/'));
 }
-
-static sqlite3 *
-access_db_init (void)
+
+static char *
+log_file (char *filename)
 {
   /* This will fail in the common case that the directory already
      exists.  */
   mkdir (dot_dir, 0750);
 
-  char *subdir = NULL;
-  if (asprintf (&subdir, "%s/logs", dot_dir) < 0)
+  char *dir = NULL;
+  if (asprintf (&dir, "%s/logs", dot_dir) < 0)
     error (1, 0, "out of memory");
-  mkdir (subdir, 0750);
-  free (subdir);
+  mkdir (dir, 0750);
 
-  char *filename = NULL;
-  if (asprintf (&filename, "%s/logs/access.db", dot_dir) < 0)
+  char *abs_filename = NULL;
+  if (asprintf (&abs_filename, "%s/%s", dir, filename) < 0)
     error (1, 0, "out of memory");
+  free (dir);
+
+  return abs_filename;
+}
+
+static sqlite3 *
+access_db_init (void)
+{
+  char *filename = log_file ("access.db");
 
   sqlite3 *access_db;
   int err = sqlite3_open (filename, &access_db);
@@ -92,8 +100,6 @@ access_db_init (void)
 
   char *errmsg = NULL;
   err = sqlite3_exec (access_db,
-		      "begin transaction;"
-
 		      /* This table maps filenames to uids and back.
 			 It also records who owns the file (if
 			 any).  */
@@ -108,12 +114,8 @@ access_db_init (void)
 		      "create table log "
 		      " (uid INTEGER,"
 		      "  time INTEGER,"
-		      "  size_plus_one INTEGER);"
-
-		      "commit transaction;",
+		      "  size_plus_one INTEGER);",
 		      NULL, NULL, &errmsg);
-  if (err)
-    sqlite3_exec (access_db, "rollback transaction;", NULL, NULL, NULL);
   if (errmsg)
     {
       debug (0, "%d: %s", err, errmsg);
@@ -616,6 +618,343 @@ inotify_mask_to_string (uint32_t mask)
   return str;
 }
 
+#include <dbus/dbus.h>
+
+static void *
+battery_monitor (void *arg)
+{
+  /* First, open the database.  */
+
+  char *filename = log_file ("battery.db");
+
+  sqlite3 *db;
+  int err = sqlite3_open (filename, &db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   filename, sqlite3_errmsg (db));
+  free (filename);
+
+  /* Sleep up to an hour if the database is busy...  */
+  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+
+  char *errmsg = NULL;
+  err = sqlite3_exec (db,
+		      /* A list of batteries.  */
+		      "create table batteries"
+		      " (id INTEGER PRIMARY KEY,"
+		      "  device,"
+		      "  voltage_design, voltage_unit,"
+		      "  reporting_design, reporting_unit);"
+
+		      /* BATTERY is ID of the battery in the BATTERIES
+			 table.  */
+		      "create table battery_log"
+		      " (id, year, yday, hour, min, sec,"
+		      "  battery, is_charging, is_discharging,"
+		      "  voltage, reporting, last_full);",
+		      NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+    }
+
+
+  /* Second, get the batteries.  */
+
+  DBusError error;
+  dbus_error_init (&error);
+
+  DBusConnection *connection = dbus_bus_get (DBUS_BUS_SYSTEM, &error);
+  if (connection == NULL)
+    {
+      debug (0, "Failed to open connection to bus: %s\n", error.message);
+      dbus_error_free (&error);
+      return NULL;
+    }
+
+  DBusMessage *message = dbus_message_new_method_call
+    (/* Service.  */ "org.freedesktop.Hal",
+     /* Object.  */ "/org/freedesktop/Hal/Manager",
+     /* Interface.  */ "org.freedesktop.Hal.Manager",
+     /* Method.  */ "FindDeviceByCapability"); 
+
+  const char *type = "battery";
+  dbus_message_append_args (message, DBUS_TYPE_STRING, &type,
+			    DBUS_TYPE_INVALID);
+
+  DBusMessage *reply = dbus_connection_send_with_reply_and_block
+    (connection, message, -1 /* Don't timeout.  */, &error);
+  if (dbus_error_is_set (&error))
+    {
+      debug (0, "Error sending to Hal: %s\n", error.message);
+      dbus_error_free (&error);
+      return NULL;
+    }
+
+  char **devices;
+  int count;
+  if (! dbus_message_get_args (reply, &error, 
+			       DBUS_TYPE_ARRAY, DBUS_TYPE_STRING,
+			       &devices, &count,
+			       DBUS_TYPE_INVALID))
+    {
+      debug (0, "Failed to list batteries: %s\n", error.message);
+      dbus_error_free (&error);
+      return NULL;
+    }
+  dbus_message_unref (reply);
+  dbus_message_unref (message);
+
+  /* Print the results */
+
+  bool lookup (const char *device, const char *method,
+	       const char *property, int type, void *locp)
+  {
+    /* dbus-send --system --print-reply --dest=org.freedesktop.Hal
+       /org/freedesktop/Hal/devices/computer_power_supply_battery_BAT0
+       org.freedesktop.Hal.Device.GetPropertyStringList
+       string:'battery.voltage.current'  */
+
+    debug (3, "%s->%s (%s)", device, method, property);
+
+    DBusMessage *message = dbus_message_new_method_call
+      (/* Service.  */ "org.freedesktop.Hal",
+       /* Object.  */ device,
+       /* Interface.  */ "org.freedesktop.Hal.Device",
+       /* Method.  */ method);
+
+    dbus_message_append_args (message, DBUS_TYPE_STRING, &property,
+			      DBUS_TYPE_INVALID);
+
+    DBusError error;
+    dbus_error_init (&error);
+
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block
+      (connection, message, 60 * 1000, &error);
+    if (dbus_error_is_set (&error))
+      {
+	debug (0, "Error sending to Hal: %s\n", error.message);
+	dbus_error_free (&error);
+	return false;
+      }
+
+    if (! dbus_message_get_args (reply, &error, 
+				 type, locp, DBUS_TYPE_INVALID))
+      {
+	debug (0, "Failed to list batteries: %s\n", error.message);
+	dbus_error_free (&error);
+	return false;
+      }
+
+    return true;
+  }
+
+  char *lookups (const char *device, const char *property)
+  {
+    char *result;
+    if (lookup (device, "GetPropertyString", property,
+		DBUS_TYPE_STRING, &result))
+      return result;
+    else
+      return NULL;
+  }
+ 
+  int lookupi (const char *device, const char *property)
+  {
+    int result;
+    if (lookup (device, "GetPropertyInteger", property,
+		DBUS_TYPE_INT32, &result))
+      return result;
+    else
+      return -1;
+  }
+ 
+  bool lookupb (const char *device, const char *property)
+  {
+    int result;
+    if (lookup (device, "GetPropertyBoolean", property,
+		DBUS_TYPE_BOOLEAN, &result))
+      return result;
+    else
+      return -1;
+  }
+ 
+  struct
+  {
+    int id;
+    int is_charging;
+    int is_discharging;
+    int voltage;
+    int reporting;
+    int last_full;
+  } battery[count];
+
+  printf ("Batteries (%d):\n", count);
+  int i;
+  for (i = 0; i < count; i ++)
+    {
+      const char *device = devices[i];
+      printf ("  %s\n", device);
+
+      /* Set up a signal watcher for the device.  */
+      char *match = NULL;
+      if (asprintf (&match,
+		    "type='signal',"
+		    "interface='org.freedesktop.Hal.Device',"
+		    "member='PropertyModified',"
+		    "path='%s'", device) < 0)
+	debug (0, "out of memory");
+
+      if (match)
+	{
+	  dbus_bus_add_match (connection, match, &error);
+	  free (match);
+	  if (dbus_error_is_set (&error))
+	    {
+	      debug (0, "Error adding match: %s\n", error.message);
+	      dbus_error_free (&error);
+	    }
+	}
+
+      battery[i].id = -1;
+      int present_callback (void *cookie, int argc, char **argv, char **names)
+      {
+	battery[i].id = atoi (argv[0]);
+	return 0;
+      }
+
+      sqlite3_exec_printf (db, "select id from batteries where device = %Q",
+			   present_callback, NULL, &errmsg,
+			   battery);
+      if (errmsg)
+	{
+	  debug (0, "%s: %s", filename, errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+	  continue;
+	}
+
+      if (battery[i].id != -1)
+	/* Already in the DB.  */
+	continue;
+
+      /* Add it to the DB.  */
+      int voltage_design = lookupi (device, "battery.voltage.design");
+      char *voltage_unit = lookups (device, "battery.voltage.unit");
+      int reporting_design = lookupi (device, "battery.reporting.design");
+      char *reporting_unit = lookups (device, "battery.reporting.unit");
+
+      sqlite3_exec_printf (db,
+			   "insert into batteries"
+			   " (device,  voltage_design, voltage_unit,"
+			   "  reporting_design, reporting_unit)"
+			   "values (%Q, %d, %Q, %d, %Q);",
+			   NULL, NULL, &errmsg,
+			   battery, voltage_design, voltage_unit,
+			   reporting_design, reporting_unit);
+      if (errmsg)
+	{
+	  debug (0, "%s", errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+	  continue;
+	}
+
+      battery[i].id = sqlite3_last_insert_rowid (db);
+      debug (0, "Battery %i (%s) ID: %d; "
+	     "voltage design: %d %s; reporting design: %d %s",
+	     i, device, battery[i].id,
+	     voltage_design, voltage_unit, reporting_design, reporting_unit);
+    }
+
+  /* Set up a filter that looks for notifications that a battery has
+     changed.  */
+  bool reread = true;
+  DBusHandlerResult callback (DBusConnection *connection,
+			      DBusMessage *message, void *user_data)
+  {
+    reread = true;
+    return DBUS_HANDLER_RESULT_HANDLED;
+  }
+  if (! dbus_connection_add_filter (connection, callback, NULL, NULL))
+    debug (0, "Failed to add filter: out of memory\n");
+
+  while (dbus_connection_read_write_dispatch (connection,
+					      /* No timeout.  */ -1))
+    {
+      if (dbus_connection_get_dispatch_status (connection)
+	  == DBUS_DISPATCH_DATA_REMAINS)
+	/* There is more data to process, try to bulk up any
+	   updates.  */
+	{
+	  while (dbus_connection_dispatch (connection)
+		 == DBUS_DISPATCH_DATA_REMAINS)
+	    ;
+	}
+
+      if (! reread)
+	continue;
+
+      time_t t = time (NULL);
+      struct tm tm;
+      localtime_r (&t, &tm);
+
+      int i;
+      for (i = 0; i < count; i ++)
+	{
+	  int id = battery[i].id;
+	  const char *device = devices[i];
+
+	  if (id == -1)
+	    /* Battery not present.  */
+	    continue;
+
+	  int is_charging
+	    = lookupb (device, "battery.rechargeable.is_charging");
+	  int is_discharging
+	    = lookupb (device, "battery.rechargeable.is_discharging");
+	  int voltage = lookupi (device, "battery.voltage.current");
+	  int reporting = lookupi (device, "battery.reporting.current");
+	  int last_full = lookupi (device, "battery.reporting.last_full");
+
+	  debug (0, "Battery %i (%s) ID: %d; %scharging, %sdischarging, "
+		 "voltage: %d; reporting: %d; last_full: %d",
+		 i, device, id,
+		 is_charging ? "" : "not ", is_discharging ? "" : "not ",
+		 voltage, reporting, last_full);
+
+	  sqlite3_exec_printf (db,
+			       "insert into battery_log"
+			       " (id, year, yday, hour, min, sec,"
+			       "  is_charging, is_discharging, voltage,"
+			       "  reporting, last_full)"
+			       "values (%d, %d, %d, %d, %d, %d,"
+			       "        %d, %d, %d, %d, %d);",
+			       NULL, NULL, &errmsg,
+			       battery[i].id, tm.tm_year, tm.tm_yday,
+			       tm.tm_hour, tm.tm_min, tm.tm_sec,
+			       is_charging, is_discharging, voltage,
+			       reporting, last_full);
+	  if (errmsg)
+	    {
+	      debug (0, "%s", errmsg);
+	      sqlite3_free (errmsg);
+	      errmsg = NULL;
+	      continue;
+	    }
+
+	}
+    }
+
+  dbus_free_string_array (devices);
+
+  dbus_connection_close (connection);
+  dbus_connection_unref (connection);
+
+  return NULL;
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -638,12 +977,20 @@ main (int argc, char *argv[])
 
 
   /* Create the helper threads.  */
-  pthread_t tid[2];
+
+  /* Start watching a subtree.  */
+  pthread_t tid[3];
   int err = pthread_create (&tid[0], NULL, directory_add_helper, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
 
+  /* Process enqueued inotify events.  */
   err = pthread_create (&tid[1], NULL, notice_add_helper, NULL);
+  if (err < 0)
+    error (1, errno, "pthread_create");
+
+  /* Monitor batteries.  */
+  err = pthread_create (&tid[2], NULL, battery_monitor, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
 
