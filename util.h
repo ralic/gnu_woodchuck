@@ -33,6 +33,17 @@ now (void)
     + (uint64_t) tv.tv_usec / 1000ULL;
 }
 
+static inline struct tm
+now_tm (void)
+{
+  time_t t = time (NULL);
+  struct tm tm;
+  localtime_r (&t, &tm);
+  return tm;
+}
+
+
+
 #define TIME_FMT "%"PRId64" %s"
 #define TIME_PRINTF(ms)				\
   ({						\

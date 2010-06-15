@@ -8,8 +8,10 @@ smart_storage_simulator_LDFLAGS =
 smart_storage_simulator_LDADD = -lm $(BASE_LIBS)
 
 smart_storage_logger_SOURCES = smart-storage-logger.c \
-	debug.h debug.c util.h \
-	list.h btree.h btree.c
+	debug.h debug.c util.h sqlq.c sqlq.h \
+	list.h btree.h btree.c \
+	dbus-print-message.c dbus-print-message.h \
+	glib.h
 
 smart_storage_simulator_SOURCES = smart-storage-simulator.c \
 	debug.h debug.c util.h \

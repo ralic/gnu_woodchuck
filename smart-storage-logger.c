@@ -37,6 +37,7 @@
 #include "list.h"
 #include "btree.h"
 #include "util.h"
+#include "sqlq.h"
 
 static int inotify_fd;
 
@@ -195,7 +196,7 @@ notice_add_helper (void *arg)
       struct notice_node *notice = btree_notice_first (notice_tree);
       if (! notice)
 	{
-	  debug (1, "No notices to process.");
+	  debug (2, "No notices to process.");
 	  pthread_cond_wait (&notice_cond, &notice_lock);
 	  pthread_mutex_unlock (&notice_lock);
 	  continue;
@@ -262,48 +263,8 @@ notice_add_helper (void *arg)
 	  }
       }
 
-      char command_buffer[16 * 4096];
-      int command_buffer_used = 0;
-
-      /* Whether there is space for a string of length LEN (LEN does
-	 not include the NUL terminator).  */
-      bool have_space (int len)
-      {
-	return len + 1 <= sizeof (command_buffer) - command_buffer_used;
-      }
-
-      void append_hard (const char *s, int len)
-      {
-	assert (have_space (len));
-	assert (! memchr (s, 0, len));
-
-	memcpy (&command_buffer[command_buffer_used], s, len);
-	command_buffer_used += len;
-      }
-
-      void append (char *command, bool force_flush)
-      {
-	int len = command ? strlen (command) : 0;
-	if (force_flush || ! have_space (len))
-	  /* Need to flush the buffer first.  */
-	  {
-	    /* NUL terminate the string.  */
-	    command_buffer[command_buffer_used] = 0;
-	    command_buffer_used = 0;
-	    /* Flush the commands.  */
-	    debug (1, "Flushing after %d records (`%s', `%s')",
-		   processed, command_buffer, command);
-	    flush (command_buffer, command);
-	    return;
-	  }
-
-	if (! have_space (len))
-	  /* The command is longer than we have space for.  Execute it
-	     directly.  */
-	  flush (command, NULL);
-	else
-	  append_hard (command, len);
-      }
+      char buffer[16 * 4096];
+      struct sqlq *sqlq = sqlq_new_static (access_db, buffer, sizeof (buffer));
 
       do
 	{
@@ -347,13 +308,11 @@ notice_add_helper (void *arg)
 	    /* It seems the file hasn't been seen before.  Insert it
 	       into the database.  */
 	    {
-	      /* Append the string to the command buffer then flush.
-		 We must flush as we need the result
-		 last_insert_rowid.  */
-	      char *sql = sqlite3_mprintf
-		("insert into files (filename) values (%Q);", filename);
-	      append (sql, true);
-	      sqlite3_free (sql);
+	      /* Append the string to the sql q then flush.  We must
+		 flush as we need the result last_insert_rowid.  */
+	      sqlq_append_printf (sqlq, true,
+				  "insert into files (filename) values (%Q);",
+				  filename);
 
 	      uid = sqlite3_last_insert_rowid (access_db);
 	    }
@@ -365,12 +324,11 @@ notice_add_helper (void *arg)
 	  if (stat (filename, &statbuf) == 0)
 	    statbuf.st_size ++;
 
-	  debug (1, "%d: %s: %"PRId64, processed, filename, uid);
-	  char *sql = sqlite3_mprintf
-	    ("insert into log values (%"PRId64",%"PRId64",%"PRId64");",
+	  debug (2, "%d: %s: %"PRId64, processed, filename, uid);
+	  sqlq_append_printf
+	    (sqlq, false,
+	     "insert into log values (%"PRId64",%"PRId64",%"PRId64");",
 	     uid, notice->time / 1000, (uint64_t) statbuf.st_size);
-	  append (sql, false);
-	  sqlite3_free (sql);
 
 	out:
 	  free (notice);
@@ -378,10 +336,9 @@ notice_add_helper (void *arg)
 	}
       while (notice);
 
-      append (NULL, true);
-      assert (command_buffer_used == 0);
+      sqlq_flush (sqlq);
 
-      debug (1, "Processed %d notices", processed);
+      debug (2, "Processed %d notices", processed);
 
       btree_notice_tree_init (my_notice_tree);
     }
@@ -494,7 +451,7 @@ directory_add_helper (void *arg)
 	}
       pthread_mutex_unlock (&directory_lock);
 
-      debug (1, "Processing %s", filename);
+      debug (2, "Processing %s", filename);
 
       int callback (const char *filename, const struct stat *stat,
 		    int flag, struct FTW *ftw)
@@ -582,7 +539,7 @@ directory_add_helper (void *arg)
       if (err < 0)
 	error (0, errno, "ftw (%s) %d", filename, errno);
 
-      debug (1, "Processed %s (%d watches)", filename, total_watches);
+      debug (2, "Processed %s (%d watches)", filename, total_watches);
 
       free (filename);
     }
@@ -665,7 +622,7 @@ battery_monitor (void *arg)
   DBusError error;
   dbus_error_init (&error);
 
-  DBusConnection *connection = dbus_bus_get (DBUS_BUS_SYSTEM, &error);
+  DBusConnection *connection = dbus_bus_get_private (DBUS_BUS_SYSTEM, &error);
   if (connection == NULL)
     {
       debug (0, "Failed to open connection to bus: %s", error.message);
@@ -897,16 +854,41 @@ battery_monitor (void *arg)
 	     voltage_design, voltage_unit, reporting_design, reporting_unit);
     }
 
-  /* Set up a filter that looks for notifications that a battery has
-     changed.  */
+  /* Set up a filter that looks for notifications that a battery's
+     status has changed.  */
   bool reread = true;
-  DBusHandlerResult callback (DBusConnection *connection,
-			      DBusMessage *message, void *user_data)
+  DBusHandlerResult battery_callback (DBusConnection *connection,
+				      DBusMessage *message, void *user_data)
   {
-    reread = true;
-    return DBUS_HANDLER_RESULT_HANDLED;
+    int i;
+    for (i = 0; i < count; i ++)
+      if (battery[i].id != -1 && dbus_message_has_path (message, devices[i]))
+	break;
+    if (i == count)
+      {
+	debug (5, "Ignoring message with path %s",
+	       dbus_message_get_path (message));
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+      }
+
+    if (dbus_message_is_signal (message,
+				"org.freedesktop.Hal.Device",
+				"PropertyModified"))
+      {
+	debug (5, "Processing property modified.");
+	reread = true;
+	return DBUS_HANDLER_RESULT_HANDLED;
+      }
+
+    do_debug (5)
+      {
+	debug (0, "Ignoring irrelevant method");
+	print_message (message, false);
+      }
+
+    return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
   }
-  if (! dbus_connection_add_filter (connection, callback, NULL, NULL))
+  if (! dbus_connection_add_filter (connection, battery_callback, NULL, NULL))
     debug (0, "Failed to add filter: out of memory");
 
   while (dbus_connection_read_write_dispatch (connection,
@@ -925,9 +907,7 @@ battery_monitor (void *arg)
       if (! reread)
 	continue;
 
-      time_t t = time (NULL);
-      struct tm tm;
-      localtime_r (&t, &tm);
+      struct tm tm = now_tm ();
 
       int i;
       for (i = 0; i < count; i ++)
@@ -984,10 +964,726 @@ battery_monitor (void *arg)
   return NULL;
 }
 
+#include <icd/dbus_api.h>
+#include "dbus-print-message.h"
+
+static int
+dbus_message_args_count (DBusMessage *message)
+{
+  DBusMessageIter iter;
+  if (! dbus_message_iter_init (message, &iter))
+    return 0;
+
+  int count;
+  for (count = 0;
+       dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_INVALID;
+       count ++, dbus_message_iter_next (&iter))
+    ;
+
+  return count;
+}
+
+static void *
+network_monitor (void *arg)
+{
+  /* First, open the database.  */
+
+  char *filename = log_file ("network.db");
+
+  sqlite3 *db;
+  int err = sqlite3_open (filename, &db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   filename, sqlite3_errmsg (db));
+  free (filename);
+
+  /* Sleep up to an hour if the database is busy...  */
+  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+
+  char *errmsg = NULL;
+  err = sqlite3_exec (db,
+		      /* ID is the id of the connection.  It is
+			 corresponds to the ROWID in CONNECTIONS.  */
+		      "create table connection_log"
+		      " (year, yday, hour, min, sec,"
+		      "  service_type, service_attributes, service_id,"
+		      "  network_type, network_attributes, network_id, status);"
+
+		      /* ID is the id of the connection.  It is
+			 corresponds to the ROWID in CONNECTIONS.  */
+		      "create table stats_log"
+		      " (year, yday, hour, min, sec,"
+		      "  service_type, service_attributes, service_id,"
+		      "  network_type, network_attributes, network_id,"
+		      "  time_active, signal_strength, sent, received);"
+
+		      /* Time that a scan was initiated.  ROWID
+			 corresponds to ID in scan_log.  */
+		      "create table scans"
+		      " (year, yday, hour, min, sec);"
+
+		      /* ID corresponds to the ROWID of the scans table.  */
+		      "create table scan_log"
+		      " (id,"
+		      "  status, last_seen,"
+		      "  service_type, service_name, service_attributes,"
+		      "	 service_id, service_priority,"
+		      "	 network_type, network_name, network_attributes,"
+		      "	 network_id, network_priority,"
+		      "	 signal_strength, signal_strength_db,"
+		      "  station_id);",
+		      NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+    }
+
+
+  DBusError error;
+  dbus_error_init (&error);
+
+  DBusConnection *connection = dbus_bus_get_private (DBUS_BUS_SYSTEM, &error);
+  if (connection == NULL)
+    {
+      debug (0, "Failed to open connection to bus: %s", error.message);
+      dbus_error_free (&error);
+      return NULL;
+    }
+
+  /* Set up signal watchers.  */
+  {
+    char *matches[] =
+      { /* For network state changes. */
+	"type='signal',"
+	"interface='"ICD_DBUS_API_INTERFACE"',"
+	"member='"ICD_DBUS_API_STATE_SIG"',"
+	"path='"ICD_DBUS_API_PATH"'",
+	/* For network statistics.  */
+	"type='signal',"
+	"interface='"ICD_DBUS_API_INTERFACE"',"
+	"member='"ICD_DBUS_API_STATISTICS_SIG"',"
+	"path='"ICD_DBUS_API_PATH"'",
+	/* For network scans.  */
+	"type='signal',"
+	"interface='"ICD_DBUS_API_INTERFACE"',"
+	"member='"ICD_DBUS_API_SCAN_SIG"',"
+	"path='"ICD_DBUS_API_PATH"'",
+	
+	/* All signals.  */
+	// "type='signal'"
+      };
+
+    int i;
+    for (i = 0; i < sizeof (matches) / sizeof (matches[0]); i ++)
+      {
+	char *match = matches[i];
+
+	debug (2, "Adding match %s", match);
+	dbus_bus_add_match (connection, match, &error);
+	if (dbus_error_is_set (&error))
+	  {
+	    debug (0, "Error adding match %s: %s", match, error.message);
+	    dbus_error_free (&error);
+	  }
+      }
+  }
+
+  bool am_connected = true;
+  uint64_t last_stats = 0;
+
+  /* Number of network types being scanned.  */
+  int am_scanning = 0;
+  uint64_t last_scan_finished = 0;
+  int scan_id = 0;
+
+  uint64_t need_sql_flush = 0;
+  uint64_t last_sql_append = 0;
+
+  char buffer[16 * 4096];
+  struct sqlq *sqlq = sqlq_new_static (db, buffer, sizeof (buffer));
+
+
+  DBusHandlerResult network_callback (DBusConnection *connection,
+				      DBusMessage *message, void *user_data)
+  {
+    debug (2, "Got message (%p): %s->%s (%d args)",
+	   message, dbus_message_get_path (message),
+	   dbus_message_get_member (message),
+	   dbus_message_args_count (message));
+    // print_message (message, false);
+
+    if (! dbus_message_has_path (message, ICD_DBUS_API_PATH))
+      {
+	debug (2, "Ignoring message with path %s (want: %s)",
+	       dbus_message_get_path (message),
+	       ICD_DBUS_API_PATH);
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+      }
+
+    const char *member = dbus_message_get_member (message);
+
+    if (dbus_message_is_signal (message,
+				ICD_DBUS_API_INTERFACE, ICD_DBUS_API_STATE_SIG))
+      {
+	const char *status_to_str (uint32_t status)
+	{
+	  switch (status)
+	    {
+	    case ICD_STATE_DISCONNECTED: return "disconnected";
+	    case ICD_STATE_CONNECTING: return "connecting";
+	    case ICD_STATE_CONNECTED: return "connected";
+	    case ICD_STATE_DISCONNECTING: return "disconnecting";
+	    case ICD_STATE_LIMITED_CONN_ENABLED: return "limited enabled";
+	    case ICD_STATE_LIMITED_CONN_DISABLED: return "limited disabled";
+	    case ICD_STATE_SEARCH_START: return "search start";
+	    case ICD_STATE_SEARCH_STOP: return "search stop";
+	    case ICD_STATE_INTERNAL_ADDRESS_ACQUIRED:
+	      return "internal address acquired";
+	    default:
+	      debug (0, "Unknown network status code %d", status);
+	      return "unknown";
+	    }
+	}
+	  
+	char *service_type = NULL;
+	uint32_t service_attributes = 0;
+	char *service_id = NULL;
+	char *network_type = NULL;
+	uint32_t network_attributes = 0;
+	char *network_id = NULL;
+	int network_id_len = 0;
+	char *conn_error = NULL;
+	int32_t status = 0;
+
+	DBusError error;
+	dbus_error_init (&error);
+
+	int args = dbus_message_args_count (message);
+	switch (args)
+	  {
+	  case 8:
+	    /* State of connection.  */
+	    if (! dbus_message_get_args (message, &error,
+					 DBUS_TYPE_STRING, &service_type,
+					 DBUS_TYPE_UINT32, &service_attributes,
+					 DBUS_TYPE_STRING, &service_id,
+					 DBUS_TYPE_STRING, &network_type,
+					 DBUS_TYPE_UINT32, &network_attributes,
+					 DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE,
+					 &network_id, &network_id_len,
+					 DBUS_TYPE_STRING, &conn_error,
+					 DBUS_TYPE_UINT32, &status,
+					 DBUS_TYPE_INVALID))
+	      {
+		debug (0, "Failed to grok "ICD_DBUS_API_STATE_SIG" reply: %s",
+		       error.message);
+		dbus_error_free (&error);
+	      }
+	    else
+	      {
+		debug (0, "Service: %s; %x; %s; "
+		       "Network: %s; %x; %s; status: %s",
+		       service_type, service_attributes, service_id,
+		       network_type, network_attributes, network_id,
+		       status_to_str (status));
+
+		struct tm tm = now_tm ();
+		if (sqlq_append_printf (sqlq, false,
+					"insert into connection_log values "
+					"(%d, %d, %d, %d, %d, "
+					" %Q, %d, %Q, %Q, %d, %Q, %Q);",
+					tm.tm_year, tm.tm_yday,
+					tm.tm_hour, tm.tm_min, tm.tm_sec,
+					service_type, service_attributes,
+					service_id,
+					network_type, network_attributes,
+					network_id,
+					status_to_str (status)))
+		  {
+		    if (! need_sql_flush)
+		      need_sql_flush = now ();
+		    last_sql_append = now ();
+		  }
+		else
+		  need_sql_flush = last_sql_append = 0;
+
+		if (status == ICD_STATE_CONNECTED)
+		  am_connected = true;
+
+		if (status == ICD_STATE_DISCONNECTING)
+		  {
+		    debug (0, DEBUG_BOLD ("Getting stats for disconnecting connection."));
+
+		    DBusMessage *message = dbus_message_new_method_call
+		      (/* Service.  */ ICD_DBUS_API_INTERFACE,
+		       /* Object.  */ ICD_DBUS_API_PATH,
+		       /* Interface.  */ ICD_DBUS_API_INTERFACE,
+		       /* Method.  */ ICD_DBUS_API_STATISTICS_REQ);
+
+		    dbus_message_append_args
+		      (message,
+		       DBUS_TYPE_STRING, &service_type,
+		       DBUS_TYPE_UINT32, &service_attributes,
+		       DBUS_TYPE_STRING, &service_id,
+		       DBUS_TYPE_STRING, &network_type,
+		       DBUS_TYPE_UINT32, &network_attributes,
+		       DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE,
+		       &network_id, network_id_len,
+		       DBUS_TYPE_INVALID);
+
+		    DBusMessage *reply
+		      = dbus_connection_send_with_reply_and_block
+		      (connection, message, 60 * 1000, &error);
+		    if (dbus_error_is_set (&error))
+		      {
+			debug (0, "Error sending to ICd2: %s", error.message);
+			dbus_error_free (&error);
+			goto stat_done;
+		      }
+
+		    int connected = 0;
+		    if (! dbus_message_get_args (reply, &error, 
+						 DBUS_TYPE_UINT32, &connected,
+						 DBUS_TYPE_INVALID))
+		      {
+			debug (0, "Error parsing reply from ICd2: %s",
+			       error.message);
+			dbus_error_free (&error);
+			goto stat_done;
+		      }
+		    else
+		      debug (0, "connected: %d", connected);
+
+		  stat_done:
+		    dbus_message_unref (message);
+		    dbus_message_unref (reply);
+		  }
+	      }
+	  case 1:
+	    /* Broadcast at startup if there are no connections.  */
+	  case 2:
+	    /* Broadcast when a network search begins or ends.  */
+	  default:
+	    ;
+	  }
+      }
+    else if (dbus_message_is_signal (message,
+				     ICD_DBUS_API_INTERFACE,
+				     ICD_DBUS_API_STATISTICS_SIG))
+      {
+	char *service_type = NULL;
+	uint32_t service_attributes = 0;
+	char *service_id = NULL;
+	char *network_type = NULL;
+	uint32_t network_attributes = 0;
+	char *network_id = NULL;
+	int network_id_len = 0;
+	uint32_t time_active = 0;
+	int32_t signal_strength = 0;
+	uint32_t sent = 0;
+	uint32_t received = 0;
+
+	DBusError error;
+	dbus_error_init (&error);
+	if (! dbus_message_get_args (message, &error,
+				     DBUS_TYPE_STRING, &service_type,
+				     DBUS_TYPE_UINT32, &service_attributes,
+				     DBUS_TYPE_STRING, &service_id,
+				     DBUS_TYPE_STRING, &network_type,
+				     DBUS_TYPE_UINT32, &network_attributes,
+				     DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE,
+				     &network_id, &network_id_len,
+				     DBUS_TYPE_UINT32, &time_active,
+				     DBUS_TYPE_INT32, &signal_strength,
+				     DBUS_TYPE_UINT32, &sent,
+				     DBUS_TYPE_UINT32, &received,
+				     DBUS_TYPE_INVALID))
+	  {
+	    debug (0, "Failed to grok "ICD_DBUS_API_STATISTICS_SIG" reply: %s",
+		   error.message);
+	    dbus_error_free (&error);
+	  }
+	else
+	  {
+	    debug (0, "Service: %s; %x; %s; "
+		   "Network: %s; %x; %s; "
+		   "active: %d; signal: %d; bytes: %d/%d",
+		   service_type, service_attributes, service_id,
+		   network_type, network_attributes, network_id,
+		   time_active, signal_strength, sent, received);
+
+	    struct tm tm = now_tm ();
+	    if (sqlq_append_printf (sqlq, false,
+				    "insert into stats_log values "
+				    "(%d, %d, %d, %d, %d, "
+				    " %Q, %d, %Q, %Q, %d, %Q, %d, %d, %d, %d);",
+				    tm.tm_year, tm.tm_yday,
+				    tm.tm_hour, tm.tm_min, tm.tm_sec,
+				    service_type, service_attributes,
+				    service_id,
+				    network_type, network_attributes,
+				    network_id,
+				    time_active, signal_strength,
+				    sent, received))
+	      {
+		if (! need_sql_flush)
+		  need_sql_flush = now ();
+		last_sql_append = now ();
+	      }
+	    else
+	      last_sql_append = now ();
+	  }
+
+	last_stats = now ();
+      }
+    else if (am_scanning
+	     && dbus_message_is_signal (message,
+					ICD_DBUS_API_INTERFACE,
+					ICD_DBUS_API_SCAN_SIG))
+      {
+	const char *scan_status_to_str (int scan_status)
+	{
+	  switch (scan_status)
+	    {
+	    case ICD_SCAN_NEW: return "new";
+	    case ICD_SCAN_UPDATE: return "update";
+	    case ICD_SCAN_NOTIFY: return "notify";
+	    case ICD_SCAN_EXPIRE: return "expire";
+	    case ICD_SCAN_COMPLETE: return "complete";
+	    default: return "unknown status";
+	    }
+	}
+
+	uint32_t status = 0;
+	uint32_t last_seen = 0;
+	char *service_type = NULL;
+	char *service_name = NULL;
+	uint32_t service_attributes = 0;
+	char *service_id = NULL;
+	int32_t service_priority = 0;
+	char *network_type = NULL;
+	char *network_name = NULL;
+	uint32_t network_attributes = 0;
+	char *network_id = NULL;
+	int network_id_len = 0;
+	int32_t network_priority = 0;
+	int32_t signal_strength = 0;
+	char *station_id = NULL;
+	int32_t signal_strength_db = 0;
+
+	DBusError error;
+	dbus_error_init (&error);
+	if (! dbus_message_get_args (message, &error,
+				     DBUS_TYPE_UINT32, &status,
+				     DBUS_TYPE_UINT32, &last_seen,
+				     DBUS_TYPE_STRING, &service_type,
+				     DBUS_TYPE_STRING, &service_name,
+				     DBUS_TYPE_UINT32, &service_attributes,
+				     DBUS_TYPE_STRING, &service_id,
+				     DBUS_TYPE_INT32, &service_priority,
+				     DBUS_TYPE_STRING, &network_type,
+				     DBUS_TYPE_STRING, &network_name,
+				     DBUS_TYPE_UINT32, &network_attributes,
+				     DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE,
+				     &network_id, &network_id_len,
+				     DBUS_TYPE_INT32, &network_priority,
+				     DBUS_TYPE_INT32, &signal_strength,
+				     DBUS_TYPE_STRING, &station_id,
+				     DBUS_TYPE_INT32, &signal_strength_db,
+				     DBUS_TYPE_INVALID))
+	  {
+	    debug (0, "Failed to grok "ICD_DBUS_API_SCAN_SIG" reply: %s",
+		   error.message);
+	    dbus_error_free (&error);
+	  }
+	else
+	  {
+	    debug (1, DEBUG_BOLD ("Status: %s")"; last seen: %d; "
+		   "Service: %s; %s; %x; %s; %d; "
+		   "Network: %s; %s; %x; %s; %d; "
+		   "signal: %d (%d dB); station: %s",
+		   scan_status_to_str (status), last_seen,
+		   service_type, service_name, service_attributes,
+		   service_id, service_priority,
+		   network_type, network_name, network_attributes,
+		   network_id, network_priority,
+		   signal_strength, signal_strength_db, station_id);
+
+	    if (status != ICD_SCAN_COMPLETE)
+	      {
+		if (sqlq_append_printf (sqlq, false,
+					"insert into scan_log values "
+					"(%d, %Q, %d, %Q, %Q, %d, %Q, %d,"
+					" %Q, %Q, %d, %Q, %d, %d, %d, %Q);",
+					scan_id,
+					scan_status_to_str (status), last_seen,
+					service_type, service_name,
+					service_attributes, service_id,
+					service_priority,
+					network_type, network_name,
+					network_attributes, network_id,
+					network_priority,
+					signal_strength, signal_strength_db,
+					station_id))
+		  {
+		    if (! need_sql_flush)
+		      need_sql_flush = now ();
+		    last_sql_append = now ();
+		  }
+		else
+		  need_sql_flush = last_sql_append = 0;
+	      }
+
+	    if (status == ICD_SCAN_COMPLETE)
+	      {
+		am_scanning --;
+		if (am_scanning == 0)
+		  {
+		    debug (0, DEBUG_BOLD ("am_scanning 0, stopping scan"));
+
+		    DBusMessage *message = dbus_message_new_method_call
+		      (/* Service.  */ ICD_DBUS_API_INTERFACE,
+		       /* Object.  */ ICD_DBUS_API_PATH,
+		       /* Interface.  */ ICD_DBUS_API_INTERFACE,
+		       /* Method.  */ ICD_DBUS_API_SCAN_CANCEL);
+
+		    dbus_connection_send (connection, message, NULL);
+		    dbus_message_unref (message);
+
+		    last_scan_finished = now ();
+		  }
+	      }
+	  }
+      }
+    else
+      {
+	debug (5, "Ignoring irrelevant method: %s", member);
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+      }
+
+    return DBUS_HANDLER_RESULT_HANDLED;
+  }
+  if (! dbus_connection_add_filter (connection, network_callback, NULL, NULL))
+    debug (0, "Failed to add filter: out of memory");
+
+
+  /* Discover the state of any ongoing network connections.  */
+  {
+    DBusMessage *message = dbus_message_new_method_call
+      (/* Service.  */ ICD_DBUS_API_INTERFACE,
+       /* Object.  */ ICD_DBUS_API_PATH,
+       /* Interface.  */ ICD_DBUS_API_INTERFACE,
+       /* Method.  */ ICD_DBUS_API_STATE_REQ);
+
+    dbus_connection_send (connection, message, NULL);
+    dbus_message_unref (message);
+  }
+
+
+  /* When connected there is a network connection, get stats every 5
+     minutes or so.  */
+#define STATS_FREQ (5 * 60 * 1000)
+  /* Scan for available networks about every 20 minutes.  */
+#define SCAN_FREQ (20 * 60 * 1000)
+  /* The maximum amount of time we are willing to tolerate data in the
+     SQL buffer before it must be flushed and the maximum amount of
+     IDLE time before we force a flush.  */
+#define FLUSH_MAX_LATENCY (60 * 1000)
+#define FLUSH_IDLE_LATENCY (2 * 1000)
+  int64_t timeout;
+  do
+    {
+      if (dbus_connection_get_dispatch_status (connection)
+	  == DBUS_DISPATCH_DATA_REMAINS)
+	/* There is more data to process, try to bulk up any
+	   updates.  */
+	{
+	  while (dbus_connection_dispatch (connection)
+		 == DBUS_DISPATCH_DATA_REMAINS)
+	    ;
+	}
+
+      uint64_t n = now ();
+      uint64_t delta;
+
+      delta = n - last_stats;
+      /* Read statistics.  */
+      int64_t stat_timeout = INT64_MAX;
+      if (am_connected)
+	{
+	  if (last_stats == 0 || delta >= STATS_FREQ - STATS_FREQ / 8)
+	    /* Time (or, almost time) to get some new stats.  */
+	    {
+	      debug (1, "Requesting network statistics (last %d seconds ago).",
+		     (int) (delta / 1000));
+
+	      am_connected = false;
+
+	      DBusMessage *message = dbus_message_new_method_call
+		(/* Service.  */ ICD_DBUS_API_INTERFACE,
+		 /* Object.  */ ICD_DBUS_API_PATH,
+		 /* Interface.  */ ICD_DBUS_API_INTERFACE,
+		 /* Method.  */ ICD_DBUS_API_STATISTICS_REQ);
+
+	      DBusError error;
+	      dbus_error_init (&error);
+
+	      DBusMessage *reply = dbus_connection_send_with_reply_and_block
+		(connection, message, 60 * 1000, &error);
+	      if (dbus_error_is_set (&error))
+		{
+		  debug (0, "Error sending to ICd2: %s", error.message);
+		  dbus_error_free (&error);
+		  goto stat_done;
+		}
+
+	      int connected = 0;
+	      if (! dbus_message_get_args (reply, &error, 
+					   DBUS_TYPE_UINT32, &connected,
+					   DBUS_TYPE_INVALID))
+		{
+		  debug (0, "Error parsing reply from ICd2: %s", error.message);
+		  dbus_error_free (&error);
+		  goto stat_done;
+		}
+
+	      debug (1, "%d statistics sent.", connected);
+
+	      if (connected > 0)
+		{
+		  am_connected = true;
+		  stat_timeout = STATS_FREQ;
+		}
+
+	      last_stats = n;
+
+	    stat_done:
+	      dbus_message_unref (message);
+	      if (reply)
+		dbus_message_unref (reply);
+	    }
+	  else
+	    /* We need to wait before reading stats.  */
+	    stat_timeout = last_stats + STATS_FREQ - n;
+	}
+
+      delta = n - last_scan_finished;
+      int64_t scan_timeout = INT64_MAX;
+      if (am_scanning <= 0)
+	{
+	  if (last_scan_finished == 0 || delta >= SCAN_FREQ)
+	    /* Perform a scan if the last result was SCAN_FREQ in the
+	       past.  */
+	    {
+	      debug (1, "Requesting network scan (last %d seconds ago).",
+		     (int) (delta / 1000));
+
+	      DBusMessage *message = dbus_message_new_method_call
+		(/* Service.  */ ICD_DBUS_API_INTERFACE,
+		 /* Object.  */ ICD_DBUS_API_PATH,
+		 /* Interface.  */ ICD_DBUS_API_INTERFACE,
+		 /* Method.  */ ICD_DBUS_API_SCAN_REQ);
+
+	      uint32_t flags = ICD_SCAN_REQUEST_ACTIVE;
+	      dbus_message_append_args (message,
+					DBUS_TYPE_UINT32, &flags,
+					DBUS_TYPE_INVALID);
+
+	      DBusError error;
+	      dbus_error_init (&error);
+
+	      DBusMessage *reply = dbus_connection_send_with_reply_and_block
+		(connection, message, 60 * 1000, &error);
+	      if (dbus_error_is_set (&error))
+		{
+		  debug (0, "Error sending to ICd2: %s", error.message);
+		  dbus_error_free (&error);
+		  goto scan_done;
+		}
+
+	      char **networks;
+	      dbus_error_init (&error);
+	      if (! dbus_message_get_args (reply, &error,
+					   DBUS_TYPE_ARRAY, DBUS_TYPE_STRING,
+					   &networks, &am_scanning,
+					   DBUS_TYPE_INVALID))
+		{
+		  debug (0, "Error parsing scan request reply: %s",
+			 error.message);
+		  dbus_error_free (&error);
+		  goto scan_done;
+		}
+	      dbus_free_string_array (networks);
+
+	      struct tm tm = now_tm ();
+
+	      sqlq_append_printf (sqlq, true,
+				  "insert into scans "
+				  " values (%d, %d, %d, %d, %d);",
+				  tm.tm_year, tm.tm_yday,
+				  tm.tm_hour, tm.tm_min, tm.tm_sec);
+	      scan_id = sqlite3_last_insert_rowid (db);
+
+	      debug (0, DEBUG_BOLD ("started scan %d.  (network types: %d)"),
+		     scan_id, am_scanning);
+
+	      if (am_scanning > 0)
+		last_scan_finished = 0;
+	      else
+		{
+		  scan_timeout = SCAN_FREQ;
+		  last_scan_finished = n;
+		}
+
+	    scan_done:
+	      dbus_message_unref (message);
+	      if (reply)
+		dbus_message_unref (reply);
+	    }
+	  else
+	    /* We need to wait before reading stats.  */
+	    scan_timeout = last_scan_finished + SCAN_FREQ - n;
+	}
+
+
+      int64_t flush_timeout = INT64_MAX;
+      if (need_sql_flush)
+	{
+	  if (n - need_sql_flush >= FLUSH_MAX_LATENCY
+	      || n - last_sql_append >= FLUSH_IDLE_LATENCY)
+	    {
+	      debug (1, "Flushing SQL buffer.");
+	      sqlq_flush (sqlq);
+	      need_sql_flush = 0;
+	    }
+	  else
+	    flush_timeout = last_sql_append + FLUSH_IDLE_LATENCY - n;
+	}
+
+      timeout = MIN (flush_timeout, MIN (stat_timeout, scan_timeout));
+
+      debug (0, "Timeout: %"PRId64" s "
+	     "(stat: %"PRId64"; scan: %"PRId64"; flush: %"PRId64")",
+	     timeout == INT64_MAX ? -1 : (timeout / 1000),
+	     stat_timeout == INT64_MAX ? -1 : (stat_timeout / 1000),
+	     scan_timeout == INT64_MAX ? -1 : (scan_timeout / 1000),
+	     flush_timeout == INT64_MAX ? -1 : (flush_timeout / 1000));
+    }
+  while (dbus_connection_read_write_dispatch
+	 (connection, timeout == INT64_MAX ? -1: timeout));
+
+  debug (0, "Network monitor disconnected.");
+
+  return NULL;
+}
+
 int
 main (int argc, char *argv[])
 {
-  output_debug = 0;
+  dbus_threads_init_default ();
+
+  output_debug = 1;
 
   inotify_fd = inotify_init ();
   if (inotify_fd < 0)
@@ -996,7 +1692,12 @@ main (int argc, char *argv[])
       return 1;
     }
 
+#ifdef HAVE_MAEMO
+  /* Monitor the user's home directory even when run as root.  */
+  base = "/home/user";
+#else
   base = getenv ("HOME");
+#endif
   base_len = strlen (base);
 
   asprintf (&dot_dir, "%s/"DOT_DIR, base);
@@ -1008,7 +1709,7 @@ main (int argc, char *argv[])
   /* Create the helper threads.  */
 
   /* Start watching a subtree.  */
-  pthread_t tid[3];
+  pthread_t tid[4];
   int err = pthread_create (&tid[0], NULL, directory_add_helper, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
@@ -1020,6 +1721,11 @@ main (int argc, char *argv[])
 
   /* Monitor batteries.  */
   err = pthread_create (&tid[2], NULL, battery_monitor, NULL);
+  if (err < 0)
+    error (1, errno, "pthread_create");
+
+  /* Monitor network connections.  */
+  err = pthread_create (&tid[3], NULL, network_monitor, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
 
@@ -1078,7 +1784,7 @@ main (int argc, char *argv[])
 
 	  if (! under_dot_dir (filename))
 	    {
-	      debug (1, "%s: %s (%x)", filename, events, ev->mask);
+	      debug (2, "%s: %s (%x)", filename, events, ev->mask);
 	      free (events);
 
 	      if ((ev->mask & IN_CREATE))
@@ -1088,7 +1794,7 @@ main (int argc, char *argv[])
 	      if ((ev->mask & IN_DELETE_SELF))
 		/* Directory was removed.  */
 		{
-		  debug (1, "Deleted: %s: %s (%x)",
+		  debug (2, "Deleted: %s: %s (%x)",
 			 filename, events, ev->mask);
 
 		  inotify_rm_watch (inotify_fd, ev->wd);

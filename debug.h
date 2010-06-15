@@ -4,6 +4,7 @@
 #include <stdio.h>
 #include <execinfo.h>
 #include <stdlib.h>
+#include <time.h>
 
 /* Convenient debugging macros.  */
 #define DEBUG_BOLD(text) "\033[01;31m" text "\033[00m"
@@ -36,10 +37,18 @@ extern int output_debug;
   do									\
     {									\
       do_debug (level)							\
-	fprintf (stderr, "%s:%d:(%p): " fmt "\n",			\
-		 __func__, __LINE__,					\
-		 __builtin_return_address (0),				\
-		 ##__VA_ARGS__);					\
+        {								\
+	  time_t __t = time (NULL);					\
+	  struct tm __tm;						\
+	  localtime_r (&__t, &__tm);					\
+									\
+	  fprintf (stderr, "%s:%d:(%p)@%d:%02d.%02d: " fmt "\n",	\
+		   __func__, __LINE__,					\
+		   __builtin_return_address (0),			\
+		   __tm.tm_hour, __tm.tm_min, __tm.tm_sec,		\
+		   ##__VA_ARGS__);					\
+	  fflush (stderr);						\
+	}								\
     }									\
   while (0)
 

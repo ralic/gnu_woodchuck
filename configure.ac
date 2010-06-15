@@ -41,7 +41,7 @@ AM_CONDITIONAL([MAEMO], [test 0$HAVE_MAEMO_VERSION -gt 0])
 AM_CONDITIONAL([MAEMO5], [test 0$HAVE_MAEMO_VERSION -ge 500])
 
 # Modules that we require and can check for using pkg-config.
-BASE_MODULES="dbus-1 sqlite3"
+BASE_MODULES="dbus-1 sqlite3 icd2"
 PKG_CHECK_MODULES(BASE, $BASE_MODULES)
 AC_SUBST(BASE_CFLAGS)
 AC_SUBST(BASE_LIBS)
