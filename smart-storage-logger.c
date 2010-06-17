@@ -1182,7 +1182,7 @@ network_monitor (void *arg)
 	      }
 	    else
 	      {
-		debug (0, "Service: %s; %x; %s; "
+		debug (1, "Service: %s; %x; %s; "
 		       "Network: %s; %x; %s; status: %s",
 		       service_type, service_attributes, service_id,
 		       network_type, network_attributes, network_id,
@@ -1213,7 +1213,7 @@ network_monitor (void *arg)
 
 		if (status == ICD_STATE_DISCONNECTING)
 		  {
-		    debug (0, DEBUG_BOLD ("Getting stats for disconnecting connection."));
+		    debug (1, "Getting stats for disconnecting connection.");
 
 		    DBusMessage *message = dbus_message_new_method_call
 		      (/* Service.  */ ICD_DBUS_API_INTERFACE,
@@ -1253,7 +1253,7 @@ network_monitor (void *arg)
 			goto stat_done;
 		      }
 		    else
-		      debug (0, "connected: %d", connected);
+		      debug (1, "connected: %d", connected);
 
 		  stat_done:
 		    dbus_message_unref (message);
@@ -1306,7 +1306,7 @@ network_monitor (void *arg)
 	  }
 	else
 	  {
-	    debug (0, "Service: %s; %x; %s; "
+	    debug (1, "Service: %s; %x; %s; "
 		   "Network: %s; %x; %s; "
 		   "active: %d; signal: %d; bytes: %d/%d",
 		   service_type, service_attributes, service_id,
@@ -1440,7 +1440,7 @@ network_monitor (void *arg)
 		am_scanning --;
 		if (am_scanning == 0)
 		  {
-		    debug (0, DEBUG_BOLD ("am_scanning 0, stopping scan"));
+		    debug (1, DEBUG_BOLD ("am_scanning 0, stopping scan"));
 
 		    DBusMessage *message = dbus_message_new_method_call
 		      (/* Service.  */ ICD_DBUS_API_INTERFACE,
@@ -1481,9 +1481,9 @@ network_monitor (void *arg)
   }
 
 
-  /* When connected there is a network connection, get stats every 5
-     minutes or so.  */
-#define STATS_FREQ (5 * 60 * 1000)
+  /* When connected there is a network connection, get stats every
+     minute or so.  */
+#define STATS_FREQ (60 * 1000)
   /* Scan for available networks about every 20 minutes.  */
 #define SCAN_FREQ (20 * 60 * 1000)
   /* The maximum amount of time we are willing to tolerate data in the
@@ -1625,7 +1625,7 @@ network_monitor (void *arg)
 				  tm.tm_hour, tm.tm_min, tm.tm_sec);
 	      scan_id = sqlite3_last_insert_rowid (db);
 
-	      debug (0, DEBUG_BOLD ("started scan %d.  (network types: %d)"),
+	      debug (1, DEBUG_BOLD ("started scan %d.  (network types: %d)"),
 		     scan_id, am_scanning);
 
 	      if (am_scanning > 0)
@@ -1663,7 +1663,7 @@ network_monitor (void *arg)
 
       timeout = MIN (flush_timeout, MIN (stat_timeout, scan_timeout));
 
-      debug (0, "Timeout: %"PRId64" s "
+      debug (1, "Timeout: %"PRId64" s "
 	     "(stat: %"PRId64"; scan: %"PRId64"; flush: %"PRId64")",
 	     timeout == INT64_MAX ? -1 : (timeout / 1000),
 	     stat_timeout == INT64_MAX ? -1 : (stat_timeout / 1000),
@@ -1678,12 +1678,239 @@ network_monitor (void *arg)
   return NULL;
 }
 
+static void *
+process_monitor (void *arg)
+{
+  /* First, open the database.  */
+
+  char *filename = log_file ("process.db");
+
+  sqlite3 *db;
+  int err = sqlite3_open (filename, &db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   filename, sqlite3_errmsg (db));
+  free (filename);
+
+  /* Sleep up to an hour if the database is busy...  */
+  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+
+  char *errmsg = NULL;
+  err = sqlite3_exec (db,
+		      /* STATUS is either "acquired" or "released".  */
+		      "create table process_log"
+		      " (year, yday, hour, min, sec, name, status);",
+		      NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+    }
+
+
+  DBusError error;
+  dbus_error_init (&error);
+
+  DBusConnection *connection = dbus_bus_get_private (DBUS_BUS_SESSION, &error);
+  if (connection == NULL)
+    {
+      debug (0, "Failed to open connection to bus: %s", error.message);
+      dbus_error_free (&error);
+      return NULL;
+    }
+
+  /* Set up signal watchers.  */
+  {
+    char *matches[] =
+      { /* For name changes. */
+	"type='signal',"
+	"interface='org.freedesktop.DBus',"
+	"member='NameOwnerChanged',"
+	"path='/org/freedesktop/DBus'",
+      };
+
+    int i;
+    for (i = 0; i < sizeof (matches) / sizeof (matches[0]); i ++)
+      {
+	char *match = matches[i];
+
+	debug (2, "Adding match %s", match);
+	dbus_bus_add_match (connection, match, &error);
+	if (dbus_error_is_set (&error))
+	  {
+	    debug (0, "Error adding match %s: %s", match, error.message);
+	    dbus_error_free (&error);
+	  }
+      }
+  }
+
+  uint64_t need_sql_flush = 0;
+  uint64_t last_sql_append = 0;
+
+  char buffer[16 * 4096];
+  struct sqlq *sqlq = sqlq_new_static (db, buffer, sizeof (buffer));
+
+
+  DBusHandlerResult process_callback (DBusConnection *connection,
+				      DBusMessage *message, void *user_data)
+  {
+    debug (2, "Got message (%p): %s->%s (%d args)",
+	   message, dbus_message_get_path (message),
+	   dbus_message_get_member (message),
+	   dbus_message_args_count (message));
+    // print_message (message, false);
+
+    if (! dbus_message_has_path (message, "/org/freedesktop/DBus"))
+      {
+	debug (2, "Ignoring message with path %s",
+	       dbus_message_get_path (message));
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+      }
+
+    const char *member = dbus_message_get_member (message);
+
+    if (dbus_message_is_signal (message, "org.freedesktop.DBus",
+				"NameOwnerChanged"))
+      {
+	char *name = NULL;
+	char *old_owner = NULL;
+	char *new_owner = NULL;
+
+	dbus_error_init (&error);
+	if (! dbus_message_get_args (message, &error,
+				     DBUS_TYPE_STRING, &name,
+				     DBUS_TYPE_STRING, &old_owner,
+				     DBUS_TYPE_STRING, &new_owner,
+				     DBUS_TYPE_INVALID))
+	  {
+	    debug (0, "Error parsing scan request reply: %s",
+		   error.message);
+	    dbus_error_free (&error);
+	    goto change_done;
+	  }
+
+	debug (1, "name: %s; old_owner: %s; new_owner: %s",
+	       name, old_owner, new_owner);
+
+	if (name && name[0] != ':')
+	  {
+	    struct tm tm = now_tm ();
+	    bool did_something = false;
+	    bool need_flush = false;
+	    if (old_owner && *old_owner)
+	      {
+		need_flush =
+		  sqlq_append_printf (sqlq, false,
+				      "insert into process_log "
+				      " values (%d, %d, %d, %d, %d, "
+				      "         %Q, 'released');",
+				      tm.tm_year, tm.tm_yday,
+				      tm.tm_hour, tm.tm_min, tm.tm_sec,
+				      name);
+		did_something = true;
+	      }
+	    if (new_owner && *new_owner)
+	      {
+		need_flush =
+		  sqlq_append_printf (sqlq, false,
+				      "insert into process_log "
+				      " values (%d, %d, %d, %d, %d, "
+				      "         %Q, 'acquired');",
+				      tm.tm_year, tm.tm_yday,
+				      tm.tm_hour, tm.tm_min, tm.tm_sec,
+				      name);
+		did_something = true;
+	      }
+
+	    if (did_something)
+	      {
+		if (need_flush)
+		  {
+		    if (! need_sql_flush)
+		      need_sql_flush = now ();
+		    last_sql_append = now ();
+		  }
+		else
+		  need_sql_flush = last_sql_append = 0;
+	      }
+	  }
+      change_done:
+	;
+      }
+    else
+      {
+	debug (5, "Ignoring irrelevant method: %s", member);
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+      }
+
+    return DBUS_HANDLER_RESULT_HANDLED;
+  }
+  if (! dbus_connection_add_filter (connection, process_callback, NULL, NULL))
+    debug (0, "Failed to add filter: out of memory");
+
+
+  {
+    struct tm tm = now_tm ();
+    sqlq_append_printf (sqlq, false,
+			"insert into process_log "
+			" values (%d, %d, %d, %d, %d, '', 'system_start');",
+			tm.tm_year, tm.tm_yday,
+			tm.tm_hour, tm.tm_min, tm.tm_sec);
+  }
+
+  /* The maximum amount of time we are willing to tolerate data in the
+     SQL buffer before it must be flushed and the maximum amount of
+     IDLE time before we force a flush.  */
+#define FLUSH_MAX_LATENCY (60 * 1000)
+#define FLUSH_IDLE_LATENCY (2 * 1000)
+  int64_t timeout;
+  do
+    {
+      if (dbus_connection_get_dispatch_status (connection)
+	  == DBUS_DISPATCH_DATA_REMAINS)
+	/* There is more data to process, try to bulk up any
+	   updates.  */
+	{
+	  while (dbus_connection_dispatch (connection)
+		 == DBUS_DISPATCH_DATA_REMAINS)
+	    ;
+	}
+
+      uint64_t n = now ();
+
+      int64_t flush_timeout = INT64_MAX;
+      if (need_sql_flush)
+	{
+	  if (n - need_sql_flush >= FLUSH_MAX_LATENCY
+	      || n - last_sql_append >= FLUSH_IDLE_LATENCY)
+	    {
+	      debug (1, "Flushing SQL buffer.");
+	      sqlq_flush (sqlq);
+	      need_sql_flush = 0;
+	    }
+	  else
+	    flush_timeout = last_sql_append + FLUSH_IDLE_LATENCY - n;
+	}
+
+      timeout = flush_timeout;
+
+      debug (1, "Timeout: %"PRId64" s ",
+	     timeout == INT64_MAX ? -1 : (timeout / 1000));
+    }
+  while (dbus_connection_read_write_dispatch
+	 (connection, timeout == INT64_MAX ? -1: timeout));
+
+  debug (0, "Process monitor disconnected.");
+
+  return NULL;
+}
+
 int
 main (int argc, char *argv[])
 {
   dbus_threads_init_default ();
 
-  output_debug = 1;
+  output_debug = 0;
 
   inotify_fd = inotify_init ();
   if (inotify_fd < 0)
@@ -1709,7 +1936,7 @@ main (int argc, char *argv[])
   /* Create the helper threads.  */
 
   /* Start watching a subtree.  */
-  pthread_t tid[4];
+  pthread_t tid[5];
   int err = pthread_create (&tid[0], NULL, directory_add_helper, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
@@ -1726,6 +1953,11 @@ main (int argc, char *argv[])
 
   /* Monitor network connections.  */
   err = pthread_create (&tid[3], NULL, network_monitor, NULL);
+  if (err < 0)
+    error (1, errno, "pthread_create");
+
+  /* Monitor processes.  */
+  err = pthread_create (&tid[4], NULL, process_monitor, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
 
