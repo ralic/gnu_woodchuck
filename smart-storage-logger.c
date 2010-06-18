@@ -1069,9 +1069,12 @@ network_monitor (void *arg)
 	"interface='"ICD_DBUS_API_INTERFACE"',"
 	"member='"ICD_DBUS_API_SCAN_SIG"',"
 	"path='"ICD_DBUS_API_PATH"'",
-	
-	/* All signals.  */
-	// "type='signal'"
+
+	/* System shutdown.  */
+	"type='signal',"
+	"interface='com.nokia.dsme.signal',"
+	"path='/com/nokia/dsme/signal',"
+	"member='shutdown_ind'",
       };
 
     int i;
@@ -1099,32 +1102,37 @@ network_monitor (void *arg)
 
   uint64_t need_sql_flush = 0;
   uint64_t last_sql_append = 0;
+  bool shutting_down = false;
 
   char buffer[16 * 4096];
   struct sqlq *sqlq = sqlq_new_static (db, buffer, sizeof (buffer));
 
-
   DBusHandlerResult network_callback (DBusConnection *connection,
 				      DBusMessage *message, void *user_data)
   {
-    debug (2, "Got message (%p): %s->%s (%d args)",
-	   message, dbus_message_get_path (message),
-	   dbus_message_get_member (message),
-	   dbus_message_args_count (message));
-    // print_message (message, false);
-
-    if (! dbus_message_has_path (message, ICD_DBUS_API_PATH))
+    do_debug (5)
       {
-	debug (2, "Ignoring message with path %s (want: %s)",
-	       dbus_message_get_path (message),
-	       ICD_DBUS_API_PATH);
-	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+	debug (0, "Got message (%p): %s->%s (%d args)",
+	       message, dbus_message_get_path (message),
+	       dbus_message_get_member (message),
+	       dbus_message_args_count (message));
+	// print_message (message, false);
       }
 
-    const char *member = dbus_message_get_member (message);
-
-    if (dbus_message_is_signal (message,
-				ICD_DBUS_API_INTERFACE, ICD_DBUS_API_STATE_SIG))
+    if (dbus_message_has_path (message, "/com/nokia/dsme/signal")
+	&& dbus_message_is_signal (message,
+				   "com.nokia.dsme.signal",
+				   "shutdown_ind"))
+      /* System shutdown.  */
+      {
+	debug (0, "System going down!");
+	last_stats = 0;
+	shutting_down = true;
+      }
+    else if (dbus_message_has_path (message, ICD_DBUS_API_PATH)
+	     && dbus_message_is_signal (message,
+					ICD_DBUS_API_INTERFACE,
+					ICD_DBUS_API_STATE_SIG))
       {
 	const char *status_to_str (uint32_t status)
 	{
@@ -1145,7 +1153,6 @@ network_monitor (void *arg)
 	      return "unknown";
 	    }
 	}
-	  
 	char *service_type = NULL;
 	uint32_t service_attributes = 0;
 	char *service_id = NULL;
@@ -1260,17 +1267,50 @@ network_monitor (void *arg)
 		    dbus_message_unref (reply);
 		  }
 	      }
+	  case 2:;
+
+	    char *network_type = NULL;
+
+	    /* Broadcast when a network search begins or ends.  */
+	    if (! dbus_message_get_args (message, &error,
+					 DBUS_TYPE_STRING, &network_type,
+					 DBUS_TYPE_UINT32, &status,
+					 DBUS_TYPE_INVALID))
+	      {
+		debug (0, "Failed to grok "ICD_DBUS_API_STATE_SIG" reply: %s",
+		       error.message);
+		dbus_error_free (&error);
+	      }
+	    else
+	      {
+		if (! am_scanning && status == ICD_STATE_SEARCH_START)
+		  /* We are not scanning but we just saw a scan signal.  This
+		     suggests the user might change connections soon.  Once a
+		     connection is disconnected, we can't get statistics on it.
+		     Preemptively try and get stats in case the user does
+		     disconnect.  */
+		  {
+		    uint64_t n = now ();
+		    int64_t delta = n - last_stats;
+		    debug (0, "Not scanning but saw a scan (last stats: %"PRId64"s).", delta);
+		    if (delta >= 1000)
+		      {
+			debug (0, "Preemptive stat scheduled.");
+			last_stats = 0;
+		      }
+		  }
+	      }
+
 	  case 1:
 	    /* Broadcast at startup if there are no connections.  */
-	  case 2:
-	    /* Broadcast when a network search begins or ends.  */
 	  default:
 	    ;
 	  }
       }
-    else if (dbus_message_is_signal (message,
-				     ICD_DBUS_API_INTERFACE,
-				     ICD_DBUS_API_STATISTICS_SIG))
+    else if (dbus_message_has_path (message, ICD_DBUS_API_PATH)
+	     && dbus_message_is_signal (message,
+					ICD_DBUS_API_INTERFACE,
+					ICD_DBUS_API_STATISTICS_SIG))
       {
 	char *service_type = NULL;
 	uint32_t service_attributes = 0;
@@ -1338,6 +1378,7 @@ network_monitor (void *arg)
 	last_stats = now ();
       }
     else if (am_scanning
+	     && dbus_message_has_path (message, ICD_DBUS_API_PATH)
 	     && dbus_message_is_signal (message,
 					ICD_DBUS_API_INTERFACE,
 					ICD_DBUS_API_SCAN_SIG))
@@ -1458,7 +1499,8 @@ network_monitor (void *arg)
       }
     else
       {
-	debug (5, "Ignoring irrelevant method: %s", member);
+	debug (5, "Ignoring irrelevant method: %s",
+	       dbus_message_get_member (message));
 	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
       }
 
@@ -1482,8 +1524,8 @@ network_monitor (void *arg)
 
 
   /* When connected there is a network connection, get stats every
-     minute or so.  */
-#define STATS_FREQ (60 * 1000)
+     few minutes or so.  */
+#define STATS_FREQ (5 * 60 * 1000)
   /* Scan for available networks about every 20 minutes.  */
 #define SCAN_FREQ (20 * 60 * 1000)
   /* The maximum amount of time we are willing to tolerate data in the
@@ -1650,7 +1692,8 @@ network_monitor (void *arg)
       int64_t flush_timeout = INT64_MAX;
       if (need_sql_flush)
 	{
-	  if (n - need_sql_flush >= FLUSH_MAX_LATENCY
+	  if (shutting_down
+	      || n - need_sql_flush >= FLUSH_MAX_LATENCY
 	      || n - last_sql_append >= FLUSH_IDLE_LATENCY)
 	    {
 	      debug (1, "Flushing SQL buffer.");
