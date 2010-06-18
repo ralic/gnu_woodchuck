@@ -1,0 +1,32 @@
+Source: smart-storage
+Section: misc
+Priority: optional
+Maintainer: Neal H. Walfield <neal@cs.jhu.edu>
+Standards-Version: 3.8.3
+Build-Depends: cdbs, libdbus-1-dev, libsqlite3-dev
+Homepage: http://hssl.cs.jhu.edu/~neal/smart-storage
+
+Package: smart-storage-logger
+Section: misc
+Architecture: any
+Priority: optional
+Depends: ${shlibs:Depends}
+Description: Data logger for the smart storage experiment.
+ The smart storage logger is a program developed to collect data
+ about a user's activities.  It monitors and records the files that a
+ user accesses, used and available network connections, battery status
+ and programs that are run.  This data is then upload to
+ hssl.cs.jhu.edu.
+ .
+ This data is being used by the HSSL researchers in understanding how
+ users use data and their devices in general with the primary goal of
+ designing an algorithm to determining which files have the least
+ utility and thus are the best candidates for deletion.  Secondary
+ goals include the design of an API to allow applications to register
+ files that can be deleted automatically, designing an API to inform
+ applications of storage pressure to allow them to take action, and
+ designing a user interface to allow users to designate groups of
+ files that can be deleted automatically.  This will help users by
+ simplifying storage management and enable applications to more
+ aggressively prefetch and cache data as disrupting the user or other
+ applications is no longer an issue.
