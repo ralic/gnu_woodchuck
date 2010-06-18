@@ -576,6 +576,23 @@ inotify_mask_to_string (uint32_t mask)
 }
 
 #include <dbus/dbus.h>
+#include "dbus-print-message.h"
+
+static int
+dbus_message_args_count (DBusMessage *message)
+{
+  DBusMessageIter iter;
+  if (! dbus_message_iter_init (message, &iter))
+    return 0;
+
+  int count;
+  for (count = 0;
+       dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_INVALID;
+       count ++, dbus_message_iter_next (&iter))
+    ;
+
+  return count;
+}
 
 static void *
 battery_monitor (void *arg)
@@ -964,24 +981,10 @@ battery_monitor (void *arg)
   return NULL;
 }
 
+#ifdef HAVE_MAEMO
+/* ICD is maemo specific.  */
+
 #include <icd/dbus_api.h>
-#include "dbus-print-message.h"
-
-static int
-dbus_message_args_count (DBusMessage *message)
-{
-  DBusMessageIter iter;
-  if (! dbus_message_iter_init (message, &iter))
-    return 0;
-
-  int count;
-  for (count = 0;
-       dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_INVALID;
-       count ++, dbus_message_iter_next (&iter))
-    ;
-
-  return count;
-}
 
 static void *
 network_monitor (void *arg)
@@ -1720,6 +1723,7 @@ network_monitor (void *arg)
 
   return NULL;
 }
+#endif
 
 static void *
 process_monitor (void *arg)
@@ -1994,10 +1998,12 @@ main (int argc, char *argv[])
   if (err < 0)
     error (1, errno, "pthread_create");
 
+#ifdef HAVE_MAEMO
   /* Monitor network connections.  */
   err = pthread_create (&tid[3], NULL, network_monitor, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
+#endif
 
   /* Monitor processes.  */
   err = pthread_create (&tid[4], NULL, process_monitor, NULL);
