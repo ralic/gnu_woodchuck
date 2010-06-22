@@ -136,7 +136,7 @@ sqlq_append (struct sqlq *q, bool force_flush, const char *command)
       q->used += len;
     }
 
-  return q->used == 0;
+  return q->used != 0;
 }
 
 bool
