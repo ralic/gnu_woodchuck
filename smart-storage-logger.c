@@ -2013,6 +2013,15 @@ signal_handler_quit (int sig)
 int
 main (int argc, char *argv[])
 {
+  bool do_fork = true;
+
+  {
+    int i;
+    for (i = 0; i < argc; i ++)
+      if (strcmp (argv[i], "--no-fork") == 0)
+	do_fork = false;
+  }
+
   dbus_threads_init_default ();
 
   output_debug = 0;
@@ -2069,10 +2078,14 @@ main (int argc, char *argv[])
   char *log = log_file ("log");
   debug (0, "Daemonizing.  Further output will be sent to %s", log);
 
-  int err = daemon (0, 0);
-  if (err)
-    error (0, err, "Failed to daemonize");
+  int err;
 
+  if (do_fork)
+    {
+      err = daemon (0, 0);
+      if (err)
+	error (0, err, "Failed to daemonize");
+    }
 
   /* Redirect stdout and stderr to a log file.  */
   {

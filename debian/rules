@@ -2,3 +2,8 @@
 
 include /usr/share/cdbs/1/rules/debhelper.mk
 include /usr/share/cdbs/1/class/autotools.mk
+
+binary-post-install/smart-storage-logger::
+	mkdir -p debian/smart-storage-logger/etc/event.d
+	cp debian/smart-storage-logger-maemo.upstart \
+		debian/smart-storage-logger/etc/event.d/smart-storage-logger
