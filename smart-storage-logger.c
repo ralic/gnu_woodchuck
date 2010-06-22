@@ -32,6 +32,7 @@
 #include <sys/time.h>
 #include <stdarg.h>
 #include <sqlite3.h>
+#include <signal.h>
 
 #include "debug.h"
 #include "list.h"
@@ -193,6 +194,8 @@ notice_add_helper (void *arg)
 
   for (;;)
     {
+      pthread_setcancelstate (PTHREAD_CANCEL_ENABLE, NULL);
+      pthread_testcancel ();
       sleep (5);
 
       pthread_mutex_lock (&notice_lock);
@@ -213,6 +216,8 @@ notice_add_helper (void *arg)
       assert (btree_notice_first (notice_tree) == 0);
 
       pthread_mutex_unlock (&notice_lock);
+
+      pthread_setcancelstate (PTHREAD_CANCEL_DISABLE, NULL);
 
       int processed = 0;
 
@@ -1529,6 +1534,12 @@ network_monitor (void *arg)
   }
 
 
+  void cleanup (void *arg)
+  {
+    sqlq_flush (sqlq);
+  }
+  pthread_cleanup_push (cleanup, NULL);
+
   /* When connected there is a network connection, get stats every
      few minutes or so.  */
 #define STATS_FREQ (5 * 60 * 1000)
@@ -1722,6 +1733,8 @@ network_monitor (void *arg)
   while (dbus_connection_read_write_dispatch
 	 (connection, timeout == INT64_MAX ? -1: timeout));
 
+  pthread_cleanup_pop (true);
+
   debug (0, "Network monitor disconnected.");
 
   return NULL;
@@ -1761,13 +1774,24 @@ process_monitor (void *arg)
   DBusError error;
   dbus_error_init (&error);
 
-  DBusConnection *connection = dbus_bus_get_private (DBUS_BUS_SESSION, &error);
-  if (connection == NULL)
+  DBusConnection *connection;
+  int i;
+  const int tries = 5;
+  for (i = 0; i < tries; i ++)
     {
-      debug (0, "Failed to open connection to bus: %s", error.message);
-      dbus_error_free (&error);
-      return NULL;
+      connection = dbus_bus_get_private (DBUS_BUS_SESSION, &error);
+      if (connection == NULL)
+	{
+	  debug (0, "Failed to open connection to bus: %s", error.message);
+	  dbus_error_free (&error);
+
+	  /* Maybe it the session dbus just hasn't started yet.  */
+	  debug (0, "Waiting 60 seconds and trying again.");
+	  sleep (60);
+	}
     }
+  if (i == tries)
+    return NULL;
 
   /* Set up signal watchers.  */
   {
@@ -1912,6 +1936,12 @@ process_monitor (void *arg)
 			tm.tm_hour, tm.tm_min, tm.tm_sec);
   }
 
+  void cleanup (void *arg)
+  {
+    sqlq_flush (sqlq);
+  }
+  pthread_cleanup_push (cleanup, NULL);
+
   /* The maximum amount of time we are willing to tolerate data in the
      SQL buffer before it must be flushed and the maximum amount of
      IDLE time before we force a flush.  */
@@ -1954,11 +1984,32 @@ process_monitor (void *arg)
   while (dbus_connection_read_write_dispatch
 	 (connection, timeout == INT64_MAX ? -1: timeout));
 
+  pthread_cleanup_pop (true);
+
   debug (0, "Process monitor disconnected.");
 
   return NULL;
 }
 
+static volatile int quit;
+
+static pthread_t tid[5];
+
+static void
+signal_handler_quit (int sig)
+{
+  const char fmt[] = "Got signal %d.  Exiting.\n";
+  char text[strlen (fmt) + 10];
+  sprintf (text, fmt, sig);
+  write (STDOUT_FILENO, text, strlen (text));
+
+  quit = 1;
+
+  int i;
+  for (i = 0; i < sizeof (tid) / sizeof (tid[0]); i ++)
+    pthread_cancel (tid[i]);
+}
+
 int
 main (int argc, char *argv[])
 {
@@ -2025,11 +2076,11 @@ main (int argc, char *argv[])
 
   /* Redirect stdout and stderr to a log file.  */
   {
-    remove (log);
     int log_fd = open (log, O_WRONLY | O_CREAT | O_APPEND, 0660);
     dup2 (log_fd, STDOUT_FILENO);
     dup2 (log_fd, STDERR_FILENO);
-    close (log_fd);
+    if (! (log_fd == STDOUT_FILENO || log_fd == STDERR_FILENO))
+      close (log_fd);
   }
   free (log);
   debug (0, "Starting.");
@@ -2039,13 +2090,20 @@ main (int argc, char *argv[])
   free (pidfilename);
 
 
+  signal (SIGTERM, signal_handler_quit);
+  signal (SIGINT, signal_handler_quit);
+  signal (SIGQUIT, signal_handler_quit);
+  signal (SIGHUP, signal_handler_quit);
+  signal (SIGUSR1, signal_handler_quit);
+  signal (SIGUSR2, signal_handler_quit);
+
+
   directory_add (strdup (base));
 
 
   /* Create the helper threads.  */
 
   /* Start watching a subtree.  */
-  pthread_t tid[5];
   err = pthread_create (&tid[0], NULL, directory_add_helper, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
@@ -2065,6 +2123,8 @@ main (int argc, char *argv[])
   err = pthread_create (&tid[3], NULL, network_monitor, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
+#else
+  tid[3] = 0;
 #endif
 
   /* Monitor processes.  */
@@ -2075,7 +2135,7 @@ main (int argc, char *argv[])
 
   char buffer[16 * 4096];
   int have = 0;
-  while (1)
+  while (! quit)
     {
       if (inotify_fd == -1)
 	/* While scanning, we ran out of space for watches.  This will
@@ -2164,7 +2224,15 @@ main (int argc, char *argv[])
 	}
     }
 
-  pthread_join (tid[0], NULL);
+  int i;
+  for (i = 0; i < sizeof (tid) / sizeof (tid[0]); i ++)
+    if (tid[i] != 0)
+      {
+	debug (0, "Joining thread %d", i);
+	pthread_join (tid[i], NULL);
+      }
+
+  debug (0, "Exiting.");
 
   return 0;
 }
