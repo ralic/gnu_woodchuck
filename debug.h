@@ -42,10 +42,11 @@ extern int output_debug;
 	  struct tm __tm;						\
 	  localtime_r (&__t, &__tm);					\
 									\
-	  fprintf (stderr, "%s:%d:(%p)@%d:%02d.%02d: " fmt "\n",	\
+	  fprintf (stderr, "%d.%d.%d %d:%02d.%02d:%s:%d:(%p): " fmt "\n", \
+		   1900 + __tm.tm_year, __tm.tm_mday, __tm.tm_mon + 1,	\
+		   __tm.tm_hour, __tm.tm_min, __tm.tm_sec,		\
 		   __func__, __LINE__,					\
 		   __builtin_return_address (0),			\
-		   __tm.tm_hour, __tm.tm_min, __tm.tm_sec,		\
 		   ##__VA_ARGS__);					\
 	  fflush (stderr);						\
 	}								\

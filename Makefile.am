@@ -11,7 +11,8 @@ smart_storage_logger_SOURCES = smart-storage-logger.c \
 	debug.h debug.c util.h sqlq.c sqlq.h \
 	list.h btree.h btree.c \
 	dbus-print-message.c dbus-print-message.h \
-	glib.h
+	glib.h \
+	pidfile.h pidfile.c
 
 smart_storage_simulator_SOURCES = smart-storage-simulator.c \
 	debug.h debug.c util.h \

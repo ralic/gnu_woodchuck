@@ -38,6 +38,9 @@
 #include "btree.h"
 #include "util.h"
 #include "sqlq.h"
+#include "pidfile.h"
+
+#include "config.h"
 
 static int inotify_fd;
 
@@ -1846,6 +1849,8 @@ process_monitor (void *arg)
 	    bool need_flush = false;
 	    if (old_owner && *old_owner)
 	      {
+		debug (1, "%s abandoned %s", old_owner, name);
+
 		need_flush =
 		  sqlq_append_printf (sqlq, false,
 				      "insert into process_log "
@@ -1858,6 +1863,8 @@ process_monitor (void *arg)
 	      }
 	    if (new_owner && *new_owner)
 	      {
+		debug (1, "%s assumed %s", new_owner, name);
+
 		need_flush =
 		  sqlq_append_printf (sqlq, false,
 				      "insert into process_log "
@@ -1977,6 +1984,61 @@ main (int argc, char *argv[])
   asprintf (&dot_dir, "%s/"DOT_DIR, base);
   dot_dir_len = strlen (dot_dir);
 
+  char *pidfilename = log_file ("pid");
+  const char *ssl = "smart-storage-logger";
+  pid_t owner = pidfile_check (pidfilename, ssl);
+  if (owner)
+    error (1, 0, "%s already running (pid: %d)", ssl, owner);
+
+  /* Make sure there are enough watches.  */
+  {
+    const char *WATCHES_FILE = "/proc/sys/fs/inotify/max_user_watches";
+    FILE *watches_file = fopen (WATCHES_FILE, "r");
+    int max = 0;
+    fscanf (watches_file, "%d", &max);
+    fclose (watches_file);
+
+    int desired = 100000;
+    if (max < desired)
+      {
+	watches_file = fopen (WATCHES_FILE, "w");
+	if (! watches_file)
+	  debug (0, "Cannot raise number of watches.  Stuck at %d.", max);
+	else
+	  {
+	    fprintf (watches_file, "%d", desired);
+	    fclose (watches_file);
+
+	    debug (0, "Raised max watches from %d to %d", max, desired);
+	  }
+      }
+  }
+
+  
+  char *log = log_file ("log");
+  debug (0, "Daemonizing.  Further output will be sent to %s", log);
+
+  int err = daemon (0, 0);
+  if (err)
+    error (0, err, "Failed to daemonize");
+
+
+  /* Redirect stdout and stderr to a log file.  */
+  {
+    remove (log);
+    int log_fd = open (log, O_WRONLY | O_CREAT | O_APPEND, 0660);
+    dup2 (log_fd, STDOUT_FILENO);
+    dup2 (log_fd, STDERR_FILENO);
+    close (log_fd);
+  }
+  free (log);
+  debug (0, "Starting.");
+
+  if ((owner = pidfile_acquire (pidfilename, ssl)))
+    error (1, 0, "%s already running (pid: %d)", ssl, owner);
+  free (pidfilename);
+
+
   directory_add (strdup (base));
 
 
@@ -1984,7 +2046,7 @@ main (int argc, char *argv[])
 
   /* Start watching a subtree.  */
   pthread_t tid[5];
-  int err = pthread_create (&tid[0], NULL, directory_add_helper, NULL);
+  err = pthread_create (&tid[0], NULL, directory_add_helper, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
 

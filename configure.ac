@@ -1,14 +1,14 @@
-AC_PREREQ(2.57)
+AC_PREREQ([2.59])
 AC_INIT(smart-storage, 0.0, neal@cs.jhu.edu)
 AC_CONFIG_AUX_DIR([build-aux])
 AM_INIT_AUTOMAKE()
 AC_CONFIG_SRCDIR([smart-storage-logger.c])
-
-AC_GNU_SOURCE
+AC_CONFIG_HEADERS([config.h])
 
 # Checks for programs.
 AC_PROG_CC
 AM_PROG_CC_C_O
+AC_GNU_SOURCE
 
 AM_PROG_AS
 AC_PROG_RANLIB
@@ -51,7 +51,5 @@ PKG_CHECK_MODULES(BASE, $BASE_MODULES)
 AC_SUBST(BASE_CFLAGS)
 AC_SUBST(BASE_LIBS)
 
-
-
-AC_CONFIG_FILES([Makefile])
+AC_CONFIG_FILES([Makefile lib/Makefile])
 AC_OUTPUT

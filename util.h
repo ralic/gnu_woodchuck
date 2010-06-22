@@ -1,5 +1,7 @@
 #include <inttypes.h>
 #include <stdint.h>
+#include <sys/time.h>
+#include <time.h>
 
 #ifndef UTIL_H
 #define UTIL_H
@@ -143,7 +145,6 @@ sqlite3_exec_printf (sqlite3 *db, const char *sql,
   va_start (ap, errmsg);
 
   char *s = sqlite3_vmprintf (sql, ap);
-  debug (5, "%s", s);
 
   int ret = sqlite3_exec (db, s, callback, cookie, errmsg);
 
