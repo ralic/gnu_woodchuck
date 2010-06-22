@@ -1543,8 +1543,8 @@ network_monitor (void *arg)
   /* When connected there is a network connection, get stats every
      few minutes or so.  */
 #define STATS_FREQ (5 * 60 * 1000)
-  /* Scan for available networks about every 20 minutes.  */
-#define SCAN_FREQ (20 * 60 * 1000)
+  /* Scan for available networks about every 3 hours.  */
+#define SCAN_FREQ (3 * 60 * 60 * 1000)
   /* The maximum amount of time we are willing to tolerate data in the
      SQL buffer before it must be flushed and the maximum amount of
      IDLE time before we force a flush.  */
