@@ -4,6 +4,7 @@ Priority: optional
 Maintainer: Neal H. Walfield <neal@cs.jhu.edu>
 Standards-Version: 3.8.3
 Build-Depends: cdbs, libdbus-1-dev, libsqlite3-dev
+Vcs-Git: git://hssl.cs.jhu.edu/~neal/smart-storage.git
 Homepage: http://hssl.cs.jhu.edu/~neal/smart-storage
 
 Package: smart-storage-logger

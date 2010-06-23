@@ -5,5 +5,8 @@ include /usr/share/cdbs/1/class/autotools.mk
 
 binary-post-install/smart-storage-logger::
 	mkdir -p debian/smart-storage-logger/etc/event.d
+	# Maemo's version of dh_installinit is too old to automate this for us.
 	cp debian/smart-storage-logger-maemo.upstart \
 		debian/smart-storage-logger/etc/event.d/smart-storage-logger
+	# Don't include smart-storage-simulator in the binary.
+	rm debian/smart-storage-logger/usr/bin/smart-storage-simulator
