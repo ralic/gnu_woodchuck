@@ -104,21 +104,51 @@ uuid (void)
   if (err)
     error (1, 0, "sqlite3_open (%s): %s",
 	   filename, sqlite3_errmsg (db));
-  free (filename);
 
   /* Sleep up to an hour if the database is busy...  */
   sqlite3_busy_timeout (db, 60 * 60 * 1000);
 
+  /* Figure out if the table has already been created.  */
+  int count = 0;
+  int tbl_callback (void *cookie, int argc, char **argv, char **names)
+  {
+    count = atoi (argv[0]);
+    return 0;
+  }
+
   char *errmsg = NULL;
   err = sqlite3_exec (db,
-		      /* STATUS is either "acquired" or "released".  */
-		      "create table uuid (uuid PRIMARY KEY);",
-		      NULL, NULL, &errmsg);
+		      "select count (*) from sqlite_master"
+		      " where type='table' and name='uuid';",
+		      tbl_callback, NULL, &errmsg);
   if (errmsg)
     {
-      debug (0, "%d: %s", err, errmsg);
+      debug (0, "%s: %s", filename, errmsg);
       sqlite3_free (errmsg);
       errmsg = NULL;
+      if (err != SQLITE_ERROR)
+	abort ();
+    }
+
+  if (count == 0)
+    /* No, create it.  */
+    {
+      char *errmsg = NULL;
+      err = sqlite3_exec (db,
+			  "create table uuid (uuid PRIMARY KEY);",
+			  NULL, NULL, &errmsg);
+      if (errmsg)
+	{
+	  debug (0, "%d: %s", err, errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+	}
+    }
+  else if (count != 1)
+    /* Inconsistent.  */
+    {
+      debug (0, "%s has %d tables with name `uuid'?!?", filename, count);
+      abort ();
     }
 
   /* Find the computer's UUID.  */
@@ -139,9 +169,14 @@ uuid (void)
       sqlite3_free (errmsg);
       errmsg = NULL;
     }
+
   if (my_uuid)
+    /* Got it!  */
     {
+      debug (0, "UUID is %s", my_uuid);
+
       sqlite3_close (db);
+      free (filename);
       return my_uuid;
     }
 
@@ -242,6 +277,10 @@ uuid (void)
     }
 
   sqlite3_close (db);
+  free (filename);
+
+  debug (0, "Generated UUID %s", my_uuid);
+
   return my_uuid;
 }
 
