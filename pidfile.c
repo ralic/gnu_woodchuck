@@ -58,6 +58,7 @@ pidfile_open (const char *filename)
     {
       debug (0, "%s: %s", filename, errmsg);
       sqlite3_free (errmsg);
+      errmsg = NULL;
       if (err != SQLITE_ERROR)
 	abort ();
     }
@@ -72,6 +73,7 @@ pidfile_open (const char *filename)
 	{
 	  debug (0, "%d: %s", err, errmsg);
 	  sqlite3_free (errmsg);
+	  errmsg = NULL;
 	}
     }
   else if (count != 1)
