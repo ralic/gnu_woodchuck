@@ -88,6 +88,234 @@ log_file (char *filename)
   return abs_filename;
 }
 
+static const char *
+uuid (void)
+{
+  static char *my_uuid = NULL;
+  if (my_uuid)
+    return my_uuid;
+
+  /* First, open the database.  */
+
+  char *filename = log_file ("uuid.db");
+
+  sqlite3 *db;
+  int err = sqlite3_open (filename, &db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   filename, sqlite3_errmsg (db));
+  free (filename);
+
+  /* Sleep up to an hour if the database is busy...  */
+  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+
+  char *errmsg = NULL;
+  err = sqlite3_exec (db,
+		      /* STATUS is either "acquired" or "released".  */
+		      "create table uuid (uuid PRIMARY KEY);",
+		      NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  /* Find the computer's UUID.  */
+  int got = 0;
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    assert (argc == 1);
+    assert (! got);
+    my_uuid = strdup (argv[0]);
+    got ++;
+
+    return 0;
+  }
+  sqlite3_exec (db, "select uuid from uuid;", callback, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%s: %s", filename, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+  if (my_uuid)
+    {
+      sqlite3_close (db);
+      return my_uuid;
+    }
+
+  /* We need to generate a UUID.  */
+
+  union
+  {
+    char str[33];
+    uint32_t num[8];
+  } uuid;
+  memset (uuid.str, '0', 32);
+  uuid.str[32] = 0;
+  FILE *input
+    = popen ("( ps aux; date; date +%N; echo $RANDOM; echo $RANDOM; echo $$;"
+	     " uptime ) | md5sum", "r");
+  if (input)
+    {
+      fread (uuid.str, 1, sizeof (uuid.str) - 1, input);
+      fclose (input);
+    }
+  else
+    debug (0, "Running (...) | md5sum: %m");
+
+  debug (0, "uuid first phase: %s", uuid.str);
+
+  void inplode (char in[32], char out[16])
+  {
+    int c2i (char c)
+    {
+      if ('0' <= c && c <= '9')
+	return c - '0';
+      if ('a' <= c && c <= 'f')
+	return c - 'a' + 10;
+      if ('A' <= c && c <= 'F')
+	return c - 'a' + 10;
+      return 0;
+    }
+
+    int i;
+    for (i = 0; i < 32; i += 2)
+      out[i/2] = c2i (in[i]) | (c2i (in[i + 1]) << 4);
+  }
+  inplode (uuid.str, uuid.str);
+
+  uuid.num[0] ^= time (NULL);
+  uuid.num[1] ^= getpid ();
+
+  struct timeval tv;
+  gettimeofday (&tv, NULL);
+  uuid.num[2] ^= tv.tv_usec;
+
+  union
+  {
+    double db[3];
+    int num[0];
+  } loadavg;
+  getloadavg (loadavg.db, sizeof (loadavg.db) / sizeof (loadavg.db[0]));
+  int x = 0;
+  int i;
+  for (i = 0; i < sizeof (loadavg) / sizeof (loadavg.num[0]); i ++)
+    x += loadavg.num[i];
+  uuid.num[3] ^= x;
+
+  void explode (char in[16], char out[32])
+  {
+    char i2c (int i)
+    {
+      if (i < 10)
+	return '0' + i;
+      else if (i < 16)
+	return 'a' + i - 10;
+      assert (! "Bad i");
+    }
+
+    for (i = 0; i < 16; i ++)
+      {
+	out[i * 2] = i2c (((unsigned char) in[i]) & 0xF);
+	out[i * 2 + 1] = i2c ((((unsigned char) in[i]) >> 4) & 0xF);
+      }
+  }
+
+  char result[33];
+  result[32] = 0;
+  explode (uuid.str, result);
+  my_uuid = strdup (result);
+
+  debug (0, "uuid final: %s", my_uuid);
+
+  /* Save the UUID.  */
+  sqlite3_exec_printf (db,
+		       "insert into uuid values (%Q);",
+		       NULL, NULL, &errmsg, my_uuid);
+  if (errmsg)
+    {
+      debug (0, "%s", errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  sqlite3_close (db);
+  return my_uuid;
+}
+
+static void
+uuid_ensure (const char *filename, sqlite3 *db)
+{
+  /* Figure out if the table has already been created.  */
+  int count = 0;
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    count = atoi (argv[0]);
+    return 0;
+  }
+
+  char *errmsg = NULL;
+  int err = sqlite3_exec (db,
+			  "select count (*) from sqlite_master"
+			  " where type='table' and name='uuid';",
+			  callback, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%s: %s", filename, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+      if (err != SQLITE_ERROR)
+	abort ();
+    }
+
+  if (count == 0)
+    /* No, create it.  */
+    {
+      err = sqlite3_exec_printf
+	(db,
+	 "begin transaction;"
+	 "create table uuid (uuid PRIMARY KEY);"
+	 "insert into uuid values (%Q);"
+	 "commit transaction;",
+	 NULL, NULL, &errmsg, uuid ());
+      if (errmsg)
+	{
+	  debug (0, "%d: %s", err, errmsg);
+	  sqlite3_free (errmsg);
+	  sqlite3_exec (db, "rollback transaction;", NULL, NULL, NULL);
+	}
+    }
+  else if (count != 1)
+    /* Inconsistent.  */
+    {
+      debug (0, "%s has %d tables with name `uuid'?!?", filename, count);
+      abort ();
+    }
+
+
+  count = 0;
+  int uuid_check_callback (void *cookie, int argc, char **argv, char **names)
+  {
+    if (strcmp (argv[0], uuid ()) != 0)
+      debug (0, "WARNING: %s: UUID %s does not match %s!",
+	     filename, argv[0], uuid ());
+    return 0;
+  }
+
+  err = sqlite3_exec (db,
+		      "select uuid from uuid;",
+		      uuid_check_callback, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%s: %s", filename, errmsg);
+      sqlite3_free (errmsg);
+      if (err != SQLITE_ERROR)
+	abort ();
+    }
+}
+
 static sqlite3 *
 access_db_init (void)
 {
@@ -98,7 +326,6 @@ access_db_init (void)
   if (err)
     error (1, 0, "sqlite3_open (%s): %s",
 	   filename, sqlite3_errmsg (access_db));
-  free (filename);
 
   /* Sleep up to an hour if the database is busy...  */
   sqlite3_busy_timeout (access_db, 60 * 60 * 1000);
@@ -126,6 +353,10 @@ access_db_init (void)
       debug (0, "%d: %s", err, errmsg);
       sqlite3_free (errmsg);
     }
+
+  uuid_ensure (filename, access_db);
+
+  free (filename);
 
   return access_db;
 }
@@ -614,7 +845,6 @@ battery_monitor (void *arg)
   if (err)
     error (1, 0, "sqlite3_open (%s): %s",
 	   filename, sqlite3_errmsg (db));
-  free (filename);
 
   /* Sleep up to an hour if the database is busy...  */
   sqlite3_busy_timeout (db, 60 * 60 * 1000);
@@ -639,8 +869,11 @@ battery_monitor (void *arg)
     {
       debug (0, "%d: %s", err, errmsg);
       sqlite3_free (errmsg);
+      errmsg = NULL;
     }
 
+  uuid_ensure (filename, db);
+  free (filename);
 
   /* Second, get the batteries.  */
 
@@ -1006,7 +1239,6 @@ network_monitor (void *arg)
   if (err)
     error (1, 0, "sqlite3_open (%s): %s",
 	   filename, sqlite3_errmsg (db));
-  free (filename);
 
   /* Sleep up to an hour if the database is busy...  */
   sqlite3_busy_timeout (db, 60 * 60 * 1000);
@@ -1048,8 +1280,11 @@ network_monitor (void *arg)
     {
       debug (0, "%d: %s", err, errmsg);
       sqlite3_free (errmsg);
+      errmsg = NULL;
     }
 
+  uuid_ensure (filename, db);
+  free (filename);
 
   DBusError error;
   dbus_error_init (&error);
@@ -1753,7 +1988,6 @@ process_monitor (void *arg)
   if (err)
     error (1, 0, "sqlite3_open (%s): %s",
 	   filename, sqlite3_errmsg (db));
-  free (filename);
 
   /* Sleep up to an hour if the database is busy...  */
   sqlite3_busy_timeout (db, 60 * 60 * 1000);
@@ -1768,8 +2002,11 @@ process_monitor (void *arg)
     {
       debug (0, "%d: %s", err, errmsg);
       sqlite3_free (errmsg);
+      errmsg = NULL;
     }
 
+  uuid_ensure (filename, db);
+  free (filename);
 
   DBusError error;
   dbus_error_init (&error);
@@ -2102,6 +2339,9 @@ main (int argc, char *argv[])
     error (1, 0, "%s already running (pid: %d)", ssl, owner);
   free (pidfilename);
 
+  /* Make sure the UUID is available before we create any threads: the
+     function is not thread safe.  */
+  uuid ();
 
   signal (SIGTERM, signal_handler_quit);
   signal (SIGINT, signal_handler_quit);
