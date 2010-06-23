@@ -383,7 +383,8 @@ access_db_init (void)
 
 		      /* This table is a log of all accesses.  */
 		      "create table log "
-		      " (uid INTEGER,"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  uid INTEGER,"
 		      "  time INTEGER,"
 		      "  size_plus_one INTEGER);",
 		      NULL, NULL, &errmsg);
@@ -605,7 +606,8 @@ notice_add_helper (void *arg)
 	  debug (2, "%d: %s: %"PRId64, processed, filename, uid);
 	  sqlq_append_printf
 	    (sqlq, false,
-	     "insert into log values (%"PRId64",%"PRId64",%"PRId64");",
+	     "insert into log (uid, time, size_plus_one)"
+	     " values (%"PRId64",%"PRId64",%"PRId64");",
 	     uid, notice->time / 1000, (uint64_t) statbuf.st_size);
 
 	out:
@@ -897,11 +899,12 @@ battery_monitor (void *arg)
 		      "  voltage_design, voltage_unit,"
 		      "  reporting_design, reporting_unit);"
 
-		      /* BATTERY is ID of the battery in the BATTERIES
+		      /* ID is the ID of the battery in the BATTERIES
 			 table.  */
 		      "create table battery_log"
-		      " (id, year, yday, hour, min, sec,"
-		      "  battery, is_charging, is_discharging,"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  id, year, yday, hour, min, sec,"
+		      "  is_charging, is_discharging,"
 		      "  voltage, reporting, last_full);",
 		      NULL, NULL, &errmsg);
   if (errmsg)
@@ -1123,7 +1126,7 @@ battery_monitor (void *arg)
       int reporting_design = lookupi (device, "battery.reporting.design");
       char *reporting_unit = lookups (device, "battery.reporting.unit");
 
-      debug (0, "Battery %i (%s) ID: %d; "
+      debug (1, "Battery %i (%s) ID: %d; "
 	     "voltage design: %d %s; reporting design: %d %s",
 	     i, device, battery[i].id,
 	     voltage_design, voltage_unit, reporting_design, reporting_unit);
@@ -1145,10 +1148,6 @@ battery_monitor (void *arg)
 	}
 
       battery[i].id = sqlite3_last_insert_rowid (db);
-      debug (0, "Battery %i (%s) ID: %d; "
-	     "voltage design: %d %s; reporting design: %d %s",
-	     i, device, battery[i].id,
-	     voltage_design, voltage_unit, reporting_design, reporting_unit);
     }
 
   /* Set up a filter that looks for notifications that a battery's
@@ -1224,7 +1223,7 @@ battery_monitor (void *arg)
 	  int reporting = lookupi (device, "battery.reporting.current");
 	  int last_full = lookupi (device, "battery.reporting.last_full");
 
-	  debug (0, "Battery %i (%s) ID: %d; %scharging, %sdischarging, "
+	  debug (1, "Battery %i (%s) ID: %d; %scharging, %sdischarging, "
 		 "voltage: %d; reporting: %d; last_full: %d",
 		 i, device, id,
 		 is_charging ? "" : "not ", is_discharging ? "" : "not ",
@@ -1287,14 +1286,16 @@ network_monitor (void *arg)
 		      /* ID is the id of the connection.  It is
 			 corresponds to the ROWID in CONNECTIONS.  */
 		      "create table connection_log"
-		      " (year, yday, hour, min, sec,"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  year, yday, hour, min, sec,"
 		      "  service_type, service_attributes, service_id,"
 		      "  network_type, network_attributes, network_id, status);"
 
 		      /* ID is the id of the connection.  It is
 			 corresponds to the ROWID in CONNECTIONS.  */
 		      "create table stats_log"
-		      " (year, yday, hour, min, sec,"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  year, yday, hour, min, sec,"
 		      "  service_type, service_attributes, service_id,"
 		      "  network_type, network_attributes, network_id,"
 		      "  time_active, signal_strength, sent, received);"
@@ -1302,11 +1303,12 @@ network_monitor (void *arg)
 		      /* Time that a scan was initiated.  ROWID
 			 corresponds to ID in scan_log.  */
 		      "create table scans"
-		      " (year, yday, hour, min, sec);"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  year, yday, hour, min, sec);"
 
 		      /* ID corresponds to the ROWID of the scans table.  */
 		      "create table scan_log"
-		      " (id,"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT, id,"
 		      "  status, last_seen,"
 		      "  service_type, service_name, service_attributes,"
 		      "	 service_id, service_priority,"
@@ -1481,17 +1483,19 @@ network_monitor (void *arg)
 		       status_to_str (status));
 
 		struct tm tm = now_tm ();
-		if (sqlq_append_printf (sqlq, false,
-					"insert into connection_log values "
-					"(%d, %d, %d, %d, %d, "
-					" %Q, %d, %Q, %Q, %d, %Q, %Q);",
-					tm.tm_year, tm.tm_yday,
-					tm.tm_hour, tm.tm_min, tm.tm_sec,
-					service_type, service_attributes,
-					service_id,
-					network_type, network_attributes,
-					network_id,
-					status_to_str (status)))
+		if (sqlq_append_printf
+		    (sqlq, false,
+		     "insert into connection_log "
+		     " (year, yday, hour, min, sec,"
+		     "  service_type, service_attributes, service_id,"
+		     "  network_type, network_attributes, network_id, status)"
+		     " values"
+		     " (%d, %d, %d, %d, %d,"
+		     "  %Q, %d, %Q, %Q, %d, %Q, %Q);",
+		     tm.tm_year, tm.tm_yday, tm.tm_hour, tm.tm_min, tm.tm_sec,
+		     service_type, service_attributes, service_id,
+		     network_type, network_attributes, network_id,
+		     status_to_str (status)))
 		  {
 		    if (! need_sql_flush)
 		      need_sql_flush = now ();
@@ -1639,18 +1643,20 @@ network_monitor (void *arg)
 		   time_active, signal_strength, sent, received);
 
 	    struct tm tm = now_tm ();
-	    if (sqlq_append_printf (sqlq, false,
-				    "insert into stats_log values "
-				    "(%d, %d, %d, %d, %d, "
-				    " %Q, %d, %Q, %Q, %d, %Q, %d, %d, %d, %d);",
-				    tm.tm_year, tm.tm_yday,
-				    tm.tm_hour, tm.tm_min, tm.tm_sec,
-				    service_type, service_attributes,
-				    service_id,
-				    network_type, network_attributes,
-				    network_id,
-				    time_active, signal_strength,
-				    sent, received))
+	    if (sqlq_append_printf
+		(sqlq, false,
+		 "insert into stats_log"
+		 "(year, yday, hour, min, sec,"
+		 " service_type, service_attributes, service_id,"
+		 " network_type, network_attributes, network_id,"
+		 " time_active, signal_strength, sent, received)"
+		 "values"
+		 " (%d, %d, %d, %d, %d,"
+		 "  %Q, %d, %Q, %Q, %d, %Q, %d, %d, %d, %d);",
+		 tm.tm_year, tm.tm_yday, tm.tm_hour, tm.tm_min, tm.tm_sec,
+		 service_type, service_attributes, service_id,
+		 network_type, network_attributes, network_id,
+		 time_active, signal_strength, sent, received))
 	      {
 		if (! need_sql_flush)
 		  need_sql_flush = now ();
@@ -1738,20 +1744,26 @@ network_monitor (void *arg)
 
 	    if (status != ICD_SCAN_COMPLETE)
 	      {
-		if (sqlq_append_printf (sqlq, false,
-					"insert into scan_log values "
-					"(%d, %Q, %d, %Q, %Q, %d, %Q, %d,"
-					" %Q, %Q, %d, %Q, %d, %d, %d, %Q);",
-					scan_id,
-					scan_status_to_str (status), last_seen,
-					service_type, service_name,
-					service_attributes, service_id,
-					service_priority,
-					network_type, network_name,
-					network_attributes, network_id,
-					network_priority,
-					signal_strength, signal_strength_db,
-					station_id))
+		if (sqlq_append_printf
+		    (sqlq, false,
+		     "insert into scan_log "
+		     "(id, status, last_seen,"
+		     " service_type, service_name, service_attributes,"
+		     " service_id, service_priority,"
+		     " network_type, network_name, network_attributes,"
+		     " network_id, network_priority,"
+		     " signal_strength, signal_strength_db,"
+		     " station_id)"
+		     "values "		     
+		     "(%d, %Q, %d, %Q, %Q, %d, %Q, %d,"
+		     " %Q, %Q, %d, %Q, %d, %d, %d, %Q);",
+		     scan_id,
+		     scan_status_to_str (status), last_seen,
+		     service_type, service_name,
+		     service_attributes, service_id, service_priority,
+		     network_type, network_name,
+		     network_attributes, network_id, network_priority,
+		     signal_strength, signal_strength_db, station_id))
 		  {
 		    if (! need_sql_flush)
 		      need_sql_flush = now ();
@@ -1953,6 +1965,7 @@ network_monitor (void *arg)
 
 	      sqlq_append_printf (sqlq, true,
 				  "insert into scans "
+				  " (year, yday, hour, min, sec)"
 				  " values (%d, %d, %d, %d, %d);",
 				  tm.tm_year, tm.tm_yday,
 				  tm.tm_hour, tm.tm_min, tm.tm_sec);
@@ -2035,7 +2048,8 @@ process_monitor (void *arg)
   err = sqlite3_exec (db,
 		      /* STATUS is either "acquired" or "released".  */
 		      "create table process_log"
-		      " (year, yday, hour, min, sec, name, status);",
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  year, yday, hour, min, sec, name, status);",
 		      NULL, NULL, &errmsg);
   if (errmsg)
     {
@@ -2152,13 +2166,13 @@ process_monitor (void *arg)
 		debug (1, "%s abandoned %s", old_owner, name);
 
 		need_flush =
-		  sqlq_append_printf (sqlq, false,
-				      "insert into process_log "
-				      " values (%d, %d, %d, %d, %d, "
-				      "         %Q, 'released');",
-				      tm.tm_year, tm.tm_yday,
-				      tm.tm_hour, tm.tm_min, tm.tm_sec,
-				      name);
+		  sqlq_append_printf
+		  (sqlq, false,
+		   "insert into process_log "
+		   " (year, yday, hour, min, sec, name, status)"
+		   " values (%d, %d, %d, %d, %d, %Q, 'released');",
+		   tm.tm_year, tm.tm_yday, tm.tm_hour, tm.tm_min, tm.tm_sec,
+		   name);
 		did_something = true;
 	      }
 	    if (new_owner && *new_owner)
@@ -2166,13 +2180,13 @@ process_monitor (void *arg)
 		debug (1, "%s assumed %s", new_owner, name);
 
 		need_flush =
-		  sqlq_append_printf (sqlq, false,
-				      "insert into process_log "
-				      " values (%d, %d, %d, %d, %d, "
-				      "         %Q, 'acquired');",
-				      tm.tm_year, tm.tm_yday,
-				      tm.tm_hour, tm.tm_min, tm.tm_sec,
-				      name);
+		  sqlq_append_printf
+		  (sqlq, false,
+		   "insert into process_log "
+		   " (year, yday, hour, min, sec, name, status)"
+		   " values (%d, %d, %d, %d, %d, %Q, 'acquired');",
+		   tm.tm_year, tm.tm_yday, tm.tm_hour, tm.tm_min, tm.tm_sec,
+		   name);
 		did_something = true;
 	      }
 
@@ -2207,6 +2221,7 @@ process_monitor (void *arg)
     struct tm tm = now_tm ();
     sqlq_append_printf (sqlq, false,
 			"insert into process_log "
+			" (year, yday, hour, min, sec, name, status)"
 			" values (%d, %d, %d, %d, %d, '', 'system_start');",
 			tm.tm_year, tm.tm_yday,
 			tm.tm_hour, tm.tm_min, tm.tm_sec);
