@@ -68,47 +68,15 @@ uuid (void)
   /* Sleep up to an hour if the database is busy...  */
   sqlite3_busy_timeout (db, 60 * 60 * 1000);
 
-  /* Figure out if the table has already been created.  */
-  int count = 0;
-  int tbl_callback (void *cookie, int argc, char **argv, char **names)
-  {
-    count = atoi (argv[0]);
-    return 0;
-  }
-
   char *errmsg = NULL;
   err = sqlite3_exec (db,
-		      "select count (*) from sqlite_master"
-		      " where type='table' and name='uuid';",
-		      tbl_callback, NULL, &errmsg);
+		      "create table if not exists uuid (uuid PRIMARY KEY);",
+		      NULL, NULL, &errmsg);
   if (errmsg)
     {
-      debug (0, "%s: %s", filename, errmsg);
+      debug (0, "%d: %s", err, errmsg);
       sqlite3_free (errmsg);
       errmsg = NULL;
-      if (err != SQLITE_ERROR)
-	abort ();
-    }
-
-  if (count == 0)
-    /* No, create it.  */
-    {
-      char *errmsg = NULL;
-      err = sqlite3_exec (db,
-			  "create table uuid (uuid PRIMARY KEY);",
-			  NULL, NULL, &errmsg);
-      if (errmsg)
-	{
-	  debug (0, "%d: %s", err, errmsg);
-	  sqlite3_free (errmsg);
-	  errmsg = NULL;
-	}
-    }
-  else if (count != 1)
-    /* Inconsistent.  */
-    {
-      debug (0, "%s has %d tables with name `uuid'?!?", filename, count);
-      abort ();
     }
 
   uploader_table_register (filename, "uuid", false);
@@ -336,7 +304,7 @@ access_db_init (void)
 		      /* This table maps filenames to uids and back.
 			 It also records who owns the file (if
 			 any).  */
-		      "create table files "
+		      "create table if not exists files "
 		      " (uid INTEGER PRIMARY KEY,"
 		      "  filename STRING NOT NULL UNIQUE,"
 		      "  application STRING,"
@@ -344,7 +312,7 @@ access_db_init (void)
 		      " );"
 
 		      /* This table is a log of all accesses.  */
-		      "create table log "
+		      "create table if not exists log"
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
 		      "  uid INTEGER,"
 		      "  time INTEGER,"
@@ -842,7 +810,7 @@ battery_monitor (void *arg)
   char *errmsg = NULL;
   err = sqlite3_exec (db,
 		      /* A list of batteries.  */
-		      "create table batteries"
+		      "create table if not exists batteries"
 		      " (id INTEGER PRIMARY KEY,"
 		      "  device,"
 		      "  voltage_design, voltage_unit,"
@@ -850,7 +818,7 @@ battery_monitor (void *arg)
 
 		      /* ID is the ID of the battery in the BATTERIES
 			 table.  */
-		      "create table battery_log"
+		      "create table if not exists battery_log"
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
 		      "  id, year, yday, hour, min, sec,"
 		      "  is_charging, is_discharging,"
@@ -1237,7 +1205,7 @@ network_monitor (void *arg)
   err = sqlite3_exec (db,
 		      /* ID is the id of the connection.  It is
 			 corresponds to the ROWID in CONNECTIONS.  */
-		      "create table connection_log"
+		      "create table if not exists connection_log "
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
 		      "  year, yday, hour, min, sec,"
 		      "  service_type, service_attributes, service_id,"
@@ -1245,7 +1213,7 @@ network_monitor (void *arg)
 
 		      /* ID is the id of the connection.  It is
 			 corresponds to the ROWID in CONNECTIONS.  */
-		      "create table stats_log"
+		      "create table if not exists stats_log"
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
 		      "  year, yday, hour, min, sec,"
 		      "  service_type, service_attributes, service_id,"
@@ -1254,12 +1222,12 @@ network_monitor (void *arg)
 
 		      /* Time that a scan was initiated.  ROWID
 			 corresponds to ID in scan_log.  */
-		      "create table scans"
+		      "create table if not exists scans"
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
 		      "  year, yday, hour, min, sec);"
 
 		      /* ID corresponds to the ROWID of the scans table.  */
-		      "create table scan_log"
+		      "create table if not exists scan_log"
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT, id,"
 		      "  status, last_seen,"
 		      "  service_type, service_name, service_attributes,"
@@ -2005,7 +1973,7 @@ process_monitor (void *arg)
   char *errmsg = NULL;
   err = sqlite3_exec (db,
 		      /* STATUS is either "acquired" or "released".  */
-		      "create table process_log"
+		      "create table if not exists process_log"
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
 		      "  year, yday, hour, min, sec, name, status);",
 		      NULL, NULL, &errmsg);
@@ -2030,18 +1998,21 @@ process_monitor (void *arg)
   for (i = 0; i < tries; i ++)
     {
       connection = dbus_bus_get_private (DBUS_BUS_SESSION, &error);
-      if (connection == NULL)
-	{
-	  debug (0, "Failed to open connection to bus: %s", error.message);
-	  dbus_error_free (&error);
+      if (connection)
+	break;
 
-	  /* Maybe it the session dbus just hasn't started yet.  */
-	  debug (0, "Waiting 60 seconds and trying again.");
-	  sleep (60);
-	}
+      debug (0, "Failed to open connection to bus: %s", error.message);
+      dbus_error_free (&error);
+
+      /* Maybe it the session dbus just hasn't started yet.  */
+      debug (0, "Waiting 60 seconds and trying again.");
+      sleep (60);
     }
   if (i == tries)
-    return NULL;
+    {
+      debug (0, "Failed to connect to session bus.  Giving up!");
+      return NULL;
+    }
 
   /* Set up signal watchers.  */
   {
@@ -2078,7 +2049,7 @@ process_monitor (void *arg)
   DBusHandlerResult process_callback (DBusConnection *connection,
 				      DBusMessage *message, void *user_data)
   {
-    debug (2, "Got message (%p): %s->%s (%d args)",
+    debug (5, "Got message (%p): %s->%s (%d args)",
 	   message, dbus_message_get_path (message),
 	   dbus_message_get_member (message),
 	   dbus_message_args_count (message));
@@ -2219,14 +2190,14 @@ process_monitor (void *arg)
 	  if (n - need_sql_flush >= FLUSH_MAX_LATENCY
 	      || n - last_sql_append >= FLUSH_IDLE_LATENCY)
 	    {
-	      debug (0, "Flushing SQL buffer.");
+	      debug (1, "Flushing SQL buffer.");
 	      sqlq_flush (sqlq);
 	      need_sql_flush = 0;
 	    }
 	  else
 	    {
 	      flush_timeout = last_sql_append + FLUSH_IDLE_LATENCY - n;
-	      debug (0, "Flushing SQL buffer in "TIME_FMT,
+	      debug (1, "Flushing SQL buffer in "TIME_FMT,
 		     TIME_PRINTF (flush_timeout));
 	    }
 	}
