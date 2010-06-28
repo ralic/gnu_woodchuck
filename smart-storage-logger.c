@@ -15,6 +15,8 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111, USA. */
 
+#include "config.h"
+
 #include <inttypes.h>
 #include <stdint.h>
 #include <string.h>
@@ -41,54 +43,12 @@
 #include "sqlq.h"
 #include "pidfile.h"
 
-#include "config.h"
+#include "files.h"
+#include "uploader.h"
 
 static int inotify_fd;
 
-/* The directory under which we monitor files for changes (not
-   including a trailing slash).  */
-static char *base;
-/* strlen (base).  */
-static int base_len;
-
-/* The directory (under the user's home directory) in which we store
-   the log file.  */
-#define DOT_DIR ".smart-storage"
-/* The directory's absolute path.  */
-static char *dot_dir;
-/* strlen (dot_dir).  */
-static int dot_dir_len;
-
-/* Returns whether FILENAME is DOT_DIR or is under DOT_DIR.  */
-static bool
-under_dot_dir (const char *filename)
-{
-  return (strncmp (filename, dot_dir, dot_dir_len) == 0
-	  && (filename[dot_dir_len] == '\0'
-	      || filename[dot_dir_len] == '/'));
-}
-
-static char *
-log_file (char *filename)
-{
-  /* This will fail in the common case that the directory already
-     exists.  */
-  mkdir (dot_dir, 0750);
-
-  char *dir = NULL;
-  if (asprintf (&dir, "%s/logs", dot_dir) < 0)
-    error (1, 0, "out of memory");
-  mkdir (dir, 0750);
-
-  char *abs_filename = NULL;
-  if (asprintf (&abs_filename, "%s/%s", dir, filename) < 0)
-    error (1, 0, "out of memory");
-  free (dir);
-
-  return abs_filename;
-}
-
-static const char *
+const char *
 uuid (void)
 {
   static char *my_uuid = NULL;
@@ -151,6 +111,8 @@ uuid (void)
       abort ();
     }
 
+  uploader_table_register (filename, "uuid", false);
+
   /* Find the computer's UUID.  */
   int got = 0;
   int callback (void *cookie, int argc, char **argv, char **names)
@@ -195,7 +157,7 @@ uuid (void)
   if (input)
     {
       fread (uuid.str, 1, sizeof (uuid.str) - 1, input);
-      fclose (input);
+      pclose (input);
     }
   else
     debug (0, "Running (...) | md5sum: %m");
@@ -393,6 +355,9 @@ access_db_init (void)
       debug (0, "%d: %s", err, errmsg);
       sqlite3_free (errmsg);
     }
+
+  uploader_table_register (filename, "files", false);
+  uploader_table_register (filename, "log", true);
 
   uuid_ensure (filename, access_db);
 
@@ -858,22 +823,6 @@ inotify_mask_to_string (uint32_t mask)
 #include <dbus/dbus.h>
 #include "dbus-print-message.h"
 
-static int
-dbus_message_args_count (DBusMessage *message)
-{
-  DBusMessageIter iter;
-  if (! dbus_message_iter_init (message, &iter))
-    return 0;
-
-  int count;
-  for (count = 0;
-       dbus_message_iter_get_arg_type (&iter) != DBUS_TYPE_INVALID;
-       count ++, dbus_message_iter_next (&iter))
-    ;
-
-  return count;
-}
-
 static void *
 battery_monitor (void *arg)
 {
@@ -913,6 +862,9 @@ battery_monitor (void *arg)
       sqlite3_free (errmsg);
       errmsg = NULL;
     }
+
+  uploader_table_register (filename, "batteries", false);
+  uploader_table_register (filename, "battery_log", true);
 
   uuid_ensure (filename, db);
   free (filename);
@@ -1324,6 +1276,11 @@ network_monitor (void *arg)
       errmsg = NULL;
     }
 
+  uploader_table_register (filename, "connection_log", true);
+  uploader_table_register (filename, "stats_log", true);
+  uploader_table_register (filename, "scans", true);
+  uploader_table_register (filename, "scan_log", true);
+
   uuid_ensure (filename, db);
   free (filename);
 
@@ -1553,7 +1510,8 @@ network_monitor (void *arg)
 
 		  stat_done:
 		    dbus_message_unref (message);
-		    dbus_message_unref (reply);
+		    if (reply)
+		      dbus_message_unref (reply);
 		  }
 	      }
 	  case 2:;
@@ -2058,6 +2016,8 @@ process_monitor (void *arg)
       errmsg = NULL;
     }
 
+  uploader_table_register (filename, "process_log", true);
+
   uuid_ensure (filename, db);
   free (filename);
 
@@ -2163,7 +2123,7 @@ process_monitor (void *arg)
 	    bool need_flush = false;
 	    if (old_owner && *old_owner)
 	      {
-		debug (1, "%s abandoned %s", old_owner, name);
+		debug (0, "%s abandoned %s", old_owner, name);
 
 		need_flush =
 		  sqlq_append_printf
@@ -2177,7 +2137,7 @@ process_monitor (void *arg)
 	      }
 	    if (new_owner && *new_owner)
 	      {
-		debug (1, "%s assumed %s", new_owner, name);
+		debug (0, "%s assumed %s", new_owner, name);
 
 		need_flush =
 		  sqlq_append_printf
@@ -2259,12 +2219,16 @@ process_monitor (void *arg)
 	  if (n - need_sql_flush >= FLUSH_MAX_LATENCY
 	      || n - last_sql_append >= FLUSH_IDLE_LATENCY)
 	    {
-	      debug (1, "Flushing SQL buffer.");
+	      debug (0, "Flushing SQL buffer.");
 	      sqlq_flush (sqlq);
 	      need_sql_flush = 0;
 	    }
 	  else
-	    flush_timeout = last_sql_append + FLUSH_IDLE_LATENCY - n;
+	    {
+	      flush_timeout = last_sql_append + FLUSH_IDLE_LATENCY - n;
+	      debug (0, "Flushing SQL buffer in "TIME_FMT,
+		     TIME_PRINTF (flush_timeout));
+	    }
 	}
 
       timeout = flush_timeout;
@@ -2284,7 +2248,7 @@ process_monitor (void *arg)
 
 static volatile int quit;
 
-static pthread_t tid[5];
+static pthread_t tid[6];
 
 static void
 signal_handler_quit (int sig)
@@ -2324,16 +2288,7 @@ main (int argc, char *argv[])
       return 1;
     }
 
-#ifdef HAVE_MAEMO
-  /* Monitor the user's home directory even when run as root.  */
-  base = "/home/user";
-#else
-  base = getenv ("HOME");
-#endif
-  base_len = strlen (base);
-
-  asprintf (&dot_dir, "%s/"DOT_DIR, base);
-  dot_dir_len = strlen (dot_dir);
+  files_init ();
 
   char *pidfilename = log_file ("pid");
   const char *ssl = "smart-storage-logger";
@@ -2438,6 +2393,10 @@ main (int argc, char *argv[])
   err = pthread_create (&tid[4], NULL, process_monitor, NULL);
   if (err < 0)
     error (1, errno, "pthread_create");
+
+  err = pthread_create (&tid[5], NULL, uploader_thread, NULL);
+  if (err < 0)
+    error (1, errno, "pthread_create (uploader_thread)");
 
 
   char buffer[16 * 4096];

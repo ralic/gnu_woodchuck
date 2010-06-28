@@ -14,6 +14,8 @@
       max_x = max_y;				\
     max_x;					\
   })
+#define MAX3(x, y, z) MAX (x, MAX (y, z))
+#define MAX4(x, y, z, a) MAX (MAX (x, a), MAX (y, z))
 
 #define MIN(x, y)				\
   ({						\
@@ -154,5 +156,22 @@ sqlite3_exec_printf (sqlite3 *db, const char *sql,
 
   return ret;
 }
+
+#define dbus_message_args_count(dmac_message)				\
+  ({									\
+    DBusMessage *dmac_message_ = (dmac_message);			\
+    DBusMessageIter dmac_iter;						\
+    int dmac_count = 0;							\
+    if (dbus_message_iter_init (dmac_message_, &dmac_iter))		\
+      {									\
+	for (dmac_count = 0;						\
+	     dbus_message_iter_get_arg_type (&dmac_iter)		\
+	       != DBUS_TYPE_INVALID;					\
+	     dmac_count ++, dbus_message_iter_next (&dmac_iter))	\
+	  ;								\
+      }									\
+									\
+    dmac_count;								\
+  })
 
 #endif
