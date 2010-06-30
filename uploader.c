@@ -284,7 +284,7 @@ upload (void)
 	    }
 
 	  debug (0, "%s.%s: %"PRId64" records need synchronization",
-		 dbname, t->table, t->stake - t->through);
+		 d->filename, t->table, t->stake - t->through);
 
 	  char *name = sanitize_strings (dbname, t->table);
 	  obstack_printf (&gather,
@@ -387,7 +387,6 @@ upload (void)
   /* NUL terminate the SQL string.  */
   obstack_1grow (&flush, 0);
   sql = obstack_finish (&flush);
-  debug (0, "Flushing: `%s'", sql);
 
   err = sqlite3_exec (db, sql, NULL, NULL, &errmsg);
   if (errmsg)
@@ -569,17 +568,57 @@ uploader_thread (void *arg)
 		       network_type, network_attributes, network_id,
 		       status_to_str (status));
 
-		if (status == ICD_STATE_CONNECTED)
+		if (status == ICD_STATE_CONNECTING)
 		  {
+		    debug (0, "Connecting to %s.", network_type);
 		    if (strncmp (network_type, "WLAN_", 5) == 0)
 		      {
-			debug (0, "Connected (%s).", network_type);
+			debug (0, "Setting connected timer (was: "TIME_FMT").",
+			       TIME_PRINTF (connected == 0
+					    ? -1 : now () - connected));
+			connected = now ();
+		      }
+		  }
+		if (status == ICD_STATE_CONNECTED)
+		  {
+		    debug (0, "Connected to %s.", network_type);
+		    if (strncmp (network_type, "WLAN_", 5) == 0
+			&& ! connected)
+		      {
+			debug (0, "Setting connected timer (was: "TIME_FMT").",
+			       TIME_PRINTF (connected == 0
+					    ? -1 : now () - connected));
 			connected = now ();
 		      }
 		  }
 
-		if (status == ICD_STATE_DISCONNECTING)
-		  connected = 0;
+		if (status == ICD_STATE_DISCONNECTED)
+		  /* It is possible that there is another connection
+		     that is active.  This happens when changing
+		     connections: the old connection is only
+		     disconnected after the new connection has been
+		     connected.  To determine the current real state,
+		     we reset the connected timer to 0 (= not
+		     connected) and then send a state request.  If we
+		     are connected, we'll get an ICD_STATE_CONNECTED
+		     signal and if appropriate, this will set
+		     CONNECTED.  */
+		  {
+		    debug (0, "Disconnected from %s", network_type);
+		    debug (0, "Reseting connected timer (was: "TIME_FMT").",
+			   TIME_PRINTF (connected == 0
+					? -1 : now () - connected));
+		    connected = 0;
+
+		    DBusMessage *message = dbus_message_new_method_call
+		      (/* Service.  */ ICD_DBUS_API_INTERFACE,
+		       /* Object.  */ ICD_DBUS_API_PATH,
+		       /* Interface.  */ ICD_DBUS_API_INTERFACE,
+		       /* Method.  */ ICD_DBUS_API_STATE_REQ);
+
+		    dbus_connection_send (connection, message, NULL);
+		    dbus_message_unref (message);
+		  }
 	      }
 	  case 2:
 	    /* Broadcast when a network search begins or ends.  */
@@ -605,7 +644,7 @@ uploader_thread (void *arg)
 	  }
 	else
 	  {
-	    debug (0, "Inactive: %s", inactive_p ? "yes" : "no");
+	    debug (1, "Inactive: %s", inactive_p ? "yes" : "no");
 	    if (inactive_p)
 	      inactive = now ();
 	    else
@@ -662,7 +701,7 @@ uploader_thread (void *arg)
 	  }
 	else
 	  {
-	    debug (0, "Inactive: %s", inactive_p ? "yes" : "no");
+	    debug (1, "Inactive: %s", inactive_p ? "yes" : "no");
 	    if (inactive_p)
 	      inactive = now ();
 	    else
@@ -672,7 +711,7 @@ uploader_thread (void *arg)
       }
     else
       {
-	debug (0, "Sending  to grok system_inactivity_ind: %s",
+	debug (0, "Failed to grok system_inactivity_ind: %s",
 	       error.message);
 	dbus_error_free (&error);
       }
@@ -790,7 +829,7 @@ uploader_thread (void *arg)
 
 	  upload_timeout = MAX4 (connect_timeout, inactivity_timeout,
 				 age_timeout, retry_timeout);
-	  debug (0, "Timeouts: connected "TIME_FMT"; "
+	  debug (1, "Timeouts: connected "TIME_FMT"; "
 		 "inactivity "TIME_FMT"; "
 		 "data's age "TIME_FMT"; "
 		 "last try: "TIME_FMT" => "TIME_FMT,

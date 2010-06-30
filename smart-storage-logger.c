@@ -1310,7 +1310,7 @@ network_monitor (void *arg)
       }
   }
 
-  bool am_connected = true;
+  bool am_connected = false;
   uint64_t last_stats = 0;
 
   /* Number of network types being scanned.  */
@@ -1474,8 +1474,7 @@ network_monitor (void *arg)
 		else
 		  need_sql_flush = last_sql_append = 0;
 
-		if (status == ICD_STATE_CONNECTING
-		    && am_connected)
+		if (status == ICD_STATE_CONNECTING && am_connected)
 		  /* It seems that the user is changing networks.  We
 		     have a chance to get the old network's stats as
 		     the old network is only disconnected after the
@@ -1538,6 +1537,14 @@ network_monitor (void *arg)
 		    if (reply)
 		      dbus_message_unref (reply);
 		  }
+
+		if (status == ICD_STATE_DISCONNECTED)
+		  /* When changing from one connection to another
+		     (e.g., GPRS to WLAN), the old connection only
+		     enters DISCONNECTED after the new connection has
+		     entered CONNECTED.  We force a stats to see if we
+		     are still connected or not.  */
+		  last_stats = 0;
 
 		free (rx);
 		free (tx);
@@ -1846,15 +1853,13 @@ network_monitor (void *arg)
       delta = n - last_stats;
       /* Read statistics.  */
       int64_t stat_timeout = INT64_MAX;
-      if (am_connected)
+      if (last_stats == 0 || am_connected)
 	{
 	  if (last_stats == 0 || delta >= STATS_FREQ - STATS_FREQ / 8)
 	    /* Time (or, almost time) to get some new stats.  */
 	    {
 	      debug (1, "Requesting network statistics (last %d seconds ago).",
 		     (int) (delta / 1000));
-
-	      am_connected = false;
 
 	      DBusMessage *message = dbus_message_new_method_call
 		(/* Service.  */ ICD_DBUS_API_INTERFACE,
@@ -1886,11 +1891,9 @@ network_monitor (void *arg)
 
 	      debug (1, "%d statistics sent.", connected);
 
-	      if (connected > 0)
-		{
-		  am_connected = true;
-		  stat_timeout = STATS_FREQ;
-		}
+	      am_connected = !!connected;
+	      if (am_connected)
+		stat_timeout = STATS_FREQ;
 
 	      last_stats = n;
 
