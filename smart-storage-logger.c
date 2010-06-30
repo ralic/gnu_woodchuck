@@ -2069,7 +2069,7 @@ process_monitor (void *arg)
       debug (0, "Failed to open connection to bus: %s", error.message);
       dbus_error_free (&error);
 
-      /* Maybe it the session dbus just hasn't started yet.  */
+      /* Maybe the session dbus just hasn't started yet.  */
       debug (0, "Waiting 60 seconds and trying again.");
       sleep (60);
     }
@@ -2126,8 +2126,6 @@ process_monitor (void *arg)
 	       dbus_message_get_path (message));
 	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
       }
-
-    const char *member = dbus_message_get_member (message);
 
     if (dbus_message_is_signal (message, "org.freedesktop.DBus",
 				"NameOwnerChanged"))
@@ -2203,6 +2201,7 @@ process_monitor (void *arg)
       }
     else
       {
+	const char *member = dbus_message_get_member (message);
 	debug (5, "Ignoring irrelevant method: %s", member);
 	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
       }
@@ -2282,9 +2281,282 @@ process_monitor (void *arg)
   return NULL;
 }
 
+static void *
+activity_monitor (void *arg)
+{
+  /* First, open the database.  */
+
+  char *filename = log_file ("activity.db");
+
+  sqlite3 *db;
+  int err = sqlite3_open (filename, &db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   filename, sqlite3_errmsg (db));
+
+  /* Sleep up to an hour if the database is busy...  */
+  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+
+  char *errmsg = NULL;
+  err = sqlite3_exec (db,
+		      /* STATUS is either "boot", "shutdown", "active"
+			 or "inactive."  */
+		      "create table if not exists activity_log"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  year, yday, hour, min, sec, status);",
+		      NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  uploader_table_register (filename, "activity_log", true);
+
+  uuid_ensure (filename, db);
+  free (filename);
+
+  DBusError error;
+  dbus_error_init (&error);
+
+  DBusConnection *connection;
+  int i;
+  const int tries = 5;
+  for (i = 0; i < tries; i ++)
+    {
+      connection = dbus_bus_get_private (DBUS_BUS_SYSTEM, &error);
+      if (connection)
+	break;
+
+      debug (0, "Failed to open connection to bus: %s", error.message);
+      dbus_error_free (&error);
+
+      /* Maybe the system dbus just hasn't started yet.  */
+      debug (0, "Waiting 60 seconds and trying again.");
+      sleep (60);
+    }
+  if (i == tries)
+    {
+      debug (0, "Failed to connect to system bus.  Giving up!");
+      return NULL;
+    }
+
+  /* Set up signal watchers.  */
+  {
+    char *matches[] =
+      {	/* For activity/inactivity state changes. */
+	"type='signal',"
+	"interface='com.nokia.mce.signal',"
+	"member='system_inactivity_ind',"
+	"path='/com/nokia/mce/signal'",
+
+	/* System shutdown.  */
+	"type='signal',"
+	"interface='com.nokia.dsme.signal',"
+	"path='/com/nokia/dsme/signal',"
+	"member='shutdown_ind'",
+      };
+
+    int i;
+    for (i = 0; i < sizeof (matches) / sizeof (matches[0]); i ++)
+      {
+	char *match = matches[i];
+
+	debug (2, "Adding match %s", match);
+	dbus_bus_add_match (connection, match, &error);
+	if (dbus_error_is_set (&error))
+	  {
+	    debug (0, "Error adding match %s: %s", match, error.message);
+	    dbus_error_free (&error);
+	  }
+      }
+  }
+
+  uint64_t need_sql_flush = 0;
+  uint64_t last_sql_append = 0;
+
+  char buffer[16 * 4096];
+  struct sqlq *sqlq = sqlq_new_static (db, buffer, sizeof (buffer));
+
+
+  DBusHandlerResult activity_callback (DBusConnection *connection,
+				       DBusMessage *message, void *user_data)
+  {
+    debug (5, "Got message (%p): %s->%s (%d args)",
+	   message, dbus_message_get_path (message),
+	   dbus_message_get_member (message),
+	   dbus_message_args_count (message));
+    // print_message (message, false);
+
+    if (! dbus_message_has_path (message, "/org/freedesktop/DBus"))
+      {
+	debug (2, "Ignoring message with path %s",
+	       dbus_message_get_path (message));
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+      }
+
+    char *status = NULL;
+
+    if ((dbus_message_has_path (message, "/com/nokia/mce/signal")
+	 && dbus_message_is_signal (message,
+				    "com.nokia.mce.signal",
+				    "system_inactivity_ind"))
+	|| GPOINTER_TO_INT (user_data) == 1)
+      {
+	bool inactive = false;
+	if (! dbus_message_get_args (message, &error,
+				     DBUS_TYPE_BOOLEAN, &inactive,
+				     DBUS_TYPE_INVALID))
+	  {
+	    debug (0, "Failed to grok system_inactivity_ind: %s",
+		   error.message);
+	    dbus_error_free (&error);
+	  }
+	else
+	  {
+	    if (inactive)
+	      status = "inactive";
+	    else
+	      status = "active";
+	  }
+      }
+    else if (dbus_message_has_path (message, "/com/nokia/dsme/signal")
+	     && dbus_message_is_signal (message,
+					"com.nokia.dsme.signal",
+					"shutdown_ind"))
+      /* System shutdown.  */
+      {
+	debug (0, "System going down!");
+	status = "shutdown";
+      }
+    else
+      {
+	const char *member = dbus_message_get_member (message);
+	debug (5, "Ignoring irrelevant method: %s", member);
+	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
+      }
+
+    if (status)
+      {
+	struct tm tm = now_tm ();
+	if (sqlq_append_printf
+	    (sqlq, false,
+	     "insert into activity_log"
+	     " (year, yday, hour, min, sec, status)"
+	     " values (%d, %d, %d, %d, %d, '%s');",
+	     tm.tm_year, tm.tm_yday, tm.tm_hour, tm.tm_min, tm.tm_sec, status))
+	  {
+	    if (! need_sql_flush)
+	      need_sql_flush = now ();
+	    last_sql_append = now ();
+	  }
+	else
+	  need_sql_flush = last_sql_append = 0;
+      }
+
+    return DBUS_HANDLER_RESULT_HANDLED;
+  }
+  if (! dbus_connection_add_filter (connection, activity_callback, NULL, NULL))
+    debug (0, "Failed to add filter: out of memory");
+
+
+  {
+    struct tm tm = now_tm ();
+    sqlq_append_printf (sqlq, false,
+			"insert into activity_log"
+			" (year, yday, hour, min, sec, status)"
+			" values (%d, %d, %d, %d, %d, 'system_start');",
+			tm.tm_year, tm.tm_yday,
+			tm.tm_hour, tm.tm_min, tm.tm_sec);
+  }
+
+  /* Discover the device's activity state.  */
+  {
+    DBusMessage *message = dbus_message_new_method_call
+      (/* Service.  */  "com.nokia.mce",
+       /* Object.  */ "/com/nokia/mce/request",
+       /* Interface.  */ "com.nokia.mce.request",
+       /* Method.  */ "get_inactivity_status");
+
+    DBusMessage *reply = dbus_connection_send_with_reply_and_block
+      (connection, message, 60 * 1000, &error);
+    dbus_message_unref (message);
+    if (reply)
+      {
+	activity_callback (connection, reply, GINT_TO_POINTER (1));
+	dbus_message_unref (reply);
+      }
+    else
+      {
+	debug (0, "Failed to grok system_inactivity_ind: %s",
+	       error.message);
+	dbus_error_free (&error);
+      }
+  }
+
+  void cleanup (void *arg)
+  {
+    sqlq_flush (sqlq);
+  }
+  pthread_cleanup_push (cleanup, NULL);
+
+  /* The maximum amount of time we are willing to tolerate data in the
+     SQL buffer before it must be flushed and the maximum amount of
+     IDLE time before we force a flush.  */
+#define FLUSH_MAX_LATENCY (60 * 1000)
+#define FLUSH_IDLE_LATENCY (2 * 1000)
+  int64_t timeout;
+  do
+    {
+      if (dbus_connection_get_dispatch_status (connection)
+	  == DBUS_DISPATCH_DATA_REMAINS)
+	/* There is more data to process, try to bulk up any
+	   updates.  */
+	{
+	  while (dbus_connection_dispatch (connection)
+		 == DBUS_DISPATCH_DATA_REMAINS)
+	    ;
+	}
+
+      uint64_t n = now ();
+
+      int64_t flush_timeout = INT64_MAX;
+      if (need_sql_flush)
+	{
+	  if (n - need_sql_flush >= FLUSH_MAX_LATENCY
+	      || n - last_sql_append >= FLUSH_IDLE_LATENCY)
+	    {
+	      debug (1, "Flushing SQL buffer.");
+	      sqlq_flush (sqlq);
+	      need_sql_flush = 0;
+	    }
+	  else
+	    {
+	      flush_timeout = last_sql_append + FLUSH_IDLE_LATENCY - n;
+	      debug (1, "Flushing SQL buffer in "TIME_FMT,
+		     TIME_PRINTF (flush_timeout));
+	    }
+	}
+
+      timeout = flush_timeout;
+
+      debug (1, "Timeout: %"PRId64" s ",
+	     timeout == INT64_MAX ? -1 : (timeout / 1000));
+    }
+  while (dbus_connection_read_write_dispatch
+	 (connection, timeout == INT64_MAX ? -1: timeout));
+
+  pthread_cleanup_pop (true);
+
+  debug (0, "Activity monitor disconnected.");
+
+  return NULL;
+}
+
 static volatile int quit;
 
-static pthread_t tid[6];
+static pthread_t tid[7];
 
 static void
 signal_handler_quit (int sig)
@@ -2430,7 +2702,11 @@ main (int argc, char *argv[])
   if (err < 0)
     error (1, errno, "pthread_create");
 
-  err = pthread_create (&tid[5], NULL, uploader_thread, NULL);
+  err = pthread_create (&tid[5], NULL, activity_monitor, NULL);
+  if (err < 0)
+    error (1, errno, "pthread_create (activity_monitor)");
+
+  err = pthread_create (&tid[6], NULL, uploader_thread, NULL);
   if (err < 0)
     error (1, errno, "pthread_create (uploader_thread)");
 
