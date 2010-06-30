@@ -1182,8 +1182,13 @@ battery_monitor (void *arg)
 
 #ifdef HAVE_MAEMO
 /* ICD is maemo specific.  */
-
 #include <icd/dbus_api.h>
+
+/* Be careful here!  GConf does not appear to be thread safe!  Since
+   we are only using gconf from this one thread, things should be
+   okay.  If this changes, we'll have to implement our own locking or
+   use a glib main loop.  */
+#include <gconf/gconf.h>
 
 static void *
 network_monitor (void *arg)
@@ -1209,7 +1214,8 @@ network_monitor (void *arg)
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
 		      "  year, yday, hour, min, sec,"
 		      "  service_type, service_attributes, service_id,"
-		      "  network_type, network_attributes, network_id, status);"
+		      "  network_type, network_attributes, network_id, status,"
+		      "  rx, tx);"
 
 		      /* ID is the id of the connection.  It is
 			 corresponds to the ROWID in CONNECTIONS.  */
@@ -1319,6 +1325,8 @@ network_monitor (void *arg)
   char buffer[16 * 4096];
   struct sqlq *sqlq = sqlq_new_static (db, buffer, sizeof (buffer));
 
+  GConfEngine *gconf = NULL;
+
   DBusHandlerResult network_callback (DBusConnection *connection,
 				      DBusMessage *message, void *user_data)
   {
@@ -1401,11 +1409,47 @@ network_monitor (void *arg)
 	      }
 	    else
 	      {
-		debug (1, "Service: %s; %x; %s; "
-		       "Network: %s; %x; %s; status: %s",
+		char *rx = NULL;
+		char *tx = NULL;
+		if (strcmp (network_type, "GPRS") == 0
+		    && (status == ICD_STATE_CONNECTING
+			|| status == ICD_STATE_DISCONNECTED))
+		  {
+		    if (! gconf)
+		      gconf = gconf_engine_get_default ();
+
+		    GError *err = NULL;
+		    rx = gconf_engine_get_string
+		      (gconf,
+		       "/system/osso/connectivity/network_type/"
+		       "GPRS/gprs_home_rx_bytes",
+		       &err);
+		    if (err)
+		      {
+			debug (0, "Reading rx from gconf: %s", err->message);
+			g_error_free (err);
+			err = NULL;
+		      }
+		    tx = gconf_engine_get_string
+		      (gconf,
+		       "/system/osso/connectivity/network_type/"
+		       "GPRS/gprs_home_tx_bytes",
+		       &err);
+		    if (err)
+		      {
+			debug (0, "Reading tx from gconf: %s", err->message);
+			g_error_free (err);
+			err = NULL;
+		      }
+
+		    debug (0, "rx: %s; tx: %s", rx, tx);
+		  }
+
+		debug (0, "Service: %s; %x; %s; "
+		       "Network: %s; %x; %s; status: %s; rx: %s, tx: %s",
 		       service_type, service_attributes, service_id,
 		       network_type, network_attributes, network_id,
-		       status_to_str (status));
+		       status_to_str (status), rx, tx);
 
 		struct tm tm = now_tm ();
 		if (sqlq_append_printf
@@ -1413,14 +1457,15 @@ network_monitor (void *arg)
 		     "insert into connection_log "
 		     " (year, yday, hour, min, sec,"
 		     "  service_type, service_attributes, service_id,"
-		     "  network_type, network_attributes, network_id, status)"
+		     "  network_type, network_attributes, network_id, status,"
+		     "  rx, tx)"
 		     " values"
 		     " (%d, %d, %d, %d, %d,"
-		     "  %Q, %d, %Q, %Q, %d, %Q, %Q);",
+		     "  %Q, %d, %Q, %Q, %d, %Q, %Q, %Q, %Q);",
 		     tm.tm_year, tm.tm_yday, tm.tm_hour, tm.tm_min, tm.tm_sec,
 		     service_type, service_attributes, service_id,
 		     network_type, network_attributes, network_id,
-		     status_to_str (status)))
+		     status_to_str (status), rx, tx))
 		  {
 		    if (! need_sql_flush)
 		      need_sql_flush = now ();
@@ -1428,6 +1473,18 @@ network_monitor (void *arg)
 		  }
 		else
 		  need_sql_flush = last_sql_append = 0;
+
+		if (status == ICD_STATE_CONNECTING
+		    && am_connected)
+		  /* It seems that the user is changing networks.  We
+		     have a chance to get the old network's stats as
+		     the old network is only disconnected after the
+		     network is CONNECTED.  */
+		  {
+		    debug (0, "Preemptive stat scheduled"
+			   " (connecting while already connect).");
+		    last_stats = 0;
+		  }
 
 		if (status == ICD_STATE_CONNECTED)
 		  am_connected = true;
@@ -1481,6 +1538,9 @@ network_monitor (void *arg)
 		    if (reply)
 		      dbus_message_unref (reply);
 		  }
+
+		free (rx);
+		free (tx);
 	      }
 	  case 2:;
 
@@ -1561,7 +1621,7 @@ network_monitor (void *arg)
 	  }
 	else
 	  {
-	    debug (1, "Service: %s; %x; %s; "
+	    debug (0, "Service: %s; %x; %s; "
 		   "Network: %s; %x; %s; "
 		   "active: %d; signal: %d; bytes: %d/%d",
 		   service_type, service_attributes, service_id,
@@ -1749,6 +1809,11 @@ network_monitor (void *arg)
   void cleanup (void *arg)
   {
     sqlq_flush (sqlq);
+    if (gconf)
+      {
+	gconf_engine_unref (gconf);
+	gconf = NULL;
+      }
   }
   pthread_cleanup_push (cleanup, NULL);
 
@@ -2094,7 +2159,7 @@ process_monitor (void *arg)
 	    bool need_flush = false;
 	    if (old_owner && *old_owner)
 	      {
-		debug (0, "%s abandoned %s", old_owner, name);
+		debug (1, "%s abandoned %s", old_owner, name);
 
 		need_flush =
 		  sqlq_append_printf
@@ -2108,7 +2173,7 @@ process_monitor (void *arg)
 	      }
 	    if (new_owner && *new_owner)
 	      {
-		debug (0, "%s assumed %s", new_owner, name);
+		debug (1, "%s assumed %s", new_owner, name);
 
 		need_flush =
 		  sqlq_append_printf
