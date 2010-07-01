@@ -1311,6 +1311,7 @@ network_monitor (void *arg)
   }
 
   bool am_connected = false;
+  bool connected_to_wlan = false;
   uint64_t last_stats = 0;
 
   /* Number of network types being scanned.  */
@@ -1480,13 +1481,16 @@ network_monitor (void *arg)
 		     the old network is only disconnected after the
 		     network is CONNECTED.  */
 		  {
-		    debug (0, "Preemptive stat scheduled"
+		    debug (1, "Preemptive stat scheduled"
 			   " (connecting while already connect).");
 		    last_stats = 0;
 		  }
 
 		if (status == ICD_STATE_CONNECTED)
-		  am_connected = true;
+		  {
+		    am_connected = true;
+		    connected_to_wlan = strncmp (network_type, "WLAN_", 5) == 0;
+		  }
 
 		if (status == ICD_STATE_DISCONNECTING)
 		  {
@@ -1574,10 +1578,10 @@ network_monitor (void *arg)
 		  {
 		    uint64_t n = now ();
 		    int64_t delta = n - last_stats;
-		    debug (0, "Not scanning but saw a scan (last stats: %"PRId64"s).", delta);
+		    debug (1, "Not scanning but saw a scan (last stats: %"PRId64"s).", delta);
 		    if (delta >= 1000)
 		      {
-			debug (0, "Preemptive stat scheduled.");
+			debug (1, "Preemptive stat scheduled.");
 			last_stats = 0;
 		      }
 		  }
@@ -1911,7 +1915,8 @@ network_monitor (void *arg)
       int64_t scan_timeout = INT64_MAX;
       if (am_scanning <= 0)
 	{
-	  if (last_scan_finished == 0 || delta >= SCAN_FREQ)
+	  if (! connected_to_wlan
+	      && (last_scan_finished == 0 || delta >= SCAN_FREQ))
 	    /* Perform a scan if the last result was SCAN_FREQ in the
 	       past.  */
 	    {
