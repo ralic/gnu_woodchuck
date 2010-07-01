@@ -358,7 +358,7 @@ upload (void)
       int l = len;
       /* Ignore the NUL.  */
       l --;
-      obstack_copy (&wget_output_obstack, line, l);
+      obstack_grow (&wget_output_obstack, line, l);
       if (line[l] == '\n')
 	line[l --] = 0;
       if (line[l] == '\r')
