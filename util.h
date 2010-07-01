@@ -137,6 +137,8 @@ i2log2 (uint64_t i)
   return l;
 }
 
+#include <sqlite3.h>
+
 /* A convenience function.  */
 static inline int
 sqlite3_exec_printf (sqlite3 *db, const char *sql,

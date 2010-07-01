@@ -2584,6 +2584,9 @@ signal_handler_quit (int sig)
 int
 main (int argc, char *argv[])
 {
+  files_init ();
+  debug_init ();
+
   bool do_fork = true;
 
   {
@@ -2603,8 +2606,6 @@ main (int argc, char *argv[])
       fprintf (stderr, "Failed to initialize inotify.\n");
       return 1;
     }
-
-  files_init ();
 
   char *pidfilename = log_file ("pid");
   const char *ssl = "smart-storage-logger";

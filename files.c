@@ -32,6 +32,7 @@ int dot_dir_len;
 void
 files_init (void)
 {
+  /* This function is called before debug_init, thus don't use debug!  */
   if (base)
     return;
 
@@ -42,8 +43,6 @@ files_init (void)
   base = getenv ("HOME");
 #endif
   base_len = strlen (base);
-
-  debug (0, "Base directory is `%s'", base);
 
   asprintf (&dot_dir, "%s/"DOT_DIR, base);
   dot_dir_len = strlen (dot_dir);

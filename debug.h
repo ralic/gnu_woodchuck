@@ -32,35 +32,35 @@ extern int output_debug;
 
 #endif /* do_debug.  */
 
+extern void debug_(const char *file, const char *function, int line,
+		   void *return_address,
+		   int level, const char *fmt, ...);
+
 /* Print a debug message if DEBUG_COND is true.  */
 #define debug(level, fmt, ...)						\
   do									\
     {									\
       do_debug (level)							\
         {								\
-	  time_t __t = time (NULL);					\
-	  struct tm __tm;						\
-	  localtime_r (&__t, &__tm);					\
-									\
-	  fprintf (stderr, "%d.%d.%d %d:%02d.%02d:%s:%d:(%p): " fmt "\n", \
-		   1900 + __tm.tm_year, __tm.tm_mon + 1, __tm.tm_mday,	\
-		   __tm.tm_hour, __tm.tm_min, __tm.tm_sec,		\
-		   __func__, __LINE__,					\
-		   __builtin_return_address (0),			\
-		   ##__VA_ARGS__);					\
-	  fflush (stderr);						\
+	  debug_ (strrchr (__FILE__, '/') ?: __FILE__,			\
+		  __func__, __LINE__,					\
+		  __builtin_return_address (0),				\
+		  level, fmt, ##__VA_ARGS__);				\
 	}								\
     }									\
   while (0)
 
+extern void debug_init_ ();
+
 #define debug_init()							\
   do_debug (0)								\
-    ;									\
+  debug_init_ ();							\
   else									\
     {									\
       extern int output_debug __attribute__ ((weak));			\
       if (&output_debug)						\
-	fprintf (stderr, "%s debugging disabled but not everywhere.", __FILE__);	\
+	fprintf (stderr, "%s debugging disabled but not everywhere.",	\
+		 __FILE__);						\
     }
 
 
