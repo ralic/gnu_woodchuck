@@ -23,6 +23,7 @@
 #include <assert.h>
 #include <error.h>
 #include <unistd.h>
+#include <stdio.h>
 #include <sqlite3.h>
 #include <dbus/dbus.h>
 #include <icd/dbus_api.h>
@@ -340,9 +341,11 @@ upload (void)
   extern const char *uuid (void);
   char *cmd = NULL;
   asprintf (&cmd,
-	    "wget --tries=1 --post-file='%s' -O /dev/stdout -o /dev/stdout"
-	    " -S --progress=dot"
-	    " http://randal.lan:9321/%s 2>&1",
+	    "wget --tries=1 --post-file='%s'"
+	    " --server-response --progress=dot"
+	    " -O /dev/stdout -o /dev/stdout"
+	    " --ca-certificate="PKGDATADIR"/ssl-receiver.cert"
+	    " https://hssl.cs.jhu.edu:9321/%s 2>&1",
 	    filename, uuid ());
   debug (0, "Executing %s", cmd);
   FILE *wget = popen (cmd, "r");

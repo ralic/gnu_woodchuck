@@ -15,6 +15,11 @@
 # along with this program; if not, write to the Free Software
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111, USA.
 
+# For enabling HTTPS: http://code.activestate.com/recipes/442473-simple-http-server-supporting-ssl-secure-communica/
+# To generate a key, use:
+#  openssl req -new -x509 -keyout ssl-receiver.key -out ssl-receiver.cert -days 3650 -nodes
+
+import socket
 import BaseHTTPServer
 import httplib
 import http_header
@@ -22,6 +27,7 @@ import sys
 import SocketServer
 import threading
 import sqlite3
+import OpenSSL
 
 do_debug = 1
 def debug (*args):
@@ -41,7 +47,17 @@ class uploader_handler (BaseHTTPServer.BaseHTTPRequestHandler):
         # single header value, not all the value of all headers with
         # that name combined.  Override it.
         self.MessageClass = http_header.http_headers
-        BaseHTTPServer.BaseHTTPRequestHandler.__init__ (self, *args)
+        try:
+            BaseHTTPServer.BaseHTTPRequestHandler.__init__ (self, *args)
+        except OpenSSL.SSL.Error, err:
+            self.log_error ("SSL error: %s", str (err))
+
+    def setup(self):
+        self.connection = self.request
+        self.log_message ("Client's certificate: %s",
+                          str (self.connection.get_peer_certificate()));
+        self.rfile = socket._fileobject(self.request, "rb", self.rbufsize)
+        self.wfile = socket._fileobject(self.request, "wb", self.wbufsize)
 
     def do_POST (self):
         try:
@@ -147,6 +163,15 @@ class uploader_server (SocketServer.ThreadingMixIn, BaseHTTPServer.HTTPServer):
 
         BaseHTTPServer.HTTPServer.__init__ (self, self.binding,
                                             request_handler)
+
+        ctx = OpenSSL.SSL.Context (OpenSSL.SSL.SSLv23_METHOD)
+        ctx.use_privatekey_file ('ssl-receiver.key')
+        ctx.use_certificate_file ('ssl-receiver.cert')
+
+        self.socket = OpenSSL.SSL.Connection \
+            (ctx, socket.socket(self.address_family, self.socket_type))
+        self.server_bind()
+        self.server_activate()
 
     def run (self):
         self.serve_forever()

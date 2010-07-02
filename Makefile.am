@@ -1,7 +1,9 @@
 bin_PROGRAMS = smart-storage-logger ssl-tail smart-storage-simulator
+# We only include the public key, obviously :-)
+dist_pkgdata_DATA = ssl-receiver.cert
 
 AM_CFLAGS = -Wall -g -O2 -std=gnu99 $(BASE_CFLAGS)
-AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64
+AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -DPKGDATADIR=\"$(pkgdatadir)\"
 smart_storage_logger_CPPFLAGS = -DLOG_TO_DB $(AM_CPPFLAGS)
 smart_storage_logger_LDFLAGS = 
 smart_storage_logger_LDADD = -lpthread $(BASE_LIBS)
