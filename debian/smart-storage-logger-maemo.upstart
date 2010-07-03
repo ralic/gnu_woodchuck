@@ -1,8 +1,9 @@
 author "Neal H. Walfield <neal@cs.jhu.edu>"
 description "Smart storage logger.  See http://hssl.cs.jhu.edu/~neal/smart-storage"
 
-start on USER
-stop on shutdown
+start on started hildon-desktop
+stop on ACT_DEAD
+stop on starting shutdown
 
 console none
 
@@ -14,6 +15,10 @@ script
 	  USER=user
 	fi
 	source /tmp/session_bus_address.$USER
+
+	/usr/sbin/waitdbus system
+	/usr/sbin/waitdbus session
+
 	exec /usr/bin/smart-storage-logger --no-fork
 end script
 
