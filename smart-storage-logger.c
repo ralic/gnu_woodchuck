@@ -1241,7 +1241,18 @@ network_monitor (void *arg)
 		      "	 network_type, network_name, network_attributes,"
 		      "	 network_id, network_priority,"
 		      "	 signal_strength, signal_strength_db,"
-		      "  station_id);",
+		      "  station_id);"
+
+		      "create table if not exists location"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT, "
+		      "  year, yday, hour, min, sec,"
+		      "  mask, latitude, longitude, accuracy);"
+
+		      "create table if not exists cell"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT, "
+		      "  year, yday, hour, min, sec,"
+		      "  flags, gsm_mcc, gsm_mnc, gsm_lac, gsm_cell_id,"
+		      "  wcdma_mcc, wcdma_mnc, wcdma_ucid);",
 		      NULL, NULL, &errmsg);
   if (errmsg)
     {
@@ -1254,6 +1265,8 @@ network_monitor (void *arg)
   uploader_table_register (filename, "stats_log", true);
   uploader_table_register (filename, "scans", true);
   uploader_table_register (filename, "scan_log", true);
+  uploader_table_register (filename, "location", true);
+  uploader_table_register (filename, "cell", true);
 
   uuid_ensure (filename, db);
   free (filename);
@@ -1293,6 +1306,17 @@ network_monitor (void *arg)
 	"interface='com.nokia.dsme.signal',"
 	"path='/com/nokia/dsme/signal',"
 	"member='shutdown_ind'",
+
+	/* Position changed.  */
+	"type='signal',"
+	"path='/com/nokia/location/las',"
+	"interface='org.freedesktop.Gypsy.Position',"
+	"member='PositionChanged'",
+	/* Cell info changed.  */
+	"type='signal',"
+	"path='/com/nokia/location/las',"
+	"interface='com.nokia.Location.Cell',"
+	"member='CellInfoChanged'",
       };
 
     int i;
@@ -1309,6 +1333,120 @@ network_monitor (void *arg)
 	  }
       }
   }
+
+  /* Discover the the current location.  */
+  enum
+  {
+    location_service_deinit,
+    location_service_on,
+    location_service_off,
+  };
+    
+  int location_service_state = location_service_deinit;
+  void location_service (bool turn_on)
+  {
+    if (turn_on && location_service_state == location_service_on)
+      return;
+    if (! turn_on && location_service_state != location_service_on)
+      return;
+
+    DBusMessage *message;
+    DBusMessage *reply;
+
+    if (location_service_state == location_service_deinit)
+      {
+	message = dbus_message_new_method_call
+	  (/* Service.  */ "com.nokia.Location",
+	   /* Object.  */ "/com/nokia/location/las",
+	   /* Interface.  */ "org.freedesktop.Gypsy.Server",
+	   /* Method.  */ "Create");
+
+	const char *device = "las";
+	dbus_message_append_args (message,
+				  DBUS_TYPE_STRING, &device,
+				  DBUS_TYPE_INVALID);
+
+	reply = dbus_connection_send_with_reply_and_block
+	  (connection, message, 60 * 1000, &error);
+	if (dbus_error_is_set (&error))
+	  {
+	    debug (0, "Error invoking: %s.%s: %s",
+		   dbus_message_get_interface (message),
+		   dbus_message_get_member (message),
+		   error.message);
+	    dbus_error_free (&error);
+	  }
+
+	dbus_message_unref (message);
+	if (reply)
+	  dbus_message_unref (reply);
+
+
+	message = dbus_message_new_method_call
+	  (/* Service.  */ "com.nokia.Location",
+	   /* Object.  */ "/com/nokia/Location",
+	   /* Interface.  */ "com.nokia.Location.Parameters",
+	   /* Method.  */ "set");
+
+	/* Method is a bitwise or of:
+
+	   1 - Complimentary Wireless Position
+	   2 - Assisted Complimentary Wireless Position
+	   4 - Global Navigation Satellite System
+	   8 - Assisted Global Navigation Satellite System
+	*/
+	int location_method = 0x3;
+	/* The probe interval in tenths of seconds.  The only valid values
+	   are 10, 20, 50, 100, 200, 300, 600, 1200 (this needs
+	   confirmation).  0 is the system default.  */
+	int interval = 600;
+	dbus_message_append_args (message,
+				  DBUS_TYPE_INT32, &location_method,
+				  DBUS_TYPE_INT32, &interval,
+				  DBUS_TYPE_INVALID);
+
+	reply = dbus_connection_send_with_reply_and_block
+	  (connection, message, 60 * 1000, &error);
+	if (dbus_error_is_set (&error))
+	  {
+	    debug (0, "Error invoking %s.%s: %s",
+		   dbus_message_get_interface (message),
+		   dbus_message_get_member (message),
+		   error.message);
+	    dbus_error_free (&error);
+	  }
+
+	dbus_message_unref (message);
+	if (reply)
+	  dbus_message_unref (reply);
+      }
+
+
+    message = dbus_message_new_method_call
+      (/* Service.  */ "com.nokia.Location",
+       /* Object.  */ "/com/nokia/location/las",
+       /* Interface.  */ "org.freedesktop.Gypsy.Device",
+       /* Method.  */ turn_on ? "Start" : "Stop");
+
+    reply = dbus_connection_send_with_reply_and_block
+      (connection, message, 60 * 1000, &error);
+    if (dbus_error_is_set (&error))
+      {
+	debug (0, "Error invoking %s.%s: %s",
+	       dbus_message_get_interface (message),
+	       dbus_message_get_member (message),
+	       error.message);
+	dbus_error_free (&error);
+      }
+
+    dbus_message_unref (message);
+    if (reply)
+      dbus_message_unref (reply);
+
+    location_service_state
+      = turn_on ? location_service_on : location_service_off;
+  }
+
 
   bool am_connected = false;
   bool connected_to_wlan = false;
@@ -1791,6 +1929,117 @@ network_monitor (void *arg)
 	      }
 	  }
       }
+    else if (dbus_message_has_path (message, "/com/nokia/location/las")
+	     && dbus_message_is_signal (message,
+					"org.freedesktop.Gypsy.Position",
+					"PositionChanged"))
+      {
+	int32_t mask;
+	int32_t timestamp;
+	double lat;
+	double lon;
+	double accuracy;
+
+	DBusError error;
+	dbus_error_init (&error);
+	if (! dbus_message_get_args (message, &error,
+				     DBUS_TYPE_INT32, &mask,
+				     DBUS_TYPE_INT32, &timestamp,
+				     DBUS_TYPE_DOUBLE, &lat,
+				     DBUS_TYPE_DOUBLE, &lon,
+				     DBUS_TYPE_DOUBLE, &accuracy,
+				     DBUS_TYPE_INVALID))
+	  {
+	    debug (0, "Failed to grok "
+		   "org.freedesktop.Gypsy.Position.PositionChanged signal: %s",
+		   error.message);
+	    dbus_error_free (&error);
+	  }
+	else
+	  {
+	    debug (0, "PositionChanged: mask: %d; "
+		   "time: %d; pos: %f/%f; acc: %f",
+		   mask, timestamp, lat, lon, accuracy);
+
+	    struct tm tm = now_tm ();
+	    sqlq_append_printf (sqlq, false,
+				"insert into location "
+				" (year, yday, hour, min, sec,"
+				"  mask, latitude, longitude, accuracy) "
+				" values (%d, %d, %d, %d, %d,"
+				"         %d, %f, %f, %f);",
+				tm.tm_year, tm.tm_yday,
+				tm.tm_hour, tm.tm_min, tm.tm_sec,
+				mask, lat, lon, accuracy);
+	  }
+      }
+    else if (dbus_message_has_path (message, "/com/nokia/location/las")
+	     && dbus_message_is_signal (message,
+					"com.nokia.Location.Cell",
+					"CellInfoChanged"))
+      {
+	int flags;
+	
+	/* From dbus-monitor:
+
+	   int32       - flags
+                        - (flags & 1) => GSM valid
+                        - (flags & 2) => WCDMA valid.
+	   array [     - gsm
+	     uint16     - mcc - mobile country code
+	     uint16     - mnc - mobile network code
+	     uint16     - lac - location area code
+	     uint16     - cell_id - cell id
+	   ]
+	   array [     - wcdma
+	     uint32     - mcc - mobile country code 
+	     uint32     - mnc - mobile network code
+	     uint32     - ucid - cell id
+	   ]
+	*/
+	uint16_t *gsm;
+	int gsm_len;
+	uint32_t *wcdma;
+	int wcdma_len;
+
+	DBusError error;
+	dbus_error_init (&error);
+	if (! dbus_message_get_args (message, &error,
+				     DBUS_TYPE_INT32, &flags,
+				     DBUS_TYPE_ARRAY, DBUS_TYPE_UINT16,
+				     &gsm, &gsm_len,
+				     DBUS_TYPE_ARRAY, DBUS_TYPE_UINT32,
+				     &wcdma, &wcdma_len,
+				     DBUS_TYPE_INVALID))
+	  {
+	    debug (0, "Failed to grok "
+		   "com.nokia.Location.Cell.CellInfoChanged signal: %s",
+		   error.message);
+	    dbus_error_free (&error);
+	  }
+	else
+	  {
+	    debug (0, "CellInfoChanged: flags: %d;"
+		   " gsm (%d): mcc: %d; mnc: %d; lac: %d; cell_id: %d"
+		   " wcdma (%d): mcc: %d; mnc: %d; ucid: %d",
+		   flags, gsm_len, gsm[0], gsm[1], gsm[2], gsm[3],
+		   wcdma_len, wcdma[0], wcdma[1], wcdma[2]);
+
+	    struct tm tm = now_tm ();
+	    sqlq_append_printf (sqlq, false,
+				"insert into cell "
+				" (year, yday, hour, min, sec,"
+				"  flags, "
+				"  gsm_mcc, gsm_mnc, gsm_lac, gsm_cell_id,"
+				"  wcdma_mcc, wcdma_mnc, wcdma_ucid)"
+				" values (%d, %d, %d, %d, %d,"
+				"         %d, %d, %d, %d, %d, %d, %d, %d);",
+				tm.tm_year, tm.tm_yday,
+				tm.tm_hour, tm.tm_min, tm.tm_sec,
+				flags, gsm[0], gsm[1], gsm[2], gsm[3],
+				wcdma[0], wcdma[1], wcdma[2]);
+	  }
+      }
     else
       {
 	debug (5, "Ignoring irrelevant method: %s",
@@ -1816,6 +2065,7 @@ network_monitor (void *arg)
     dbus_message_unref (message);
   }
 
+  location_service (true);
 
   void cleanup (void *arg)
   {
@@ -1862,7 +2112,7 @@ network_monitor (void *arg)
 	  if (last_stats == 0 || delta >= STATS_FREQ - STATS_FREQ / 8)
 	    /* Time (or, almost time) to get some new stats.  */
 	    {
-	      debug (1, "Requesting network statistics (last %d seconds ago).",
+	      debug (0, "Requesting network statistics (last %d seconds ago).",
 		     (int) (delta / 1000));
 
 	      DBusMessage *message = dbus_message_new_method_call
@@ -1920,7 +2170,7 @@ network_monitor (void *arg)
 	    /* Perform a scan if the last result was SCAN_FREQ in the
 	       past.  */
 	    {
-	      debug (1, "Requesting network scan (last %d seconds ago).",
+	      debug (0, "Requesting network scan (last %d seconds ago).",
 		     (int) (delta / 1000));
 
 	      DBusMessage *message = dbus_message_new_method_call
