@@ -1557,6 +1557,9 @@ network_monitor (void *arg)
 		    if (! gconf)
 		      gconf = gconf_engine_get_default ();
 
+		    /* This apparently also would work:
+
+		       dbus-send --system --dest=org.gnome.GConf --print-reply /org/gnome/GConf/Database/0 org.gnome.GConf.Database.LookupExtended string:/system/osso/connectivity/network_type/GPRS/gprs_home_rx_bytes string:C boolean:true */
 		    GError *err = NULL;
 		    rx = gconf_engine_get_string
 		      (gconf,
