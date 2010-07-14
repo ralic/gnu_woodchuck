@@ -1,0 +1,4 @@
+To get downloading of the install file correct, one has to add the
+following to an .htaccess file:
+
+  AddType application/x-install-instructions .install

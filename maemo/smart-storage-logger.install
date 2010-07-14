@@ -1,0 +1,9 @@
+[install]
+catalogues = hssl
+package = smart-storage-logger
+
+[hssl]
+name = hssl.cs.jhu.edu
+uri = http://theo.lan/smart-storage
+components = maemo
+
