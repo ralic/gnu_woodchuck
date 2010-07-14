@@ -8,10 +8,10 @@ Vcs-Git: git://hssl.cs.jhu.edu/~neal/smart-storage.git
 Homepage: http://hssl.cs.jhu.edu/~neal/smart-storage
 
 Package: smart-storage-logger
-Section: misc
+Section: user/science
 Architecture: any
 Priority: optional
-Depends: ${shlibs:Depends}
+Depends: ${shlibs:Depends}, wget
 Description: Data logger for the smart storage experiment.
  The smart storage logger is a program developed to collect data
  about a user's activities.  It monitors and records the files that a
