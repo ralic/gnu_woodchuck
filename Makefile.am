@@ -1,3 +1,10 @@
+EXTRA_DIST = debian/rules debian/changelog debian/compat debian/control \
+	debian/smart-storage-logger-maemo.upstart \
+	debian/smart-storage-logger.postinst \
+	debian/smart-storage-logger.prerm \
+	\
+	maemo/README maemo/htaccess maemo/smart-storage-logger.install
+
 bin_PROGRAMS = smart-storage-logger ssl-tail smart-storage-simulator
 # We only include the public key, obviously :-)
 dist_pkgdata_DATA = ssl-receiver.cert
