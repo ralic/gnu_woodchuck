@@ -3,26 +3,39 @@ Compiling and Uploading the Package
 
 Compile:
 
-  # /scratchbox/login -d src/smart-storage dpkg-buildpackage -us -uc -rfakeroot
+  cd ~/src/smart-storage/build
+  make dist
+  cd ~/src
+  rm -rf smart-storage-0.0
+  tar xfvz smart-storage/build/smart-storage-0.0.tar.gz
+  /scratchbox/login -d src/smart-storage-0.0 dpkg-buildpackage -us -uc -rfakeroot
 
 On machine with the signing key:
 
-  # debsign -r theo.lan src/smart-storage_0.0_armel.changes
+  debsign -r theo.lan src/smart-storage_0.0_armel.changes
+
+Create directory on server:
+
+  ssh hssl.cs.jhu.edu
+  mkdir -p ~/public_html/smart-storage/dists/fremantle/maemo/binary-armel
+  ln -s fremantle ~/public_html/smart-storage/dists/fremantle-1.2
 
 Copy binaries to:
 
-  <SOMEPLACE>/dists/fremantle/maemo/binary-armel
+  scp ~/src/smart-storage*_0.0* \
+    hssl.cs.jhu.edu:public_html/smart-storage/dists/fremantle/maemo/binary-armel
 
-Create a link from <SOMEPLACE>/dists/fremantle-1.2 to
-<SOMEPLACE>/dists/fremantle.
 
 In the <SOMEPLACE> directory, run:
 
+  cd ~/public_html/smart-storage
   apt-ftparchive packages dists | gzip > dists/fremantle-1.2/maemo/binary-armel/Packages.gz
 
 Or to only include the packages in a particular distribution:
 
+  cd ~/public_html/smart-storage
   apt-ftparchive packages dists/fremantle-1.2/maemo/binary-armel | gzip > dists/fremantle-1.2/maemo/binary-armel/Packages.gz
+
 
 
 Distributing the Package
