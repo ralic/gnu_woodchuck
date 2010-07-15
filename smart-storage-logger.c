@@ -2687,6 +2687,8 @@ main (int argc, char *argv[])
   files_init ();
   debug_init ();
 
+  debug (0, PACKAGE_STRING" compiled on %s %s", __DATE__, __TIME__);
+
   bool do_fork = true;
 
   {
