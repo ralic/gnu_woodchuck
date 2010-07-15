@@ -1,3 +1,9 @@
+smart-storage (0.1) unstable; urgency=low
+
+  * Release 0.1.
+
+ -- Neal H. Walfield <neal@walfield.org>  Thu, 15 Jul 2010 12:23:00 +0200
+
 smart-storage (0.0) unstable; urgency=low
 
   * Initial release.

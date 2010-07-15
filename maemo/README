@@ -3,16 +3,17 @@ Compiling and Uploading the Package
 
 Compile:
 
+  VERSION=0.1
   cd ~/src/smart-storage/build
   make dist
   cd ~/src
-  rm -rf smart-storage-0.0
-  tar xfvz smart-storage/build/smart-storage-0.0.tar.gz
-  /scratchbox/login -d src/smart-storage-0.0 dpkg-buildpackage -us -uc -rfakeroot
+  rm -rf smart-storage-${VERSION}
+  tar xfvz smart-storage/build/smart-storage-${VERSION}.tar.gz
+  /scratchbox/login -d src/smart-storage-${VERSION} dpkg-buildpackage -us -uc -rfakeroot
 
 On machine with the signing key:
 
-  debsign -r theo.lan src/smart-storage_0.0_armel.changes
+  debsign -r theo.lan src/smart-storage_${VERSION}_armel.changes
 
 Create directory on server:
 
@@ -22,7 +23,7 @@ Create directory on server:
 
 Copy binaries to:
 
-  scp ~/src/smart-storage*_0.0* \
+  scp ~/src/smart-storage*_${VERSION}* \
     hssl.cs.jhu.edu:public_html/smart-storage/dists/fremantle/maemo/binary-armel
 
 
