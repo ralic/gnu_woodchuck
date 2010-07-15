@@ -1260,7 +1260,6 @@ network_monitor (void *arg)
   uploader_table_register (filename, "stats_log", true);
   uploader_table_register (filename, "scans", true);
   uploader_table_register (filename, "scan_log", true);
-  uploader_table_register (filename, "location", true);
   uploader_table_register (filename, "cell", true);
 
   uuid_ensure (filename, db);
