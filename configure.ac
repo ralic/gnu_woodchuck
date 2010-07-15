@@ -1,5 +1,5 @@
 AC_PREREQ([2.59])
-AC_INIT(smart-storage, 0.0, neal@cs.jhu.edu)
+AC_INIT(smart-storage, 0.1, neal@cs.jhu.edu)
 AC_CONFIG_AUX_DIR([build-aux])
 AM_INIT_AUTOMAKE()
 AC_CONFIG_SRCDIR([smart-storage-logger.c])
