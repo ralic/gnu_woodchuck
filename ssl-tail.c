@@ -43,10 +43,10 @@ main (int argc, char *argv[])
     struct tm tm;
     gmtime_r (&t, &tm);
 
-    fprintf (stderr, "%d.%d.%d %d:%02d.%02d:%s:%s:(%s): %s\n",
-	     1900 + tm.tm_year, tm.tm_mon + 1, tm.tm_mday,
-	     tm.tm_hour, tm.tm_min, tm.tm_sec,
-	     function, line, return_address, msg);
+    printf ("%d.%d.%d %d:%02d.%02d:%s:%s:(%s): %s\n",
+	    1900 + tm.tm_year, tm.tm_mon + 1, tm.tm_mday,
+	    tm.tm_hour, tm.tm_min, tm.tm_sec,
+	    function, line, return_address, msg);
 
     return 0;
   }
