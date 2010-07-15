@@ -11,7 +11,7 @@
 
 #ifdef LOG_TO_DB
 #include <sqlite3.h>
-static sqlite3 *debug_output_file;
+static __thread sqlite3 *debug_output_file;
 #endif
 
 #if !defined(DEBUG_ELIDE)
@@ -22,6 +22,8 @@ void
 debug_ (const char *file, const char *function, int line,
 	void *return_address, int level, const char *fmt, ...)
 {
+  debug_init_ ();
+
   va_list ap;
   va_start (ap, fmt);
 
