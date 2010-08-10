@@ -1,0 +1,19 @@
+To get an XML description of an interface using introspection:
+
+  # dbus-send --system --print-reply \
+    --dest=org.freedesktop.NetworkManager \
+    /org/freedesktop/NetworkManager \
+    org.freedesktop.DBus.Introspectable.Introspect \
+    > org.freedesktop.NetworkManager.xml
+
+You'll need to edit the resulting file to get rid of some text that
+dbus-send adds when printing the message and to select just the
+interfaces that you need.
+
+To generate client stubs for glib, use dbus-binding-tool:
+
+  # dbus-binding-tool --mode=glib-client org.freedesktop.NetworkManager.xml \
+    > org.freedesktop.NetworkManager.h
+
+The methods have the interface's prefix (in this case
+org_freedesktop_Networkmanager_*).

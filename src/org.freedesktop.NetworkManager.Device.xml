@@ -1,0 +1,24 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.freedesktop.NetworkManager.Device">
+    <method name="Disconnect">
+    </method>
+    <signal name="StateChanged">
+      <arg type="u"/>
+      <arg type="u"/>
+      <arg type="u"/>
+    </signal>
+    <property name="DeviceType" type="u" access="read"/>
+    <property name="Managed" type="b" access="read"/>
+    <property name="Ip6Config" type="o" access="readwrite"/>
+    <property name="Dhcp4Config" type="o" access="readwrite"/>
+    <property name="Ip4Config" type="o" access="readwrite"/>
+    <property name="State" type="u" access="read"/>
+    <property name="Ip4Address" type="u" access="readwrite"/>
+    <property name="Capabilities" type="u" access="read"/>
+    <property name="Driver" type="s" access="read"/>
+    <property name="Interface" type="s" access="readwrite"/>
+    <property name="Udi" type="s" access="read"/>
+  </interface>
+</node>
