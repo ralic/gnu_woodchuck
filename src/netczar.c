@@ -97,7 +97,7 @@ int
 main (int argc, char *argv[])
 {
   g_type_init();
-  dbus_g_thread_init ();
+  // dbus_g_thread_init ();
 
   NCNetworkMonitor *nm = nc_network_monitor_new ();
 
@@ -108,7 +108,7 @@ main (int argc, char *argv[])
   g_signal_connect (G_OBJECT (nm), "default-connection-changed",
 		    G_CALLBACK (default_connection_changed), NULL);
 
-  g_timeout_add_seconds (5, connections_dump, nm);
+  // g_timeout_add_seconds (5, connections_dump, nm);
 
   GMainLoop *loop = g_main_loop_new (NULL, FALSE);
   g_main_loop_run (loop);

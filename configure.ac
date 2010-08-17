@@ -44,11 +44,13 @@ AM_CONDITIONAL([MAEMO5], [test 0$HAVE_MAEMO_VERSION -ge 500])
 BASE_MODULES="dbus-1 glib-2.0 gobject-2.0 dbus-glib-1 sqlite3"
 if test 0$HAVE_MAEMO_VERSION -gt 0
 then
+  AC_DEFINE_UNQUOTED(HAVE_ICD2, 1,
+                     [Whether to support Nokia's ICD2.])
   BASE_MODULES="$BASE_MODULES icd2"
 else
   PKG_CHECK_EXISTS(NetworkManager,
     [AC_DEFINE_UNQUOTED(HAVE_NETWORK_MANAGER, 1,
-                        [Whether to include support for NetworkManager.])])
+                        [Whether to support NetworkManager.])])
   BASE_MODULES="$BASE_MODULES NetworkManager"
 fi
 

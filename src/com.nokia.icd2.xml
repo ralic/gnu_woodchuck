@@ -1,0 +1,21 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="com.nokia.icd2">
+    <method name="addrinfo_req">
+      <arg name="signals" type="u" direction="out"/>
+    </method>
+    <signal name="addrinfo_sig">
+      <arg name="service_type" type="s"/>
+      <arg name="service_attributes" type="u"/>
+      <arg name="service_id" type="s"/>
+      <arg name="network_type" type="s"/>
+      <arg name="network_attributes" type="u"/>
+      <arg name="network_id" type="ay"/>
+      <arg name="addresses" type="a(ssssss)"/>
+    </signal>
+    <method name="state_req">
+      <arg name="signals" type="u" direction="out"/>
+    </method>
+  </interface>
+</node>

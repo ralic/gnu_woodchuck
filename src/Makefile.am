@@ -12,14 +12,18 @@ nm_interfaces = $(foreach filename, \
 	org.freedesktop.NetworkManager.Device.Wireless.xml \
 	org.freedesktop.NetworkManager.AccessPoint.xml \
 	org.freedesktop.NetworkManager.xml \
-	org.freedesktop.NetworkManager.Connection.Active.xml, \
+	org.freedesktop.NetworkManager.Connection.Active.xml \
+	com.nokia.icd2.xml, \
 	$(srcdir)/$(filename))
 
 nm_interfaces_h = $(patsubst %.xml,%.h,$(nm_interfaces))
 
 BUILT_SOURCES = $(nm_interfaces_h) marshal.h marshal.c
 
-EXTRA_DIST = marshal.list
+# network-monitor-*.c are #included from network-monitor.c, as
+# appropriate.
+EXTRA_DIST = marshal.list network-monitor-icd2.c network-monitor-nm.c
+
 %.h: %.list
 	$(GLIB_GENMARSHAL) --header $< > $@~ \
 	  && (if cmp -s $@ $@~; then rm $@~; else mv $@~ $@; fi)
@@ -29,7 +33,8 @@ EXTRA_DIST = marshal.list
 
 netczar_SOURCES = netczar.c $(nm_interfaces_h) marshal.h marshal.c \
 	network-monitor.h network-monitor.c \
-	debug.h debug.c
+	debug.h debug.c \
+	ll-networking-linux.h ll-networking-linux.c
 netczar_LDADD = $(BASE_LIBS)
 
 .PHONEY: xml-to-h
