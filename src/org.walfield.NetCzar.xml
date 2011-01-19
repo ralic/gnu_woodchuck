@@ -1,0 +1,130 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="org.walfield.NetCzar">
+    <!-- Register a new principal.  -->
+    <method name="PrincipalRegister">
+      <!-- The human readable name of the application / component.
+	   This will be displayed to user.  Typically, this will
+	   consist of a single element, however, multiple elements are
+	   possible, e.g., for a plug-in of some application.  This
+	   should, but need not, be globally unique.  -->
+      <arg name="human_readable_name" type="as"/>
+      <!-- The bus name to send feedback to.  May be NULL.  -->
+      <arg name="bus_name" type="s"/>
+      <!-- The program to execute if there are no subscribers and
+	   BUS_NAME is not registered.  May be NULL.  -->
+      <arg name="execve" type="(asas)"/>
+
+      <!-- Principal's id.  -->
+      <arg name="UUID" type="s" direction="out"/>
+    </method>
+
+    <method name="PrincipalRemove">
+      <!-- The principal to remove.  All associated schedules will also
+      be removed.  -->
+      <arg name="UUID" type="s"/>
+    </method>
+
+
+    <!-- Submit a job for exection.  -->
+    <method name="JobSubmit">
+      <arg name="PrincipalUUID" type="s"/>
+
+      <!-- The URL of the object to download.  May be NULL, in which
+	   case it is assumed that the application will handle the
+	   download and just wants to know when to is convenient to
+	   do so.  -->
+      <arg name="url" type="s"/>
+      <!-- Where to save the file(s).  If LOCATION ends in a /,
+	   interpreted as a directory and the file is named after the
+	   url.  -->
+      <arg name="location" type="s"/>
+      <!-- Uninterpretted by NetCzar.  This is passed back to the
+	   Feeback upcall. -->
+      <arg name="cookie" type="s"/>
+
+      <!-- Whether to wake up the application when this job completes
+	   (i.e., by execv the principal) or to wait until an entity
+	   subscribes.  -->
+      <arg name="wakeup" type="b"/>
+
+      <!-- Absolute time in seconds since the epoch.  -->
+      <arg name="trigger_target" type="t"/>
+      <!-- Number of seconds prior to trigger_target for which it is
+           acceptable to start the download.  -->
+      <arg name="trigger_earliest" type="u"/>
+      <!-- Number of seconds after trigger_target for which it is
+           acceptable to start the download.  -->
+      <arg name="trigger_latest" type="u"/>
+
+      <!-- The period (in seconds) with which to repeat this download.
+	   Set to 0 to indicate that this Job is a one-shot job.  -->
+      <arg name="period" type="u"/>
+
+      <!-- The type of request.
+	     1 - user initiated
+	     2 - background
+	-->
+      <arg name="request_type" type="u"/>
+
+      <!-- The priority of the request.  -->
+      <arg name="priority" type="u"/>
+
+      <!-- The expected size of the download, in bytes.  -->
+      <arg name="expected_size" type="t"/>
+
+
+      <!-- The UUID of the job.  -->
+      <arg name="JobUUID" type="s" direction="out"/>
+    </method>
+
+    <!-- Evaluate the desirability of executing a job now.  -->
+    <method name="JobEvaluate">
+      <!-- Not required.  -->
+      <arg name="PrincipalUUID" type="s"/>
+
+      <!-- The type of request.
+	     1 - user initiated
+	     2 - background
+	-->
+      <arg name="request_type" type="u"/>
+
+      <!-- The priority of the request.  -->
+      <arg name="priority" type="u"/>
+
+      <!-- The expected size of the download, in bytes.  -->
+      <arg name="expected_size" type="t"/>
+
+      <!-- The desirability of executing the job now.
+	   0 - Avoid if at all possible.
+	   3 - Avoid, low-quality acceptable.
+	   5 - Now is acceptable but waiting is better.
+	   9 - Now is ideal.
+	-->
+      <arg name="desirability" type="u" direction="out"/>
+    </method>
+
+
+    <!-- Request that NetCzar start sending feedback for unacked,
+	 completed jobs belonging to the indicated principal to the
+	 caller.  Feedback is sent as jobs complete or until
+	 FeedbackUnsubscribe is called.  -->
+    <method name="FeedbackSubscribe">
+      <arg name="PrincipalUUID" type="s"/>
+
+      <arg name="Handle" type="s" direction="out"/>
+    </method>
+
+    <!-- Request that NetCzar stop sending feedback for the given
+	 subscription (as returned by FeedbackSubscribe). -->
+    <method name="FeedbackUnsubscribe">
+      <arg name="Handle" type="s"/>
+    </method>
+
+    <!-- Ack the feedback with the provided UUID.  -->
+    <method name="FeedbackAck">
+      <arg name="JobUUID" type="s"/>
+      <arg name="JobInstance" type="u"/>
+    </method>
+  </interface>
+</node>
