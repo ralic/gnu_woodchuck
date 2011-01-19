@@ -17,8 +17,8 @@
    along with this program.  If not, see
    <http://www.gnu.org/licenses/>.  */
 
-#include "network-monitor.h"
 #include "config.h"
+#include "network-monitor.h"
 
 #include <stdio.h>
 #include <glib.h>
@@ -185,7 +185,7 @@ struct _NCNetworkDeviceClass
   GObjectClass parent;
 };
 
-extern GType nc_network_device_get_type (void);
+static GType nc_network_device_get_type (void);
 
 static NCNetworkDevice *nc_network_device_new
   (NCNetworkMonitor *network_monitor, const char *name_device,
