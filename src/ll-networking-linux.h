@@ -21,6 +21,7 @@
 #define NETCZAR_LL_NETWORKING_LINUX_H
 
 #include <stdbool.h>
+#include "config.h"
 
 /* Return the interface which has the IP address IP.  Caller must free
    the returned string.  */

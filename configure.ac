@@ -41,7 +41,7 @@ AM_CONDITIONAL([MAEMO], [test 0$HAVE_MAEMO_VERSION -gt 0])
 AM_CONDITIONAL([MAEMO5], [test 0$HAVE_MAEMO_VERSION -ge 500])
 
 # Modules that we require and can check for using pkg-config.
-BASE_MODULES="dbus-1 glib-2.0 gobject-2.0 dbus-glib-1 sqlite3"
+BASE_MODULES="dbus-1 glib-2.0 gobject-2.0 gthread-2.0 dbus-glib-1 sqlite3"
 if test 0$HAVE_MAEMO_VERSION -gt 0
 then
   AC_DEFINE_UNQUOTED(HAVE_ICD2, 1,

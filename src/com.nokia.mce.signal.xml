@@ -1,0 +1,14 @@
+<!-- This interface is incomplete as Nokia doesn't provide an XML description
+     for it.  For further details, refer to:
+       http://maemo.org/api_refs/5.0/5.0-final/mce-dev/dbus-names_8h.html
+ -->
+
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="com.nokia.mce.signal">
+    <signal name="system_inactivity_ind">
+      <arg name="user_inactive" direction="out" type="b"/>
+    </signal>
+  </interface>
+</node>

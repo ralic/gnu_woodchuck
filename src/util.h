@@ -125,5 +125,27 @@ now_tm (void)
       s_ = "kb";				\
     s_;						\
   })
+
+#include <sqlite3.h>
+
+/* A convenience function.  */
+static inline int
+sqlite3_exec_printf (sqlite3 *db, const char *sql,
+		     int (*callback)(void*,int,char**,char**), void *cookie,
+		     char **errmsg, ...)
+{
+  va_list ap;
+  va_start (ap, errmsg);
+
+  char *s = sqlite3_vmprintf (sql, ap);
+
+  int ret = sqlite3_exec (db, s, callback, cookie, errmsg);
+
+  sqlite3_free (s);
+
+  va_end (ap);
+
+  return ret;
+}
 
 #endif
