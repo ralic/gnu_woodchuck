@@ -88,10 +88,16 @@ struct tcb
      need to know what the last event was.  On entry, we set this to
      the system call number and on exit we reset this to -1.  */
   long current_syscall;
-  /* Sometimes we need to save state between the entry and the exit.
-     If not NULL, these better be free'able.  */
-  void *cookie;
-  void *cookie2;
+
+  /* When a file is unlinked, we only want to generate an event if the
+     unlink was successful.  We only know this on syscall exit.  At
+     this point, we can no longer use the fd to get the full filename.
+     To work around this, we stash the filename here.  The same goes
+     for the stat buffer.  We have a similar problem when moving a
+     file: once we move the file we can not get the absoluate file
+     name of the full.  */
+  void *saved_src;
+  struct stat *saved_stat;
 
   /* Ptrace has a few help options.  This field indicates whether we
      have tried to set them and what the result was.  0: unintialized.
@@ -392,8 +398,8 @@ tcb_free (struct tcb *tcb)
      free it after any pending callbacks.  (TCB->ARG0 and TCB->ARG1
      are allocated out of the same memory.)  */
   callback_enqueue (tcb, -1, NULL, NULL, 0, (void *) tcb->exe);
-  g_free (tcb->cookie);
-  g_free (tcb->cookie2);
+  g_free (tcb->saved_src);
+  g_free (tcb->saved_stat);
   g_free (tcb);
 
   tcb_count --;
@@ -1763,20 +1769,20 @@ process_monitor (void *arg)
 		p = g_strdup_printf ("/proc/%d/fd/%d/%s",
 				     (int) pid, (int) ARG3, buffer);
 
-	      tcb->cookie = canonicalize_file_name (p);
+	      tcb->saved_src = canonicalize_file_name (p);
 	      g_free (p);
 
-	      if (tcb->cookie)
+	      if (tcb->saved_src)
 		{
-		  tcb->cookie2 = g_malloc (sizeof (struct stat));
-		  if (stat (tcb->cookie, (struct stat *) tcb->cookie2) < 0)
-		    debug (4, "Failed to stat %s: %m", tcb->cookie);
+		  tcb->saved_stat = g_malloc (sizeof (struct stat));
+		  if (stat (tcb->saved_src, tcb->saved_stat) < 0)
+		    debug (4, "Failed to stat %s: %m", tcb->saved_src);
 		}
 	    }
 
 	  debug (4, "%d: %s;%s;%s: %s (%s)",
 		 (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
-		 syscall_str (syscall), tcb->cookie);
+		 syscall_str (syscall), tcb->saved_src);
 	}
       else if (! syscall_entry
 	       && (syscall == __NR_unlink
@@ -1785,22 +1791,22 @@ process_monitor (void *arg)
 	{
 	  debug (4, "%d: %s;%s;%s: %s (%s) -> %d",
 		 (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
-		 syscall_str (syscall), tcb->cookie, (int) RET);
+		 syscall_str (syscall), tcb->saved_src, (int) RET);
 
 	  if ((int) RET >= 0
-	      && process_monitor_filename_whitelisted (tcb->cookie))
+	      && process_monitor_filename_whitelisted (tcb->saved_src))
 	    callback_enqueue (tcb, WC_PROCESS_UNLINK_CB,
-			      tcb->cookie, NULL, 0, tcb->cookie2);
-	  g_free (tcb->cookie);
-	  tcb->cookie = NULL;
-	  g_free (tcb->cookie2);
-	  tcb->cookie2 = NULL;
+			      tcb->saved_src, NULL, 0, tcb->saved_stat);
+	  g_free (tcb->saved_src);
+	  tcb->saved_src = NULL;
+	  g_free (tcb->saved_stat);
+	  tcb->saved_stat = NULL;
 	}
       else if (! syscall_entry
 	       && (syscall == __NR_rename || syscall == __NR_renameat))
 	{
-	  char *src = tcb->cookie;
-	  tcb->cookie = NULL;
+	  char *src = tcb->saved_src;
+	  tcb->saved_src = NULL;
 	  char *dest = NULL;
 
 	  if ((int) RET >= 0)
@@ -1837,12 +1843,12 @@ process_monitor (void *arg)
 	      if (process_monitor_filename_whitelisted (src)
 		  || process_monitor_filename_whitelisted (dest))
 		callback_enqueue (tcb, WC_PROCESS_RENAME_CB,
-				  src, dest, 0, tcb->cookie2);
+				  src, dest, 0, tcb->saved_stat);
 	    }
 
 	  /* Clean up.  */
-	  g_free (tcb->cookie2);
-	  tcb->cookie2 = NULL;
+	  g_free (tcb->saved_stat);
+	  tcb->saved_stat = NULL;
 
 	  g_free (src);
 	  g_free (dest);
