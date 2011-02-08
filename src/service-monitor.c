@@ -233,6 +233,22 @@ static const char *arg0_blacklist[] =
     /* This doesn't belong here.  But, if we try to play videos it
        won't work.  */
     // "/usr/bin/mafw-dbus-wrapper"
+#else
+    /* Standard program in a GNOME session we can ignore (at least in
+       Debian).  */
+    "/usr/bin/pulseaudio",
+    "/usr/bin/gnome-terminal",
+    "gnome-terminal",
+    "gnome-panel",
+    "nm-applet",
+    "x-session-manager",
+    "/usr/lib/libgconf2-4/gconfd-2",
+    "gnome-power-manager",
+    "/usr/lib/gnome-settings-daemon/gnome-settings-daemon",
+    "/usr/bin/gnome-keyring-daemon",
+    "/usr/lib/gvfs/gvfs-gdu-volume-monitor",
+    "bluetooth-applet",
+    "gnome-volume-control-applet",
 #endif
   };
 
@@ -376,7 +392,7 @@ wc_service_monitor_new (void)
 
 static const char *filename_whitelist[] =
   {
-    "/home/user",
+    "/home",
     "/media",
     "/mnt"
   };
