@@ -42,6 +42,7 @@
 #include <linux/sched.h>
 #include <pthread.h>
 #include <sys/fcntl.h>
+#include <limits.h>
 
 #include "signal-handler.h"
 #include "process-monitor-ptrace.h"
@@ -716,31 +717,70 @@ enum process_monitor_commands
     PROCESS_MONITOR_QUIT = 1,
     PROCESS_MONITOR_TRACE,
     PROCESS_MONITOR_UNTRACE,
-    PROCESS_MONITOR_WAIT,
   };
 
 struct process_monitor_command
 {
   enum process_monitor_commands command;
-  /* Only valid for PROCESS_MONITOR_TRACE, PROCESS_MONITOR_UNTRACE,
-     PROCESS_MONITOR_WAIT.  */
+  /* Only valid for PROCESS_MONITOR_TRACE and PROCESS_MONITOR_UNTRACE.  */
   int pid;
-  /* Only valid for PROCESS_MONITOR_WAIT.  */
-  int status;
 };
 
-static pthread_cond_t process_monitor_commands_cond = PTHREAD_COND_INITIALIZER;
+static pthread_cond_t process_monitor_signaler_init_cond
+  = PTHREAD_COND_INITIALIZER;
 static pthread_mutex_t process_monitor_commands_lock
   = PTHREAD_MUTEX_INITIALIZER;
 static GSList *process_monitor_commands;
 
+static int signal_process_pipe[2];
+
+static pid_t signal_process_pid;
+
 static void
-process_monitor_command (enum process_monitor_commands command,
-			 pid_t pid, int status)
+process_monitor_signaler_init (void)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+  assert (! signal_process_pid);
+
+  if (pipe (signal_process_pipe) < 0)
+    debug (0, DEBUG_BOLD ("Failed to create signal process pipe: %m"));
+
+  pthread_mutex_lock (&process_monitor_commands_lock);
+  switch ((signal_process_pid = fork ()))
+    {
+    case -1:
+      debug (0, "Failed to fork process signal thread.");
+      abort ();
+    case 0:
+      /* Child.  */
+      debug (4, "Signal process monitor running.");
+      while (true)
+	{
+	  int c;
+	  int r = read (signal_process_pipe[0], &c, 1);
+	  if (r < 0)
+	    {
+	      fprintf (stdout, "Failed to read from signal pipe: %m\n");
+	      exit (1);
+	    }
+	}
+    default:
+      /* Parent.  */
+      debug (3, "Signal process started, pid: %d", signal_process_pid);
+      if (ptrace (PTRACE_ATTACH, signal_process_pid) == -1)
+	debug (0, "Error attaching to %d: %m", signal_process_pid);
+
+      pthread_cond_signal (&process_monitor_signaler_init_cond);
+      pthread_mutex_unlock (&process_monitor_commands_lock);
+    }
+}
+
+static void
+process_monitor_command (enum process_monitor_commands command, pid_t pid)
 {
   assert (! pthread_equal (pthread_self (), process_monitor_tid));
 
-  if (quit && command != PROCESS_MONITOR_WAIT)
+  if (quit)
     {
       debug (0, "Not queuing command: monitor already quit.");
       return;
@@ -748,17 +788,31 @@ process_monitor_command (enum process_monitor_commands command,
 
   assert (command == PROCESS_MONITOR_QUIT
 	  || command == PROCESS_MONITOR_TRACE
-	  || command == PROCESS_MONITOR_UNTRACE
-	  || command == PROCESS_MONITOR_WAIT);
+	  || command == PROCESS_MONITOR_UNTRACE);
 
   struct process_monitor_command *cmd = g_malloc (sizeof (*cmd));
   cmd->command = command;
   cmd->pid = pid;
-  cmd->status = status;
 
   pthread_mutex_lock (&process_monitor_commands_lock);
   process_monitor_commands = g_slist_prepend (process_monitor_commands, cmd);
-  pthread_cond_signal (&process_monitor_commands_cond);
+  if (! process_monitor_commands->next)
+    /* This is the only event.  */
+    {
+      debug (4, "Only event.  Signalling signal process.");
+      int w;
+      do
+	w = write (signal_process_pipe[1], "", 1);
+      while (w == 0);
+      if (w < 0)
+	{
+	  debug (3, DEBUG_BOLD ("Error writing to signal process: %m"));
+	  if (tkill (signal_process_pid, SIGCONT) < 0)
+	    debug (0, "signalling signal process (%d): %m",
+		   signal_process_pid);
+	}
+    }
+  
   pthread_mutex_unlock (&process_monitor_commands_lock);
 }
 
@@ -894,74 +948,6 @@ grab_string (struct tcb *tcb, uintptr_t addr, char *buffer, int size)
       offset = 0;
       word += sizeof (uintptr_t);
     }
-}
-
-static pthread_cond_t waiter_cond = PTHREAD_COND_INITIALIZER;
-static pthread_mutex_t waiter_lock = PTHREAD_MUTEX_INITIALIZER;
-
-static pthread_t waiter_tid;
-
-static void *
-waiter (void *arg)
-{
-  assert (pthread_equal (pthread_self (), waiter_tid));
-
-  void cleanup (void *arg)
-  {
-    pthread_mutex_lock (&process_monitor_commands_lock);
-
-    GSList *l = process_monitor_commands;
-    process_monitor_commands = NULL;
-
-    pthread_mutex_unlock (&process_monitor_commands_lock);
-
-    while (l)
-      {
-	free (l->data);
-	l = g_slist_delete_link (l, l);
-      }
-  }
-
-  pthread_cleanup_push (cleanup, NULL);
-
-  int wait_flags = __WALL|__WCLONE;
-  for (;;)
-    {
-      int status = 0;
-      int pid = waitpid (-1, &status, wait_flags);
-      if (pid < 0)
-	{
-	  if (errno == ECHILD)
-	    /* There are no children.  Sleep on WAITER_COND.  */
-	    {
-	      pthread_mutex_lock (&waiter_lock);
-
-	      /* Between waitpid failing and taking WAITER_LOCK, there
-		 could now be children.  Avoid a race by double
-		 checking.  */
-	      pid = waitpid (-1, &status, WNOHANG|wait_flags);
-	      if (pid < 0)
-		/* There really are none.  Wait and then loop.  */
-		{
-		  pthread_cond_wait (&waiter_cond, &waiter_lock);
-		  pthread_mutex_unlock (&waiter_lock);
-		  continue;
-		}
-
-	      pthread_mutex_unlock (&waiter_lock);
-	    }
-	  else
-	    {
-	      debug (0, "waitpid: %m");
-	      continue;
-	    }
-	}
-
-      process_monitor_command (PROCESS_MONITOR_WAIT, pid, status);
-    }
-
-  pthread_cleanup_pop (true);
-  return NULL;
 }
 
 static struct load global_load;
@@ -1128,125 +1114,127 @@ process_monitor (void *arg)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  GSList *commands = NULL;
-  for (;;)
+  process_monitor_signaler_init ();
+
+  while (! quit || tcb_count > 0)
     {
-      if (! commands)
+      /* SIGNO is the signal the child received and the signal to be
+	 propagated to the child (if any).  */
+      int signo = 0;
+      struct tcb *tcb = NULL;
+
+      /* Is there a race between checking for new commands and calling
+	 waitpid?  No.  Consider the case that the process monitor
+	 checks for new commands, finds none, drops the lock and then
+	 is descheduled.  At this point, the user adds a new thread to
+	 trace.  As the lock is free, the command is added to the
+	 queued command list.  The process monitor now calls waitpid.
+	 Because adding the command also tickled the wait process, we
+	 will wake up immediately.  */
+      int status = 0;
+      pid_t pid = waitpid (-1, &status, __WALL|__WCLONE);
+      if (pid == signal_process_pid)
 	{
-	  if (quit && tcb_count == 0)
-	    /* We're out of here.  */
-	    {
-	      /* Signal the waiter exit.  */
-	      pthread_cancel (waiter_tid);
-	      return NULL;
-	    }
+	  debug (4, "signal from signal process");
 
 	  pthread_mutex_lock (&process_monitor_commands_lock);
-	  while (! process_monitor_commands)
-	    {
-	      pthread_cond_wait (&process_monitor_commands_cond,
-				 &process_monitor_commands_lock);
-	    }
-
-	  commands = process_monitor_commands;
-	  commands = g_slist_reverse (commands);
+	  GSList *commands = process_monitor_commands;
 	  process_monitor_commands = NULL;
 	  pthread_mutex_unlock (&process_monitor_commands_lock);
-	  continue;
-	}
 
-      struct process_monitor_command *c = commands->data;
-      commands = g_slist_delete_link (commands, commands);
+	  if (commands)
+	    /* Execute the commands in the order received.  */
+	    commands = g_slist_reverse (commands);
 
-      int command = c->command;
-      pid_t pid = c->pid;
-      int status = c->status;
-      g_free (c);
-
-      switch (command)
-	{
-	case PROCESS_MONITOR_QUIT:
-	  /* Quit.  This is easier said than done.  We want to
-	     exit gracefully.  That means detaching from all
-	     threads.  But we can only detach from a thread
-	     when we've captured it.  Is there a way to force
-	     the thread to do something so we can capture it
-	     or do we have to wait for a convenient moment?
-	     IT APPEARS that we can send the process a SIGSTOP
-	     and it gets woken up.  */
-	  debug (1, "Quitting.  Need to detach from:");
-
-	  bool have_one = false;
-	  void iter (gpointer key, gpointer value, gpointer user_data)
-	  {
-	    * (bool *) user_data = true;
-	    pid_t pid = (int) (uintptr_t) key;
-	    struct tcb *tcb = value;
-	    debug (1, "%d: %s;%s;%s", pid, tcb->exe, tcb->arg0, tcb->arg1);
-	    if (tcb->suspended > 0)
-	      /* Already suspended.  */
-	      thread_untrace (tcb);
-	    else if (tkill (pid, SIGSTOP) < 0)
-	      debug (0, "tkill (%d, SIGSTOP): %m", pid);
-	  }
-	  g_hash_table_foreach (tcbs, iter, (gpointer) &have_one);
-
-	  if (! have_one)
+	  while (commands)
 	    {
-	      /* Let the waiter exit.  */
-	      pthread_cancel (waiter_tid);
-	      return NULL;
+	      struct process_monitor_command *c = commands->data;
+	      commands = g_slist_delete_link (commands, commands);
+
+	      int command = c->command;
+	      pid_t pid = c->pid;
+	      g_free (c);
+
+	      switch (command)
+		{
+		case PROCESS_MONITOR_QUIT:
+		  /* Quit.  This is easier said than done.  We want to
+		     exit gracefully.  That means detaching from all
+		     threads.  But we can only detach from a thread
+		     when we've captured it.  Is there a way to force
+		     the thread to do something so we can capture it
+		     or do we have to wait for a convenient moment?
+		     IT APPEARS that we can send the process a SIGSTOP
+		     and it gets woken up.  */
+		  debug (1, "Quitting.  Need to detach from:");
+
+		  bool have_one = false;
+		  void iter (gpointer key, gpointer value, gpointer user_data)
+		  {
+		    pid_t pid = (int) (uintptr_t) key;
+		    struct tcb *tcb = value;
+		    debug (1, "%d: %s;%s;%s",
+			   pid, tcb->exe, tcb->arg0, tcb->arg1);
+		    if (tcb->suspended > 0)
+		      /* Already suspended.  */
+		      thread_untrace (tcb);
+		    else if (tkill (pid, SIGSTOP) < 0)
+		      {
+			* (bool *) user_data = true;
+			debug (0, "tkill (%d, SIGSTOP): %m", pid);
+		      }
+		  }
+		  g_hash_table_foreach (tcbs, iter, (gpointer) &have_one);
+
+		  quit = true;
+		  break;
+
+		case PROCESS_MONITOR_TRACE:
+		  if (quit)
+		    debug (0, "Not tracing %d: shutting down", pid);
+		  else
+		    process_trace (pid);
+		  break;
+
+		case PROCESS_MONITOR_UNTRACE:
+		  process_untrace (pid);
+		  break;
+
+		default:
+		  debug (0, "Bad process monitor command %d: "
+			 "memory corruption?",
+			 command);
+		  break;
+		}
 	    }
 
-	  quit = true;
-
-	  continue;
-
-	case PROCESS_MONITOR_TRACE:
-	  process_trace (pid);
-	  pthread_cond_signal (&waiter_cond);
-	  continue;
-
-	case PROCESS_MONITOR_UNTRACE:
-	  process_untrace (pid);
-	  continue;
-
-	case PROCESS_MONITOR_WAIT:
-	  /* We process this below (to save horizontal space).  */
-	  break;
-
-	default:
-	  debug (0, "Bad process monitor command %d: memory corruption?",
-		 command);
-	  continue;
+	  /* Resume the signal process so it can be signaled
+	     again.  */
+	  goto out;
 	}
 
       int event = status >> 16;
 
       do_debug (4)
 	{
-	  debug (0, "%d status: %x", pid, status);
+	  debug (0, "Signal from %d: status: %x", pid, status);
 	  if (WIFEXITED (status))
-	    debug (0, "Exited: %d", WEXITSTATUS (status));
+	    debug (0, " Exited: %d", WEXITSTATUS (status));
 	  if (WIFSIGNALED (status))
-	    debug (0, "Signaled: %s (%d)",
+	    debug (0, " Signaled: %s (%d)",
 		   strsignal (WTERMSIG (status)), WTERMSIG (status));
 	  if (WIFSTOPPED (status))
-	    debug (0, "Stopped: %s (%d)",
+	    debug (0, " Stopped: %s (%d)",
 		   WSTOPSIG (status) == (SIGTRAP | 0x80)
 		   ? "monitor SIGTRAP" : strsignal (WSTOPSIG (status)),
 		   WSTOPSIG (status));
 	  if (WIFCONTINUED (status))
-	    debug (0, "continued");
-	  debug (0, "ptrace event: %x", event);
+	    debug (0, " continued");
+	  debug (0, " ptrace event: %x", event);
 	}
 
-      /* SIGNO is the signal the child received and the signal to be
-	 propagated to the child (if any).  */
-      int signo = 0;
-
       /* Look up the thread.  */
-      struct tcb *tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) pid);
+      tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) pid);
       if (! tcb)
 	/* We aren't monitoring this process...  There are two
 	   possibilities: either it is a new thread and the initial
@@ -1288,6 +1276,8 @@ process_monitor (void *arg)
 	}
 
       /* The child is not dead.  Process the event.  */
+
+      /* Resource accounting.  */
       load_increment (tcb);
 
       if (! WIFSTOPPED (status))
@@ -1870,6 +1860,12 @@ process_monitor (void *arg)
 	    }
 	}
     }
+
+  debug (0, DEBUG_BOLD ("Process monitor exited."));
+
+  /* Kill the signal process.  */
+  kill (signal_process_pid, SIGKILL);
+  return NULL;
 }
 
 bool
@@ -1910,7 +1906,7 @@ wc_process_monitor_ptrace_trace (pid_t pid)
   }
 #endif
 
-  process_monitor_command (PROCESS_MONITOR_TRACE, pid, 0);
+  process_monitor_command (PROCESS_MONITOR_TRACE, pid);
 
   return true;
 }
@@ -1919,14 +1915,14 @@ void
 wc_process_monitor_ptrace_untrace (pid_t pid)
 {
   assert (! pthread_equal (pthread_self (), process_monitor_tid));
-  process_monitor_command (PROCESS_MONITOR_UNTRACE, pid, 0);
+  process_monitor_command (PROCESS_MONITOR_UNTRACE, pid);
 }
 
 void
 wc_process_monitor_ptrace_quit (void)
 {
   assert (! pthread_equal (pthread_self (), process_monitor_tid));
-  process_monitor_command (PROCESS_MONITOR_QUIT, 0, 0);
+  process_monitor_command (PROCESS_MONITOR_QUIT, 0);
 }
 
 #ifdef PROCESS_TRACER_STANDALONE
@@ -1957,12 +1953,6 @@ unix_signal_handler (WCSignalHandler *sh, struct signalfd_siginfo *si,
 	  errno = err;
 	  debug (0, "joining monitor thread: %m");
 	}
-      err = pthread_join (waiter_tid, NULL);
-      if (err)
-	{
-	  errno = err;
-	  debug (0, "joining waiter thread: %m");
-	}
     }
 }
 
@@ -1990,7 +1980,11 @@ wc_process_monitor_ptrace_init (void)
   tcbs = g_hash_table_new (g_direct_hash, g_direct_equal);
 
   pthread_create (&process_monitor_tid, NULL, process_monitor, NULL);
-  pthread_create (&waiter_tid, NULL, waiter, NULL);
+  pthread_mutex_lock (&process_monitor_commands_lock);
+  while (! signal_process_pid)
+    pthread_cond_wait (&process_monitor_signaler_init_cond,
+		       &process_monitor_commands_lock);
+  pthread_mutex_unlock (&process_monitor_commands_lock);
 }
 
 #ifdef PROCESS_TRACER_STANDALONE
