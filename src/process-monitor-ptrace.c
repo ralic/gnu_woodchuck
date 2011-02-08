@@ -1116,12 +1116,12 @@ process_monitor (void *arg)
 
   process_monitor_signaler_init ();
 
-  while (! quit || tcb_count > 0)
+  struct tcb *tcb = NULL;
+  while (! (quit && tcb_count == 0))
     {
       /* SIGNO is the signal the child received and the signal to be
 	 propagated to the child (if any).  */
       int signo = 0;
-      struct tcb *tcb = NULL;
 
       /* Is there a race between checking for new commands and calling
 	 waitpid?  No.  Consider the case that the process monitor
@@ -1234,29 +1234,32 @@ process_monitor (void *arg)
 	}
 
       /* Look up the thread.  */
-      tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) pid);
-      if (! tcb)
-	/* We aren't monitoring this process...  There are two
-	   possibilities: either it is a new thread and the initial
-	   SIGSTOP was delivered before the thread create event was
-	   delivered (PTRACE_O_TRACECLONE).  This is not a problem:
-	   the thread will be fully configured once we see that event.
-	   The alternative is that another thread in this task started
-	   a program and we just got in its way.  OUCH.  */
+      if (! (tcb && tcb->pid == pid))
 	{
-	  if (WSTOPSIG (status) == (0x80 | SIGTRAP))
-	    /* It's got the ptrace monitor bit set.  Assume it belongs
-	       to us.  */
-	    {
-	      tcb = thread_trace (pid, NULL, true);
-	      tcb->scanned_siblings = true;
-	      tcb->trace_options = 1;
-	    }
-	  else
-	    debug (3, "Got signal for %d, but not monitoring it!", pid);
-
+	  tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) pid);
 	  if (! tcb)
-	    goto out;
+	    /* We aren't monitoring this process...  There are two
+	       possibilities: either it is a new thread and the initial
+	       SIGSTOP was delivered before the thread create event was
+	       delivered (PTRACE_O_TRACECLONE).  This is not a problem:
+	       the thread will be fully configured once we see that event.
+	       The alternative is that another thread in this task started
+	       a program and we just got in its way.  OUCH.  */
+	    {
+	      if (WSTOPSIG (status) == (0x80 | SIGTRAP))
+		/* It's got the ptrace monitor bit set.  Assume it belongs
+		   to us.  */
+		{
+		  tcb = thread_trace (pid, NULL, true);
+		  tcb->scanned_siblings = true;
+		  tcb->trace_options = 1;
+		}
+	      else
+		debug (3, "Got signal for %d, but not monitoring it!", pid);
+
+	      if (! tcb)
+		goto out;
+	    }
 	}
 
       /* See if the child exited.  */
@@ -1264,6 +1267,7 @@ process_monitor (void *arg)
 	{
 	  debug (4, "%d exited: %d.", (int) pid, WEXITSTATUS (status));
 	  thread_untrace (tcb);
+	  tcb = NULL;
 	  continue;
 	}
 
@@ -1272,6 +1276,7 @@ process_monitor (void *arg)
 	  debug (4, "%d exited due to signal: %s.",
 		 (int) pid, strsignal (WTERMSIG (status)));
 	  thread_untrace (tcb);
+	  tcb = NULL;
 	  continue;
 	}
 
@@ -1297,6 +1302,7 @@ process_monitor (void *arg)
 	  if (ptrace (PTRACE_DETACH, tcb->pid, 0, SIGCONT) < 0)
 	    debug (0, "Detaching from %d failed: %m", tcb->pid);
 	  thread_untrace (tcb);
+	  tcb = NULL;
 	  continue;
 	}
 
@@ -1857,6 +1863,7 @@ process_monitor (void *arg)
 	      if (ptrace (PTRACE_DETACH, tcb->pid, 0, 0) < 0)
 		debug (0, "Detaching pid %d failed: %m", tcb->pid);
 	      thread_untrace (tcb);
+	      tcb = NULL;
 	    }
 	}
     }
