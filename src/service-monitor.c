@@ -307,12 +307,24 @@ name_owner_changed_signal_cb (DBusGProxy *proxy,
 	      snprintf (filename, sizeof (filename), "/proc/%d/exe", pid);
 	      exe = g_file_read_link (filename, &error);
 	      if (! exe)
-		debug (0, "Failed to read %s", filename);
+		{
+		  debug (0, "Failed to read %s: %s",
+			 filename, error->message);
+		  g_error_free (error);
+		  error = NULL;
+		}
 
 	      snprintf (filename, sizeof (filename), "/proc/%d/cmdline", pid);
 	      gsize length = 0;
-	      g_file_get_contents (filename, &arg0, &length, NULL);
-	      if (arg0 && length)
+	      g_file_get_contents (filename, &arg0, &length, &error);
+	      if (error)
+		{
+		  debug (0, "Failed to read %s: %s",
+			 filename, error->message);
+		  g_error_free (error);
+		  error = NULL;
+		}
+	      else if (arg0 && length)
 		{
 		  char *arg0end = memchr (arg0, 0, length);
 		  if (! arg0end)
@@ -348,7 +360,9 @@ name_owner_changed_signal_cb (DBusGProxy *proxy,
 	      error = NULL;
 	    }
 
-	  if (pid)
+	  /* If we can't read /proc/PID/cmdline, then we probably
+	     can't trace the process.  */
+	  if (pid && arg0)
 	    {
 	      if (! blacklisted_arg0 (arg0))
 		service_new (m, pid, name, exe, arg0, arg1);
