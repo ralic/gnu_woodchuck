@@ -43,11 +43,39 @@
 #include <pthread.h>
 #include <sys/fcntl.h>
 #include <limits.h>
+#include <sys/mman.h>
 
 #include "signal-handler.h"
 #include "process-monitor-ptrace.h"
 
 #include "util.h"
+
+const char *syscall_str (long syscall)
+{
+  switch (syscall)
+    {
+    case __NR_clone:
+      return "clone";
+    case __NR_open:
+      return "open";
+    case __NR_openat:
+      return "openat";
+    case __NR_close:
+      return "close";
+    case __NR_unlink:
+      return "unlink";
+    case __NR_unlinkat:
+      return "unlinkat";
+    case __NR_rmdir:
+      return "rmdir";
+    case __NR_rename:
+      return "rename";
+    case __NR_renameat:
+      return "renameat";
+    default:
+      return "unknown";
+    }
+}
 
 static int
 tkill (int tid, int sig)
@@ -137,6 +165,15 @@ struct tcb
      remember that it is dead, we mark it as a zombie.  */
   bool zombie;
 
+  /* The group leader of the process.  PROCESS_GROUP_LEADER may be
+     NULL initially as we may allocate the child's tcb prior to
+     initializing the group leader.  To avoid issues, always use
+     tcb_group_leader to get the process group leader.  Note the
+     process group leader will only exit after all other threads have
+     exited.  */
+  struct tcb *process_group_leader;
+  pid_t process_group_leader_pid;
+
   /* If non-zero, we've decided to suspend the thread (for load
      shedding purposes).  If less then 0, then we need to suspend it
      at the next oppotunity.  If greater than 0, then it has been
@@ -153,6 +190,13 @@ struct tcb
   /* A file descriptor for accessing the thread's memory.  */
   int memfd;
   uint64_t memfd_lastuse;
+
+  /* The fd used to open the C library.  */
+  int libc_fd;
+
+  /* Location of ld and libc in the process's address space.  */
+  uintptr_t ld_base;
+  uintptr_t libc_base;
 };
 
 static int memfd_count;
@@ -500,6 +544,96 @@ tcb_read_exe (struct tcb *tcb)
     }
 }
 
+static void
+tcb_memfd_cleanup (void)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+  void iter (gpointer key, gpointer value, gpointer user_data)
+  {
+    struct tcb *tcb = value;
+    uintptr_t horizon = (uintptr_t) user_data;
+
+    if (tcb->memfd != -1 && tcb->memfd_lastuse < horizon)
+      {
+	close (tcb->memfd);
+	tcb->memfd = -1;
+	memfd_count --;
+      }
+  }
+
+  uintptr_t n = now ();
+
+  if (memfd_count > 96)
+    /* Close any fd not used in the last 60 seconds.  */
+    g_hash_table_foreach (tcbs, iter, (gpointer) (uintptr_t) (n - 60*1000));
+  if (memfd_count > 128)
+    /* That apparently didn't close enough.  Try again.  Close any fd
+       not used in the last 5 seconds.  */
+    g_hash_table_foreach (tcbs, iter, (gpointer) (uintptr_t) (n - 5*1000));
+}
+
+static int
+tcb_memfd (struct tcb *tcb)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+  tcb->memfd_lastuse = now ();
+
+  if (tcb->memfd == -1)
+    {
+      tcb_memfd_cleanup ();
+
+      char filename[32];
+      snprintf (filename, sizeof (filename), "/proc/%d/mem", (int) tcb->pid);
+      tcb->memfd = open (filename, O_RDONLY);
+      if (tcb->memfd < 0)
+	{
+	  debug (0, "Failed to open %s: %m", filename);
+	  tcb->memfd = -1;
+	  return -1;
+	}
+      memfd_count ++;
+    }
+
+  return tcb->memfd;
+}
+
+/* Return the TCB of TCB's process group leader.  */
+static struct tcb *
+tcb_group_leader (struct tcb *tcb)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+#ifdef NDEBUG
+  if (tcb->process_group_leader)
+    return tcb->process_group_leader;
+#endif
+
+  struct tcb *pgl = g_hash_table_lookup
+    (tcbs, (gpointer) (uintptr_t) tcb->process_group_leader_pid);
+
+  if (tcb->process_group_leader)
+    assert (tcb->process_group_leader == pgl);
+
+  tcb->process_group_leader = pgl;
+
+  return pgl;
+}
+
+/* Returns whether the thread has been patched.  */
+static bool
+tcb_patched (struct tcb *tcb)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+  struct tcb *pgl = tcb_group_leader (tcb);
+  if (! pgl)
+    return false;
+
+  return pgl->ld_base != 0 && pgl->libc_base != 0;
+}
+
 /* Start tracing PID.  Its parent is PARENT.  ALREADY_PTRACING
    indicates whether the thread is in trace mode or not.  */
 static struct tcb *
@@ -540,6 +674,8 @@ thread_trace (pid_t pid, struct tcb *parent, bool already_ptracing)
 
   tcb->memfd = -1;
 
+  tcb->libc_fd = -1;
+
   tcb->current_syscall = -1;
 
   tcb_parent_set (tcb, parent);
@@ -549,7 +685,516 @@ thread_trace (pid_t pid, struct tcb *parent, bool already_ptracing)
 
   tcb_read_exe (tcb);
 
+  char filename[32];
+  gchar *contents = NULL;
+  gsize length = 0;
+  GError *error = NULL;
+  snprintf (filename, sizeof (filename),
+	    "/proc/%d/status", pid);
+  if (! g_file_get_contents (filename, &contents, &length, &error))
+    {
+      debug (0, "Error reading %s: %s; can't trace non-existent process",
+	     filename, error->message);
+      g_error_free (error);
+      error = NULL;
+      return false;
+    }
+
+  char *tgid_str = strstr (contents, "\nTgid:");
+  tgid_str += 7;
+  tcb->process_group_leader_pid = atoi (tgid_str);
+  g_free (contents);
+
+  do_debug (0)
+    {
+      debug (0, "Now tracing %d (%s;%s;%s).  Thread group: %d",
+	     tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
+	     tcb->process_group_leader_pid);
+    }
+
   return tcb;
+}
+
+static bool
+thread_check_word (struct tcb *tcb, uintptr_t addr, uintptr_t value)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+  int memfd = tcb_memfd (tcb);
+  if (lseek (memfd, addr, SEEK_SET) < 0)
+    {
+      debug (0, "Error seeking in process %s's memory: %m", tcb->pid);
+      return false;
+    }
+
+  uintptr_t real = 0;
+  if (read (memfd, &real, sizeof (real)) < 0)
+    {
+      debug (0, "Failed to read from process %d's memory: %m", tcb->pid);
+      return false;
+    }
+
+  if (real != value)
+    debug (0, DEBUG_BOLD ("Reading process %d's memory: "
+			  "at %"PRIxPTR": expected %"PRIxPTR", got: %"PRIxPTR),
+	   tcb->pid, addr, value, real);
+
+  return real == value;
+}
+
+static bool
+thread_update_word (struct tcb *tcb, uintptr_t addr, uintptr_t value)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+  if (ptrace (PTRACE_POKEDATA, tcb->pid, addr, value) < 0)
+    {
+      debug (0, "Failed to write to process %d's memory, "
+	     "location %"PRIxPTR": %m",
+	     tcb->pid, addr);
+      return false;
+    }
+
+  return true;
+}
+
+struct fixup
+{
+  /* The instruction prior to the SWI.  */
+  uintptr_t preceeding_ins;
+  /* What to load in R7.  */
+  uintptr_t reg_value;
+};
+
+struct patch
+{
+  uintptr_t base_offset;
+  struct fixup *fixup;
+};
+
+struct library_patches
+{
+  struct patch *patches;
+  int patch_count;
+  uintptr_t size;
+};
+struct library_patches libc;
+struct library_patches ld;
+
+/* Revert any fixups applied to a thread.  TCB must be the process
+   group leader.  */
+static void
+thread_revert_patches (struct tcb *tcb)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+  assert (tcb->process_group_leader_pid == tcb->pid);
+  if (! tcb_patched (tcb))
+    return;
+
+  void revert (struct library_patches *patches, uintptr_t base)
+  {
+    int i;
+    for (i = 0; i < patches->patch_count; i ++)
+      {
+	struct patch *p = &patches->patches[i];
+
+	uintptr_t addr = base + p->base_offset;
+	uintptr_t value = p->fixup->preceeding_ins;
+
+	if (ptrace (PTRACE_POKEDATA, tcb->pid, addr, value) < 0)
+	  {
+	    /* Can we do anything other than print a warning?  */
+	    debug (0, "Failed to write to process %d's memory, "
+		   "location %"PRIxPTR": %m",
+		   tcb->pid, addr);
+	  }
+      }
+  }
+
+  if (tcb->libc_base)
+    {
+      revert (&libc, tcb->libc_base);
+      tcb->libc_base = 0;
+    }
+
+  if (tcb->ld_base)
+    {
+      revert (&ld, tcb->ld_base);
+      tcb->ld_base = 0;
+    }
+}
+
+#ifdef __arm__
+#define BREAKPOINT_INS 0xe7f001f0
+
+/* The following is the standard glibc system call stub to invoke a
+   system call:
+
+     0x40015034 <open+4>:	mov	r7, #5	; 0x5
+     0x40015038 <open+8>:	svc	0x00000000
+     0x4001503c <open+12>:	mov	r7, r12
+     0x40015040 <open+16>:	cmn	r0, #4096	; 0x1000
+
+   Just using the first two instructions seems to result in some false
+   positives.
+
+   Including restoring r7 from r12 results in false negatives:
+
+     0x00054e2c <renameat+248>:	mov	r7, #38	; 0x26
+     0x00054e30 <renameat+252>:	svc	0x00000000
+     0x00054e34 <renameat+256>:	cmn	r0, #4096	; 0x1000
+
+   A good heuristic seems to be to check for an svc and an errno check
+   either immediately after the svc or one instruction later.  */
+#define SYSCALL_INS 0xef000000
+#define SYSCALL_ERRNO_CHECK 0xe3700a01
+#endif
+
+struct fixup fixups[] =
+  {
+#ifdef __arm__
+#define X(NUM) { 0xe3a07000 + NUM - __NR_SYSCALL_BASE, NUM - __NR_SYSCALL_BASE }
+    X(__NR_open),
+    X(__NR_close),
+    X(__NR_openat),
+    X(__NR_unlink),
+    X(__NR_unlinkat),
+    X(__NR_rmdir),
+    X(__NR_rename),
+    X(__NR_renameat),
+#undef X
+#endif
+  };
+
+static void
+thread_apply_patches (struct tcb *thread)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+  struct tcb *tcb = tcb_group_leader (thread);
+  if (tcb_patched (tcb))
+    {
+      debug (0, DEBUG_BOLD ("Already patched %d"), thread->pid);
+      return;
+    }
+  assert (! tcb->ld_base || ! tcb->libc_base);
+
+#ifdef __arm__
+  void scan (struct library_patches *lib,
+	     uintptr_t map_start, uintptr_t map_end)
+  {
+    assert (lib->patch_count == 0);
+    assert (map_start < map_end);
+
+    int memfd = tcb_memfd (tcb);
+    if (memfd == -1)
+      return;
+
+    uintptr_t map_length = map_end - map_start;
+
+    debug (0, "Scanning %"PRIxPTR"-%"PRIxPTR" (0x%x bytes)",
+	   map_start, map_end, map_length);
+
+    /* mmap always fails.  */
+    if (lseek (memfd, map_start, SEEK_SET) < 0)
+      {
+	debug (0, "Error seeking in process %d's memory: %m", tcb->pid);
+	return;
+      }
+
+    uintptr_t *map = g_malloc (map_length);
+    void *p = map;
+    int s = map_length;
+    while (s > 0)
+      {
+	int r = read (memfd, p, s);
+	if (r < 0)
+	  {
+	    debug (0, "Error reading from process %d's memory: %m",
+		   tcb->pid);
+	    break;
+	  }
+
+	s -= r;
+	p += r;
+      }
+
+    if (s)
+      {
+	debug (0, "Failed to read %d of %d bytes from process %d's memory.",
+	       s, map_length, tcb->pid);
+	map_length -= s;
+      }
+
+    /* We want to cache the real map length, not the truncated
+       one.  */
+    lib->size = map_length;
+
+
+    GSList *patches = NULL;
+
+    uintptr_t i;
+    for (i = 1; (i + 3) * sizeof (uintptr_t) <= map_length; i ++)
+      if (map[i] == SYSCALL_INS
+	  && (map[i + 1] == SYSCALL_ERRNO_CHECK
+	      || map[i + 2] == SYSCALL_ERRNO_CHECK))
+	/* Got a system call.  */
+	{
+	  int j;
+	  for (j = 0; j < sizeof (fixups) / sizeof (fixups[0]); j ++)
+	    {
+	      struct fixup *f = &fixups[j];
+	      if (map[i - 1] == f->preceeding_ins)
+		{
+		  debug (0, "Patching offset 0x%"PRIxPTR" with fixup %d",
+			 i, j);
+
+		  struct patch *p = alloca (sizeof (*p));
+		  p->base_offset = (i - 1) * 4;
+		  p->fixup = f;
+		  patches = g_slist_prepend (patches, p);
+		  lib->patch_count ++;
+		  break;
+		}
+	    }
+	}
+
+    debug (0, "Generated %d patches.", lib->patch_count);
+    g_free (map);
+
+    lib->patches = g_malloc (sizeof (struct patch) * lib->patch_count);
+    for (i = 0; i < lib->patch_count; i ++)
+      {
+	assert (patches);
+	struct patch *p = patches->data;
+	lib->patches[i] = *p;
+
+	patches = g_slist_delete_link (patches, patches);
+      }
+    assert (! patches);
+  }
+
+  bool grep_maps (const char *maps, const char *str,
+		  uintptr_t *map_start, uintptr_t *map_end)
+  {
+    assert (str [strlen (str) - 1] == '\n');
+
+    const char *str_loc = maps;
+    while ((str_loc = strstr (str_loc, str)))
+      {
+	/* Find the start of the line.  */
+	const char *line = memrchr (maps, '\n',
+				    (uintptr_t) str_loc - (uintptr_t) maps);
+	if (line)
+	  line ++;
+	else
+	  line = maps;
+
+	debug (4, "Considering '%.*s'",
+	       (uintptr_t) str_loc - (uintptr_t) line + strlen (str) - 1,
+	       line);
+
+	const char *p = line;
+
+	/* Advance by one so that the next strstr doesn't return
+	   the same location.  */
+	str_loc ++;
+
+	char *tailp = NULL;
+	*map_start = strtol (p, &tailp, 16);
+	debug (4, "map start: %"PRIxPTR, *map_start);
+	p = tailp;
+	if (*p != '-')
+	  {
+	    debug (0, "Expected '-'.  Have '%s'", p);
+	    return false;
+	  }
+	p ++;
+
+	*map_end = strtol (p, &tailp, 16);
+	debug (4, "map end: %"PRIxPTR, *map_end);
+	p = tailp;
+
+	const char *perms = " r-xp ";
+	if (strncmp (p, perms, strlen (perms)) != 0)
+	  /* This is a transient error.  */
+	  {
+	    debug (0, "Expected '%s'.  Have '%s'", perms, p);
+	    continue;
+	  }
+
+	p += strlen (perms);
+
+	uintptr_t file_offset = strtol (p, &tailp, 16);
+	debug (4, "file offset: %"PRIxPTR, file_offset);
+	p = tailp;
+	if (*p != ' ')
+	  {
+	    debug (0, "Expected ' '.  Have '%s'", p);
+	    return false;
+	  }
+
+	return true;
+      }
+    return false;
+  }
+
+  /* Figure our where the libraries are mapped.  */
+  char filename[32];
+  gchar *maps = NULL;
+  gsize length = 0;
+  GError *error = NULL;
+  snprintf (filename, sizeof (filename),
+	    "/proc/%d/maps", tcb->pid);
+  if (! g_file_get_contents (filename, &maps, &length, &error))
+    {
+      debug (0, "Error reading %s: %s; can't trace non-existent process",
+	     filename, error->message);
+      g_error_free (error);
+      error = NULL;
+      return;
+    }
+
+  debug (4, "%s: %s", filename, maps);
+
+  bool patch_ld = false;
+  if (! tcb->ld_base)
+    {
+      uintptr_t map_addr, map_end;
+      if (grep_maps (maps, "/lib/ld-2.5.so\n", &map_addr, &map_end))
+	{
+	  if (! libc.patches)
+	    /* We have not yet generated the patch list.  */
+	    scan (&ld, map_addr, map_end);
+	  tcb->ld_base = map_addr;
+	  patch_ld = true;
+	}
+    }
+
+  bool patch_libc = false;
+  if (! tcb->libc_base)
+    {
+      uintptr_t map_addr, map_end;
+      if (grep_maps (maps, "/lib/libc-2.5.so\n", &map_addr, &map_end))
+	{
+	  if (! libc.patches)
+	    /* We have not yet generated the patch list.  */
+	    scan (&libc, map_addr, map_end);
+	  tcb->libc_base = map_addr;
+	  patch_libc = true;
+	}
+    }
+
+  g_free (maps);
+
+  /* Patch the current process.  */
+  int bad = 0;
+  int i;
+  if (patch_ld)
+    for (i = 0; i < ld.patch_count; i ++)
+      {
+	struct patch *p = &ld.patches[i];
+	if (! thread_check_word (tcb, tcb->ld_base + p->base_offset,
+				 p->fixup->preceeding_ins))
+	  bad ++;
+      }
+  if (patch_libc)
+    for (i = 0; i < libc.patch_count; i ++)
+      {
+	struct patch *p = &libc.patches[i];
+	if (! thread_check_word (tcb, tcb->libc_base + p->base_offset,
+				 p->fixup->preceeding_ins))
+	  bad ++;
+      }
+
+  if (bad)
+    {
+      debug (0, "%d of %d locations contain unexpected values.  Not patching.",
+	     bad,
+	     (patch_ld ? ld.patch_count : 0)
+	     + (patch_libc ? libc.patch_count : 0));
+      return;
+    }
+
+  int count = 0;
+  if (patch_ld)
+    for (i = 0; i < ld.patch_count; i ++)
+      {
+	struct patch *p = &ld.patches[i];
+	if (thread_update_word (tcb, tcb->ld_base + p->base_offset,
+				BREAKPOINT_INS))
+	  count ++;
+      }
+  if (patch_libc)
+    for (i = 0; i < libc.patch_count; i ++)
+      {
+	struct patch *p = &libc.patches[i];
+	if (thread_update_word (tcb, tcb->libc_base + p->base_offset,
+				BREAKPOINT_INS))
+	  count ++;
+      }
+  debug (0, "%d: Applied %d of %d updates",
+	 tcb->pid, count,
+	 (patch_ld ? ld.patch_count : 0)
+	 + (patch_libc ? libc.patch_count : 0));
+#endif
+}
+
+#ifdef __x86_64__
+# define REGS_IP rip
+#elif __arm__
+# define REGS_IP ARM_pc
+#endif
+
+static bool
+thread_fixup_advance (struct tcb *thread, struct pt_regs *regs)
+{
+  struct tcb *tcb = tcb_group_leader (thread);
+
+  bool fixup (struct library_patches *lib, uintptr_t lib_base)
+  {
+    int i;
+    for (i = 0; i < lib->patch_count; i ++)
+      {
+	struct patch *p = &lib->patches[i];
+
+	if (lib_base + p->base_offset == regs->REGS_IP)
+	  {
+#ifdef __arm__
+	    regs->REGS_IP = (uintptr_t) regs->REGS_IP + 4;
+	    regs->ARM_r7 = p->fixup->reg_value;
+
+	    if (ptrace (PTRACE_SETREGS, thread->pid, 0, (void *) regs) < 0)
+	      debug (0, "Failed to update thread's register set: %m");
+	    else
+	      debug (4, "Fixed up thread (fixup %d, syscall %s (%d)).",
+		     ((uintptr_t) p->fixup - (uintptr_t) fixups)
+		     / sizeof (fixups[0]),
+		     syscall_str (p->fixup->reg_value), p->fixup->reg_value);
+#endif
+
+	    return true;
+	  }
+      }
+
+    debug (4, DEBUG_BOLD ("Fix up unnecessary."));
+    return false;
+  }
+
+  if (tcb->ld_base <= regs->REGS_IP
+      && regs->REGS_IP <= tcb->ld_base + ld.size)
+    return fixup (&ld, tcb->ld_base);
+  if (tcb->libc_base <= regs->REGS_IP
+      && regs->REGS_IP <= tcb->libc_base + libc.size)
+    return fixup (&libc, tcb->libc_base);
+
+  debug (4, "%d: %p not in relevant code (%p..%p / %p..%p).",
+	 thread->pid, regs->REGS_IP,
+	 tcb->ld_base, tcb->ld_base + ld.size,
+	 tcb->libc_base, tcb->libc_base + libc.size);
+
+  return false;
 }
 
 /* Stop tracing a thread.  The thread must already be detached, i.e.,
@@ -639,6 +1284,16 @@ thread_untrace (struct tcb *tcb)
     tcb_free (tcb);
 }
 
+static void
+thread_detach (struct tcb *tcb)
+{
+  debug (4, "Detaching %d", (int) tcb->pid);
+  if (tcb->process_group_leader_pid == tcb->pid)
+    thread_revert_patches (tcb);
+  if (ptrace (PTRACE_DETACH, tcb->pid, 0, SIGCONT) < 0)
+    debug (0, "Detaching from %d failed: %m", tcb->pid);
+}
+
 /* Start tracing a process.  Return the corresponding TCB for the
    thread group leader.
 
@@ -654,8 +1309,11 @@ process_trace (pid_t pid)
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
   struct tcb *tcb = thread_trace (pid, NULL, false);
-  assert (! tcb->top_level);
-  tcb->top_level = true;
+  if (tcb)
+    {
+      assert (! tcb->top_level);
+      tcb->top_level = true;
+    }
   return tcb;
 }
 
@@ -816,35 +1474,6 @@ process_monitor_command (enum process_monitor_commands command, pid_t pid)
   pthread_mutex_unlock (&process_monitor_commands_lock);
 }
 
-static void
-memfd_cleanup (void)
-{
-  assert (pthread_equal (pthread_self (), process_monitor_tid));
-
-  void iter (gpointer key, gpointer value, gpointer user_data)
-  {
-    struct tcb *tcb = value;
-    uintptr_t horizon = (uintptr_t) user_data;
-
-    if (tcb->memfd != -1 && tcb->memfd_lastuse < horizon)
-      {
-	close (tcb->memfd);
-	tcb->memfd = -1;
-	memfd_count --;
-      }
-  }
-
-  uintptr_t n = now ();
-
-  if (memfd_count > 96)
-    /* Close any fd not used in the last 60 seconds.  */
-    g_hash_table_foreach (tcbs, iter, (gpointer) (uintptr_t) (n - 60*1000));
-  if (memfd_count > 128)
-    /* That apparently didn't close enough.  Try again.  Close any fd
-       not used in the last 5 seconds.  */
-    g_hash_table_foreach (tcbs, iter, (gpointer) (uintptr_t) (n - 5*1000));
-}
-
 /* Extract a string (at most SIZE bytes long) from at address ADDR in
    thread PID's address space and save it in BUFFER.  If we have to
    fall back to ptrace, this becomes expensive because we can only
@@ -859,37 +1488,23 @@ grab_string (struct tcb *tcb, uintptr_t addr, char *buffer, int size)
   char *b = buffer;
   *b = 0;
 
-  char filename[32];
-  snprintf (filename, sizeof (filename), "/proc/%d/mem", (int) tcb->pid);
-  if (tcb->memfd == -1)
+  int memfd = tcb_memfd (tcb);
+  if (memfd == -1)
+    goto try_ptrace;
+
+  if (lseek (memfd, addr, SEEK_SET) < 0)
     {
-      memfd_cleanup ();
-
-      tcb->memfd = open (filename, O_RDONLY);
-      if (tcb->memfd < 0)
-	{
-	  tcb->memfd = -1;
-	  debug (0, "Failed to open %s: %m", filename);
-	  goto try_ptrace;
-	}
-      memfd_count ++;
-    }
-
-  tcb->memfd_lastuse = now ();
-
-  if (lseek (tcb->memfd, addr, SEEK_SET) < 0)
-    {
-      debug (0, "Error seeking in %s: %m", filename);
+      debug (0, "Error seeking in process %d's memory: %m", tcb->pid);
       goto try_ptrace;
     }
 
   int s = size;
   while (s > 0)
     {
-      int r = read (tcb->memfd, b, s);
+      int r = read (memfd, b, s);
       if (r < 0)
 	{
-	  debug (0, "Error reading from %s: %m", filename);
+	  debug (0, "Error reading from process memory: %m");
 
 	  if (buffer == b)
 	    /* We didn't manage to read anything...  */
@@ -1122,6 +1737,8 @@ process_monitor (void *arg)
       /* SIGNO is the signal the child received and the signal to be
 	 propagated to the child (if any).  */
       int signo = 0;
+      /* How to resume the process.  */
+      int ptrace_op = PTRACE_CONT;
 
       /* Is there a race between checking for new commands and calling
 	 waitpid?  No.  Consider the case that the process monitor
@@ -1262,6 +1879,10 @@ process_monitor (void *arg)
 	    }
 	}
 
+      /* If the process has been fixed up, then let it run.
+	 Otherwise, default to stopping it at the next signal.  */
+      ptrace_op = tcb_patched (tcb) ? PTRACE_CONT : PTRACE_SYSCALL;
+
       /* See if the child exited.  */
       if (WIFEXITED (status))
 	{
@@ -1299,8 +1920,7 @@ process_monitor (void *arg)
 	   process.  */
 	{
 	  debug (4, "Detaching %d", (int) tcb->pid);
-	  if (ptrace (PTRACE_DETACH, tcb->pid, 0, SIGCONT) < 0)
-	    debug (0, "Detaching from %d failed: %m", tcb->pid);
+	  thread_detach (tcb);
 	  thread_untrace (tcb);
 	  tcb = NULL;
 	  continue;
@@ -1309,14 +1929,18 @@ process_monitor (void *arg)
       if (tcb->suspended < 0)
 	/* Suspend pending.  Do it now.  */
 	{
-	  if (ptrace (PTRACE_DETACH, tcb->pid, 0, SIGCONT) < 0)
-	    debug (0, "Detaching from %d failed: %m", tcb->pid);
+	  /* XXX: We shouldn't detach.  Instead, we should resume it
+	     with PTRACE_CONT so we can still catch clones, exits and
+	     signals.  */
+	  debug (4, "Detaching %d", (int) tcb->pid);
+	  thread_detach (tcb);
 	  tcb->suspended = -tcb->suspended;
 	  continue;
 	}
 
       if (tcb->trace_options == 0 && signo == SIGSTOP)
-	/* The thread is now running.  */
+	/* This is a running thread that we have manually attached to.
+	   The thread is now running.  */
 	{
 	  if (ptrace (PTRACE_SETOPTIONS, pid, 0,
 		      (PTRACE_O_TRACESYSGOOD|PTRACE_O_TRACECLONE
@@ -1392,6 +2016,8 @@ process_monitor (void *arg)
 		}
 	    }
 
+	  thread_apply_patches (tcb);
+
 	  goto out;
 	}
 
@@ -1400,11 +2026,13 @@ process_monitor (void *arg)
 	 0x80|SIGTRAP.  If this is not the case, just forward the
 	 signal to the process.  */
       if (! ((tcb->trace_options == 1 && (signo == (0x80 | SIGTRAP) || event))
-	     || (tcb->trace_options == -1 && (signo == SIGTRAP))))
+	     || (tcb->trace_options == -1 && (signo == SIGTRAP))
+	     || (tcb->trace_options == 1 && signo == SIGTRAP)))
 	/* Ignore.  Not our signal.  */
 	{
-	  debug (4, "%d: ignoring and forwarding signal '%s' (%d)",
-		 pid, strsignal (signo), signo);
+	  debug (0, "%d: ignoring and forwarding signal '%s' (%d) "
+		 "(trace options: %d)",
+		 pid, strsignal (signo), signo, tcb->trace_options);
 	  goto out;
 	}
 
@@ -1428,6 +2056,7 @@ process_monitor (void *arg)
 		 options are inherited.  */
 	      debug (4, "%d exec'd", (int) (pid_t) msg);
 	      tcb_read_exe (tcb);
+
 	      goto out;
 	    case PTRACE_EVENT_CLONE:
 	    case PTRACE_EVENT_FORK:
@@ -1444,6 +2073,7 @@ process_monitor (void *arg)
 		       parent.  */
 		    tcb2->trace_options = tcb->trace_options;
 		  }
+
 		goto out;
 	      }
 	    default:
@@ -1457,6 +2087,7 @@ process_monitor (void *arg)
 	 in examining, we also need its arguments.  Just get the
 	 thread's register file and be done with it.  */
 
+      struct pt_regs regs;
 #ifdef __x86_64__
 # define SYSCALL (regs.orig_rax)
 # define ARG1 (regs.rdi)
@@ -1466,7 +2097,6 @@ process_monitor (void *arg)
 # define ARG5 (regs.r8)
 # define ARG6 (regs.r9)
 # define RET (regs.rax)
-      struct user_regs_struct regs;
 #elif __arm__
       /* This layout assumes that there are no 64-bit parameters.  See
 	 http://lkml.org/lkml/2006/1/12/175 for the complications.  */
@@ -1481,7 +2111,6 @@ process_monitor (void *arg)
 # define ARG5 (regs.ARM_r4)
 # define ARG6 (regs.ARM_r5)
 # define RET (regs.ARM_r0)
-      struct user_regs regs;
 #else
 # error Not ported to your architecture.
 #endif
@@ -1492,6 +2121,16 @@ process_monitor (void *arg)
 	  goto out;
 	}
 
+      ptrace_op = PTRACE_SYSCALL;
+
+      if (WSTOPSIG (status) == SIGTRAP)
+	/* See if we inserted a break point.  If so, try to advance
+	   the thread.  If that works, just continue the thread.  It
+	   will be back in a moment...  */
+	if (thread_fixup_advance (tcb, &regs))
+	  goto out;
+
+      /* At least on ARM, ARM_ip will be 0 on entry and 1 on exit.  */
       bool syscall_entry = tcb->current_syscall == -1;
       long syscall;
       if (syscall_entry)
@@ -1537,281 +2176,258 @@ process_monitor (void *arg)
 	  return false;
       }
 
-      const char *syscall_str (long syscall)
-      {
-	switch (syscall)
-	  {
-	  case __NR_clone:
-	    return "clone";
-	  case __NR_open:
-	    return "open";
-	  case __NR_openat:
-	    return "openat";
-	  case __NR_close:
-	    return "close";
-	  case __NR_unlink:
-	    return "unlink";
-	  case __NR_unlinkat:
-	    return "unlinkat";
-	  case __NR_rmdir:
-	    return "rmdir";
-	  case __NR_rename:
-	    return "rename";
-	  case __NR_renameat:
-	    return "renameat";
-	  default:
-	    return "unknown";
-	  }
-      }
-
       debug (4, "%d: %s (%ld) %s",
 	     (int) pid, syscall_str (syscall), syscall,
 	     syscall_entry ? "entry" : "exit");
 
-      if (syscall_entry && syscall == __NR_clone)
+      switch (syscall)
 	{
-	  do_debug (4)
-	    {
-	      uintptr_t flags = ARG1;
-	      debug (0, "%d clone (flags: %"PRIxPTR"); "
-		     "signal mask: %"PRIxPTR"; "
-		     "flags:%s%s%s"
-		     "%s%s%s%s%s"
-		     "%s%s%s%s%s"
-		     "%s%s%s%s%s"
-		     "%s%s%s%s%s",
-		     (int) tcb->pid, flags,
-		     flags & CSIGNAL,
-		     (flags & CLONE_VM) ? " VM" : "",
-		     (flags & CLONE_FS) ? " FS" : "",
-		     (flags & CLONE_FILES) ? " FILES" : "",
-		     (flags & CLONE_SIGHAND) ? " SIGHAND" : "",
-		     (flags & CLONE_PTRACE) ? " PTRACE" : "",
-		     (flags & CLONE_VFORK) ? " VFORK" : "",
-		     (flags & CLONE_PARENT) ? " PARENT" : "",
-		     (flags & CLONE_THREAD) ? " THREAD" : "",
-		     (flags & CLONE_NEWNS) ? " NEWNS" : "",
-		     (flags & CLONE_SYSVSEM) ? " SYSVSEM" : "",
-		     (flags & CLONE_SETTLS) ? " SETTLS" : "",
-		     (flags & CLONE_PARENT_SETTID) ? " P_SETTID" : "",
-		     (flags & CLONE_CHILD_CLEARTID) ? " C_CLEARTID" : "",
-		     (flags & CLONE_DETACHED) ? " DETACHED" : "",
-		     (flags & CLONE_UNTRACED) ? " UNTRACED" : "",
-		     (flags & CLONE_CHILD_SETTID) ? " C_SETTID" : "",
-		     (flags & CLONE_STOPPED) ? " STOPPED" : "",
-		     (flags & CLONE_NEWUTS) ? " NEWUTS" : "",
-		     (flags & CLONE_NEWIPC) ? " NEWIPC" : "",
-		     (flags & CLONE_NEWUSER) ? " NEWUSER" : "",
-		     (flags & CLONE_NEWPID) ? " NEWPID" : "",
-		     (flags & CLONE_NEWNET) ? " NEWNET" : "",
-		     (flags & CLONE_IO) ? " IO" : "");
-	    }
-	}
-      else if (! syscall_entry && syscall == __NR_clone)
-	{
-	  pid_t child_pid = (pid_t) RET;
+	default:
+	  if (tcb_patched (tcb))
+	    /* Don't intercept system calls anymore.  */
+	    ptrace_op = PTRACE_CONT;
+	  break;
 
-	  if (tcb->trace_options != 1)
-	    /* Had we set PTRACE_O_TRACECLONE, we would automatically
-	       trace new children.  Since we didn't we try to
-	       intercept clone calls.  */
+	case __NR_clone:
+	  if (syscall_entry)
 	    {
-	      struct tcb *child = thread_trace (child_pid, tcb, false);
-	      if (child)
-		/* Either its part of the same thread group or its a new
-		   task, which only has one thread.  */
-		child->scanned_siblings = true;
-	    }
-	}
-      else if (! syscall_entry && (syscall == __NR_open
-				   || syscall == __NR_openat))
-	{
-	  uintptr_t filename;
-	  int flags;
-	  mode_t mode;
-	  if (syscall == __NR_open)
-	    {
-	      filename = ARG1;
-	      flags = ARG2;
-	      mode = ARG3;
+	      do_debug (4)
+		{
+		  uintptr_t flags = ARG1;
+		  debug (0, "%d clone (flags: %"PRIxPTR"); "
+			 "signal mask: %"PRIxPTR"; "
+			 "flags:%s%s%s"
+			 "%s%s%s%s%s"
+			 "%s%s%s%s%s"
+			 "%s%s%s%s%s"
+			 "%s%s%s%s%s",
+			 (int) tcb->pid, flags,
+			 flags & CSIGNAL,
+			 (flags & CLONE_VM) ? " VM" : "",
+			 (flags & CLONE_FS) ? " FS" : "",
+			 (flags & CLONE_FILES) ? " FILES" : "",
+			 (flags & CLONE_SIGHAND) ? " SIGHAND" : "",
+			 (flags & CLONE_PTRACE) ? " PTRACE" : "",
+			 (flags & CLONE_VFORK) ? " VFORK" : "",
+			 (flags & CLONE_PARENT) ? " PARENT" : "",
+			 (flags & CLONE_THREAD) ? " THREAD" : "",
+			 (flags & CLONE_NEWNS) ? " NEWNS" : "",
+			 (flags & CLONE_SYSVSEM) ? " SYSVSEM" : "",
+			 (flags & CLONE_SETTLS) ? " SETTLS" : "",
+			 (flags & CLONE_PARENT_SETTID) ? " P_SETTID" : "",
+			 (flags & CLONE_CHILD_CLEARTID) ? " C_CLEARTID" : "",
+			 (flags & CLONE_DETACHED) ? " DETACHED" : "",
+			 (flags & CLONE_UNTRACED) ? " UNTRACED" : "",
+			 (flags & CLONE_CHILD_SETTID) ? " C_SETTID" : "",
+			 (flags & CLONE_STOPPED) ? " STOPPED" : "",
+			 (flags & CLONE_NEWUTS) ? " NEWUTS" : "",
+			 (flags & CLONE_NEWIPC) ? " NEWIPC" : "",
+			 (flags & CLONE_NEWUSER) ? " NEWUSER" : "",
+			 (flags & CLONE_NEWPID) ? " NEWPID" : "",
+			 (flags & CLONE_NEWNET) ? " NEWNET" : "",
+			 (flags & CLONE_IO) ? " IO" : "");
+		}
 	    }
 	  else
 	    {
-	      filename = ARG2;
-	      flags = ARG3;
-	      mode = ARG4;
-	    }
+	      pid_t child_pid = (pid_t) RET;
 
-	  int fd = (int) RET;
-
-	  int unhandled
-	    = flags & ~(O_RDONLY|O_WRONLY|O_RDWR|O_CREAT|O_EXCL|O_TRUNC
-			|O_NONBLOCK|O_LARGEFILE|O_DIRECTORY);
-	  debug (4, "%s (%"PRIxPTR", %s%s%s%s%s%s%s%s (%x; %x unknown), "
-		 "%x) -> %d",
-		 syscall_str (syscall),
-		 /* filename, flags, mode.  */
-		 filename,
-		 ((flags & O_RDONLY) == O_RDONLY) || (flags & O_RDWR)
-		 ? "R" : "-",
-		 ((flags & O_WRONLY) == O_WRONLY) || (flags & O_RDWR)
-		 ? "W" : "-",
-		 flags & O_CREAT ? "C" : "-",
-		 flags & O_EXCL ? "X" : "-",
-		 flags & O_TRUNC ? "T" : "-",
-		 flags & O_NONBLOCK ? "N" : "B",
-		 flags & O_LARGEFILE ? "L" : "-",
-		 flags & O_DIRECTORY ? "D" : "-",
-		 flags, 
-		 unhandled,
-		 (int) mode, fd);
-
-	  char buffer[1024];
-	  do_debug (5)
-	    {
-	      grab_string (tcb, ARG1, buffer, sizeof (buffer));
-	      /* Ensure it is NUL terminated.  */
-	      buffer[sizeof (buffer) - 1] = 0;
-	      if (fd < 0)
-		debug (0, "opening %s failed.", buffer);
-	    }
-
-	  if (lookup_fd (tcb->pid, fd, buffer, sizeof (buffer)))
-	    {
-	      debug (4, "%d: %s;%s;%s: %s (%s, %c%c) -> %d",
-		     (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
-		     syscall_str (syscall),
-		     buffer,
-		     ((flags & O_RDONLY) == O_RDONLY) || (flags & O_RDWR)
-		     ? 'r' : '-',
-		     ((flags & O_WRONLY) == O_WRONLY) || (flags & O_RDWR)
-		     ? 'W' : '-',
-		     fd);
-
-	      if (process_monitor_filename_whitelisted (buffer))
+	      if (tcb->trace_options != 1)
+		/* Had we set PTRACE_O_TRACECLONE, we would automatically
+		   trace new children.  Since we didn't we try to
+		   intercept clone calls.  */
 		{
-		  struct stat s;
-		  if (stat (buffer, &s) < 0)
-		    {
-		      debug (4, "Failed to stat %s: %m", buffer);
-		      memset (&s, 0, sizeof (s));
-		    }
-		  callback_enqueue (tcb, WC_PROCESS_OPEN_CB,
-				    buffer, NULL, flags, &s);
+		  struct tcb *child = thread_trace (child_pid, tcb, false);
+		  if (child)
+		    /* Either its part of the same thread group or its a new
+		       task, which only has one thread.  */
+		    child->scanned_siblings = true;
 		}
 	    }
-	}
-      else if (syscall_entry && syscall == __NR_close)
-	{
-	  int fd = (int) ARG1;
+	  break;
 
-	  char buffer[1024];
-	  if (lookup_fd (tcb->pid, fd, buffer, sizeof (buffer)))
-	    /* There is little reason to believe that a close on a
-	       valid file descriptor will fail.  Don't save and wait
-	       for the exit.  Marshall now.  */
-	    {
-	      debug (4, "%d: %s: close (%ld) -> %s",
+	case __NR_open:
+	case __NR_openat:
+	  {
+	    if (syscall_entry)
+	      break;
+
+	    /* We only care about the syscall exit.  */
+
+	    uintptr_t filename;
+	    int flags;
+	    mode_t mode;
+	    if (syscall == __NR_open)
+	      {
+		filename = ARG1;
+		flags = ARG2;
+		mode = ARG3;
+	      }
+	    else
+	      {
+		filename = ARG2;
+		flags = ARG3;
+		mode = ARG4;
+	      }
+	    int fd = (int) RET;
+
+	    int unhandled
+	      = flags & ~(O_RDONLY|O_WRONLY|O_RDWR|O_CREAT|O_EXCL|O_TRUNC
+			  |O_NONBLOCK|O_LARGEFILE|O_DIRECTORY);
+	    debug (4, "%s (%"PRIxPTR", %s%s%s%s%s%s%s%s (%x; %x unknown), "
+		   "%x) -> %d",
+		   syscall_str (syscall),
+		   /* filename, flags, mode.  */
+		   filename,
+		   ((flags & O_RDONLY) == O_RDONLY) || (flags & O_RDWR)
+		   ? "R" : "-",
+		   ((flags & O_WRONLY) == O_WRONLY) || (flags & O_RDWR)
+		   ? "W" : "-",
+		   flags & O_CREAT ? "C" : "-",
+		   flags & O_EXCL ? "X" : "-",
+		   flags & O_TRUNC ? "T" : "-",
+		   flags & O_NONBLOCK ? "N" : "B",
+		   flags & O_LARGEFILE ? "L" : "-",
+		   flags & O_DIRECTORY ? "D" : "-",
+		   flags,
+		   unhandled,
+		   (int) mode, fd);
+
+	    char buffer[1024];
+	    do_debug (5)
+	      {
+		grab_string (tcb, ARG1, buffer, sizeof (buffer));
+		/* Ensure it is NUL terminated.  */
+		buffer[sizeof (buffer) - 1] = 0;
+		if (fd < 0)
+		  debug (0, "opening %s failed.", buffer);
+	      }
+
+	    if (lookup_fd (tcb->pid, fd, buffer, sizeof (buffer)))
+	      {
+		debug (4, "%d: %s;%s;%s: %s (%s, %c%c) -> %d",
+		       (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
+		       syscall_str (syscall),
+		       buffer,
+		       ((flags & O_RDONLY) == O_RDONLY) || (flags & O_RDWR)
+		       ? 'r' : '-',
+		       ((flags & O_WRONLY) == O_WRONLY) || (flags & O_RDWR)
+		       ? 'W' : '-',
+		       fd);
+
+		if (process_monitor_filename_whitelisted (buffer))
+		  {
+		    struct stat s;
+		    if (stat (buffer, &s) < 0)
+		      {
+			debug (4, "Failed to stat %s: %m", buffer);
+			memset (&s, 0, sizeof (s));
+		      }
+		    callback_enqueue (tcb, WC_PROCESS_OPEN_CB,
+				      buffer, NULL, flags, &s);
+		  }
+
+		if (strcmp (buffer, "/lib/libc-2.5.so") == 0)
+		  {
+		    debug (0, "got libc fd");
+		    tcb->libc_fd = fd;
+		  }
+	      }
+	  }
+
+	  break;
+
+	case __NR_close:
+	  {
+	    if (! syscall_entry)
+	      break;
+
+	    int fd = (int) ARG1;
+
+	    if (fd == tcb->libc_fd)
+	      {
+		debug (0, "libc fd closed");
+		tcb->libc_fd = -1;
+	      }
+
+	    char buffer[1024];
+	    if (lookup_fd (tcb->pid, fd, buffer, sizeof (buffer)))
+	      /* There is little reason to believe that a close on a
+		 valid file descriptor will fail.  Don't save and wait
+		 for the exit.  Marshall now.  */
+	      {
+		debug (4, "%d: %s: close (%ld) -> %s",
+		       (int) tcb->pid, tcb->exe,
+		       /* fd.  */
+		       (long) ARG1, buffer);
+
+		if (process_monitor_filename_whitelisted (buffer))
+		  {
+		    struct stat s;
+		    if (stat (buffer, &s) < 0)
+		      {
+			debug (4, "Failed to stat %s: %m", buffer);
+			memset (&s, 0, sizeof (s));
+		      }
+		    callback_enqueue (tcb, WC_PROCESS_CLOSE_CB,
+				      buffer, NULL, 0, &s);
+		  }
+	      }
+	    else
+	      debug (4, "%d: %s: close (%ld)",
 		     (int) tcb->pid, tcb->exe,
 		     /* fd.  */
-		     (long) ARG1, buffer);
+		     (long) ARG1);
 
-	      if (process_monitor_filename_whitelisted (buffer))
-		{
-		  struct stat s;
-		  if (stat (buffer, &s) < 0)
-		    {
-		      debug (4, "Failed to stat %s: %m", buffer);
-		      memset (&s, 0, sizeof (s));
-		    }
-		  callback_enqueue (tcb, WC_PROCESS_CLOSE_CB,
-				    buffer, NULL, 0, &s);
-		}
-	    }
-	  else
-	    debug (4, "%d: %s: close (%ld)",
-		   (int) tcb->pid, tcb->exe,
-		   /* fd.  */
-		   (long) ARG1);
+	  }
 
-	}
-      else if (syscall_entry
-	       && (syscall == __NR_unlink
-		   || syscall == __NR_unlinkat
-		   || syscall == __NR_rmdir
-		   || syscall == __NR_rename
-		   || syscall == __NR_renameat))
-	{
-	  uintptr_t filename;
-	  if (syscall == __NR_unlinkat || syscall == __NR_renameat)
-	    filename = ARG2;
-	  else
-	    filename = ARG1;
+	  break;
 
-	  char buffer[1024];
-	  if (grab_string (tcb, filename, buffer, sizeof (buffer)))
+#ifdef __NR_mmap2
+	case __NR_mmap2:
+	  if (! syscall_entry
+	      && ! tcb_patched (tcb)
+	      && tcb->process_group_leader_pid == tcb->pid)
 	    {
-	      buffer[sizeof (buffer) - 1] = 0;
+	      uintptr_t addr = ARG1;
+	      size_t length = ARG2;
+	      int prot = ARG3;
+	      int flags = ARG4;
+	      int fd = ARG5;
+	      uintptr_t file_offset = ARG6;
+	      uintptr_t map_addr = RET;
 
-	      char *p;
-	      if (buffer[0] == '/')
-		/* Absolute path.  */
-		p = g_strdup_printf ("/proc/%d/root/%s", pid, buffer);
-	      else if (syscall != __NR_renameat || ARG1 == AT_FDCWD)
-		/* relative path.  */
-		p = g_strdup_printf ("/proc/%d/cwd/%s", pid, buffer);
-	      else
-		/* renameat, relative path.  */
-		p = g_strdup_printf ("/proc/%d/fd/%d/%s",
-				     (int) pid, (int) ARG3, buffer);
+	      debug (0, DEBUG_BOLD ("mmap (%p, %x,%s%s%s (0x%x), 0x%x, %d (= %s), %x) -> %p"),
+		     addr, (int) length,
+		     prot & PROT_READ ? " READ" : "",
+		     prot & PROT_WRITE ? " WRITE" : "",
+		     prot & PROT_EXEC ? " EXEC" : "",
+		     prot, flags, fd,
+		     fd != -1 && fd == tcb->libc_fd ? "libc" : "other",
+		     file_offset, map_addr);
 
-	      tcb->saved_src = canonicalize_file_name (p);
-	      g_free (p);
-
-	      if (tcb->saved_src)
+	      if (tcb->libc_fd == fd && (prot & PROT_EXEC))
 		{
-		  tcb->saved_stat = g_malloc (sizeof (struct stat));
-		  if (stat (tcb->saved_src, tcb->saved_stat) < 0)
-		    debug (4, "Failed to stat %s: %m", tcb->saved_src);
+		  debug (0, "libc mapped executable at 0x%x+0x%x",
+			 map_addr, map_addr + length);
+		  thread_apply_patches (tcb);
 		}
 	    }
+	  break;
+#endif
 
-	  debug (4, "%d: %s;%s;%s: %s (%s)",
-		 (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
-		 syscall_str (syscall), tcb->saved_src);
-	}
-      else if (! syscall_entry
-	       && (syscall == __NR_unlink
-		   || syscall == __NR_unlinkat
-		   || syscall == __NR_rmdir))
-	{
-	  debug (4, "%d: %s;%s;%s: %s (%s) -> %d",
-		 (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
-		 syscall_str (syscall), tcb->saved_src, (int) RET);
-
-	  if ((int) RET >= 0
-	      && process_monitor_filename_whitelisted (tcb->saved_src))
-	    callback_enqueue (tcb, WC_PROCESS_UNLINK_CB,
-			      tcb->saved_src, NULL, 0, tcb->saved_stat);
-	  g_free (tcb->saved_src);
-	  tcb->saved_src = NULL;
-	  g_free (tcb->saved_stat);
-	  tcb->saved_stat = NULL;
-	}
-      else if (! syscall_entry
-	       && (syscall == __NR_rename || syscall == __NR_renameat))
-	{
-	  char *src = tcb->saved_src;
-	  tcb->saved_src = NULL;
-	  char *dest = NULL;
-
-	  if ((int) RET >= 0)
+	case __NR_unlink:
+	case __NR_unlinkat:
+	case __NR_rmdir:
+	case __NR_rename:
+	case __NR_renameat:
+	  if (syscall_entry)
 	    {
 	      uintptr_t filename;
-	      if (syscall == __NR_renameat)
-		filename = ARG4;
-	      else
+	      if (syscall == __NR_unlinkat || syscall == __NR_renameat)
 		filename = ARG2;
+	      else
+		filename = ARG1;
 
 	      char buffer[1024];
 	      if (grab_string (tcb, filename, buffer, sizeof (buffer)))
@@ -1829,39 +2445,112 @@ process_monitor (void *arg)
 		    /* renameat, relative path.  */
 		    p = g_strdup_printf ("/proc/%d/fd/%d/%s",
 					 (int) pid, (int) ARG3, buffer);
-		  dest = canonicalize_file_name (p);
+
+		  tcb->saved_src = canonicalize_file_name (p);
 		  g_free (p);
+
+		  if (tcb->saved_src)
+		    {
+		      tcb->saved_stat = g_malloc (sizeof (struct stat));
+		      if (stat (tcb->saved_src, tcb->saved_stat) < 0)
+			debug (4, "Failed to stat %s: %m", tcb->saved_src);
+		    }
 		}
 
-	      debug (4, "%s (%s, %s) -> %d",
-		     syscall_str (syscall), src, dest, (int) RET);
+	      debug (4, "%d: %s;%s;%s: %s (%s)",
+		     (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
+		     syscall_str (syscall), tcb->saved_src);
+	    }
+	  else if (syscall == __NR_unlink
+		   || syscall == __NR_unlinkat
+		   || syscall == __NR_rmdir)
+	    {
+	      assert (! syscall_entry);
 
-	      if (process_monitor_filename_whitelisted (src)
-		  || process_monitor_filename_whitelisted (dest))
-		callback_enqueue (tcb, WC_PROCESS_RENAME_CB,
-				  src, dest, 0, tcb->saved_stat);
+	      debug (4, "%d: %s;%s;%s: %s (%s) -> %d",
+		     (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
+		     syscall_str (syscall), tcb->saved_src, (int) RET);
+
+	      if ((int) RET >= 0
+		  && process_monitor_filename_whitelisted (tcb->saved_src))
+		callback_enqueue (tcb, WC_PROCESS_UNLINK_CB,
+				  tcb->saved_src, NULL, 0, tcb->saved_stat);
+	      g_free (tcb->saved_src);
+	      tcb->saved_src = NULL;
+	      g_free (tcb->saved_stat);
+	      tcb->saved_stat = NULL;
+	    }
+	  else if (syscall == __NR_rename || syscall == __NR_renameat)
+	    {
+	      assert (! syscall_entry);
+
+	      char *src = tcb->saved_src;
+	      tcb->saved_src = NULL;
+	      char *dest = NULL;
+
+	      if ((int) RET >= 0)
+		{
+		  uintptr_t filename;
+		  if (syscall == __NR_renameat)
+		    filename = ARG4;
+		  else
+		    filename = ARG2;
+
+		  char buffer[1024];
+		  if (grab_string (tcb, filename, buffer, sizeof (buffer)))
+		    {
+		      buffer[sizeof (buffer) - 1] = 0;
+
+		      char *p;
+		      if (buffer[0] == '/')
+			/* Absolute path.  */
+			p = g_strdup_printf ("/proc/%d/root/%s", pid, buffer);
+		      else if (syscall != __NR_renameat || ARG1 == AT_FDCWD)
+			/* relative path.  */
+			p = g_strdup_printf ("/proc/%d/cwd/%s", pid, buffer);
+		      else
+			/* renameat, relative path.  */
+			p = g_strdup_printf ("/proc/%d/fd/%d/%s",
+					     (int) pid, (int) ARG3, buffer);
+		      dest = canonicalize_file_name (p);
+		      g_free (p);
+		    }
+
+		  debug (4, "%s (%s, %s) -> %d",
+			 syscall_str (syscall), src, dest, (int) RET);
+
+		  if (process_monitor_filename_whitelisted (src)
+		      || process_monitor_filename_whitelisted (dest))
+		    callback_enqueue (tcb, WC_PROCESS_RENAME_CB,
+				      src, dest, 0, tcb->saved_stat);
+		}
+
+	      /* Clean up.  */
+	      g_free (tcb->saved_stat);
+	      tcb->saved_stat = NULL;
+
+	      g_free (src);
+	      g_free (dest);
 	    }
 
-	  /* Clean up.  */
-	  g_free (tcb->saved_stat);
-	  tcb->saved_stat = NULL;
-
-	  g_free (src);
-	  g_free (dest);
+	  break;
 	}
 
     out:
       load_shed_maybe ();
 
-      debug (4, "ptrace(SYSCALL, %d, sig: %d)", pid, signo);
-      if (ptrace (PTRACE_SYSCALL, pid, 0, (void *) (uintptr_t) signo) < 0)
+      debug (4, "ptrace(%s, %d, sig: %d)",
+	     ptrace_op == PTRACE_CONT ? "CONT"
+	     : ptrace_op == PTRACE_SYSCALL ? "SYSCALL" : "UNKNOWN",
+	     pid, signo);
+      if (ptrace (ptrace_op, pid, 0, (void *) (uintptr_t) signo) < 0)
 	{
 	  debug (0, "Resuming %d: %m", pid);
 	  /* The process likely disappeared, perhaps violently.  */
 	  if (tcb)
 	    {
-	      if (ptrace (PTRACE_DETACH, tcb->pid, 0, 0) < 0)
-		debug (0, "Detaching pid %d failed: %m", tcb->pid);
+	      debug (4, "Detaching %d", (int) tcb->pid);
+	      thread_detach (tcb);
 	      thread_untrace (tcb);
 	      tcb = NULL;
 	    }
@@ -1879,39 +2568,6 @@ bool
 wc_process_monitor_ptrace_trace (pid_t pid)
 {
   assert (! pthread_equal (pthread_self (), process_monitor_tid));
-
-  char filename[32];
-  snprintf (filename, sizeof (filename),
-	    "/proc/%d/status", pid);
-
-#if !defined(NDEBUG) || defined(PROCESS_TRACER_STANDALONE)
-  /* Check that the process is the thread group leader.  */
-  {
-    gchar *contents = NULL;
-    gsize length = 0;
-    GError *error = NULL;
-    if (! g_file_get_contents (filename, &contents, &length, &error))
-      {
-	debug (0, "Error reading %s: %s; can't trace non-existent process",
-	       filename, error->message);
-	g_error_free (error);
-	error = NULL;
-	return false;
-      }
-
-    char *tgid_str = strstr (contents, "\nTgid:");
-    tgid_str += 7;
-    int tgid = atoi (tgid_str);
-    g_free (contents);
-
-    if (tgid != pid)
-      {
-	debug (0, "Can't add process %d: not the thread group leader (%d).",
-	       pid, tgid);
-	return false;
-      }
-  }
-#endif
 
   process_monitor_command (PROCESS_MONITOR_TRACE, pid);
 
