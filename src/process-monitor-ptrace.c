@@ -1916,6 +1916,7 @@ process_monitor (void *arg)
 		      {
 			* (bool *) user_data = true;
 			debug (0, "tkill (%d, SIGSTOP): %m", pid);
+			thread_untrace (tcb);
 		      }
 		  }
 		  g_hash_table_foreach (tcbs, iter, (gpointer) &have_one);
