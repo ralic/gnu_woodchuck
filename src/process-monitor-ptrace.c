@@ -2745,7 +2745,7 @@ wc_process_monitor_ptrace_quit (void)
   assert (! pthread_equal (pthread_self (), process_monitor_tid));
   process_monitor_command (PROCESS_MONITOR_QUIT, 0);
 }
-
+
 #ifdef PROCESS_TRACER_STANDALONE
 static GMainLoop *loop;
 #endif
@@ -2817,7 +2817,7 @@ process_monitor_filename_whitelisted (const char *filename)
 
   static const char *filename_whitelist[] =
     {
-      "/home/user",
+      "/home",
       "/media",
       "/mnt"
     };
