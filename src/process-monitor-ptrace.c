@@ -1527,8 +1527,6 @@ static pthread_mutex_t process_monitor_commands_lock
   = PTHREAD_MUTEX_INITIALIZER;
 static GSList *process_monitor_commands;
 
-static int signal_process_pipe[2];
-
 static pid_t signal_process_pid;
 
 static void
@@ -1536,9 +1534,6 @@ process_monitor_signaler_init (void)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
   assert (! signal_process_pid);
-
-  if (pipe (signal_process_pipe) < 0)
-    debug (0, DEBUG_BOLD ("Failed to create signal process pipe: %m"));
 
   pthread_mutex_lock (&process_monitor_commands_lock);
   switch ((signal_process_pid = fork ()))
@@ -1550,15 +1545,7 @@ process_monitor_signaler_init (void)
       /* Child.  */
       debug (4, "Signal process monitor running.");
       while (true)
-	{
-	  int c;
-	  int r = read (signal_process_pipe[0], &c, 1);
-	  if (r < 0)
-	    {
-	      fprintf (stdout, "Failed to read from signal pipe: %m\n");
-	      exit (1);
-	    }
-	}
+	sleep (INT_MAX);
     default:
       /* Parent.  */
       debug (3, "Signal process started, pid: %d", signal_process_pid);
@@ -1591,21 +1578,14 @@ process_monitor_command (enum process_monitor_commands command, pid_t pid)
 
   pthread_mutex_lock (&process_monitor_commands_lock);
   process_monitor_commands = g_slist_prepend (process_monitor_commands, cmd);
+  debug (4, "Queuing process monitor event.");
   if (! process_monitor_commands->next)
     /* This is the only event.  */
     {
       debug (4, "Only event.  Signalling signal process.");
-      int w;
-      do
-	w = write (signal_process_pipe[1], "", 1);
-      while (w == 0);
-      if (w < 0)
-	{
-	  debug (3, DEBUG_BOLD ("Error writing to signal process: %m"));
-	  if (tkill (signal_process_pid, SIGCONT) < 0)
-	    debug (0, "signalling signal process (%d): %m",
-		   signal_process_pid);
-	}
+      if (tkill (signal_process_pid, SIGUSR2) < 0)
+	debug (0, "killing signalling signal process (%d): %m",
+	       signal_process_pid);
     }
   
   pthread_mutex_unlock (&process_monitor_commands_lock);
@@ -1887,7 +1867,7 @@ process_monitor (void *arg)
 	 will wake up immediately.  */
       int status = 0;
       pid_t pid = waitpid (-1, &status, __WALL|__WCLONE);
-      if (pid == signal_process_pid)
+      if (pid == signal_process_pid || process_monitor_commands)
 	{
 	  debug (4, "signal from signal process");
 
