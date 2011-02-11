@@ -2191,11 +2191,12 @@ process_monitor (void *arg)
 		 options are cleared on exec, e.g., SIGTRAP is sent
 		 without the high-bit set.  If we do set it, the
 		 options are inherited.  */
-	      debug (4, "%d exec'd", (int) (pid_t) msg);
+	      debug (4, "%d: exec'd", tcb->pid);
 	      tcb_read_exe (tcb);
 
 	      /* It has a new memory image.  We need to fix it up.  */
 	      memset (&tcb->lib_base, 0, sizeof (tcb->lib_base));
+	      ptrace_op = PTRACE_SYSCALL;
 
 	      goto out;
 	    case PTRACE_EVENT_CLONE:
@@ -2213,13 +2214,21 @@ process_monitor (void *arg)
 		       parent.  */
 		    tcb2->trace_options = tcb->trace_options;
 
-		    /* It has the same memory image.  If the parent is
-		       fixed up, so is the child.  */
-		    memcpy (&tcb2->lib_base, &tcb->lib_base,
-			    sizeof (tcb->lib_base));
 		    int i;
 		    for (i = 0; i < LIBRARY_COUNT; i ++)
-		      tcb->lib_fd[i] = -1;
+		      /* It has the same memory image.  If the parent
+			 is fixed up, so is the child.  */
+		      {
+			if (event == PTRACE_EVENT_CLONE)
+			  /* Non-process leaders are set to 0.  */
+			  tcb2->lib_base[i] = 0;
+			else 
+			  /* New process means new group leader.  */
+			  tcb2->lib_base[i] = tcb->lib_base[i];
+
+			/* The same fds are open.  */
+			tcb2->lib_fd[i] = tcb->lib_fd[i];
+		      }
 		  }
 
 		goto out;
