@@ -103,6 +103,23 @@ struct load
   int callback_count_bucket;
 };
 
+struct library_patch
+{
+  /* As it appears in /proc/pid/maps.  */
+  char *filename;
+  struct patch *patches;
+  int patch_count;
+  uintptr_t size;
+};
+struct library_patch library_patches[] =
+  {
+#define LIBRARY_LD 0
+    { "/lib/ld-2.5.so", },
+    { "/lib/libc-2.5.so", },
+    { "/lib/libpthread-2.5.so", },
+  };
+#define LIBRARY_COUNT (sizeof (library_patches) / sizeof (library_patches[0]))
+
 /* A thread's control block.  */
 struct tcb
 {
@@ -192,11 +209,9 @@ struct tcb
   uint64_t memfd_lastuse;
 
   /* The fd used to open the C library.  */
-  int libc_fd;
-
-  /* Location of ld and libc in the process's address space.  */
-  uintptr_t ld_base;
-  uintptr_t libc_base;
+  int lib_fd[LIBRARY_COUNT];
+  /* Location of ld, libc and libpthread in the process's address space.  */
+  uintptr_t lib_base[LIBRARY_COUNT];
 };
 
 static int memfd_count;
@@ -631,7 +646,9 @@ tcb_patched (struct tcb *tcb)
   if (! pgl)
     return false;
 
-  return pgl->ld_base != 0 && pgl->libc_base != 0;
+  /* Whenever a new relevant library is loaded, we parse it.  Until it
+     is loaded, no system calls can be made.  */
+  return pgl->lib_base[LIBRARY_LD] != 0;
 }
 
 /* Start tracing PID.  Its parent is PARENT.  ALREADY_PTRACING
@@ -674,7 +691,9 @@ thread_trace (pid_t pid, struct tcb *parent, bool already_ptracing)
 
   tcb->memfd = -1;
 
-  tcb->libc_fd = -1;
+  int i;
+  for (i = 0; i < LIBRARY_COUNT; i ++)
+    tcb->lib_fd[i] = -1;
 
   tcb->current_syscall = -1;
 
@@ -715,7 +734,9 @@ thread_trace (pid_t pid, struct tcb *parent, bool already_ptracing)
   return tcb;
 }
 
-static bool
+/* Returns 0 if ADDR does not contain VALUE.  1 if it does.  -1 if an
+   error occurs.  */
+static int
 thread_check_word (struct tcb *tcb, uintptr_t addr, uintptr_t value)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
@@ -724,14 +745,14 @@ thread_check_word (struct tcb *tcb, uintptr_t addr, uintptr_t value)
   if (lseek (memfd, addr, SEEK_SET) < 0)
     {
       debug (0, "Error seeking in process %s's memory: %m", tcb->pid);
-      return false;
+      return -1;
     }
 
   uintptr_t real = 0;
   if (read (memfd, &real, sizeof (real)) < 0)
     {
       debug (0, "Failed to read from process %d's memory: %m", tcb->pid);
-      return false;
+      return -1;
     }
 
   if (real != value)
@@ -739,7 +760,10 @@ thread_check_word (struct tcb *tcb, uintptr_t addr, uintptr_t value)
 			  "at %"PRIxPTR": expected %"PRIxPTR", got: %"PRIxPTR),
 	   tcb->pid, addr, value, real);
 
-  return real == value;
+  if (real == value)
+    return 1;
+  else
+    return 0;
 }
 
 static bool
@@ -754,6 +778,9 @@ thread_update_word (struct tcb *tcb, uintptr_t addr, uintptr_t value)
 	     tcb->pid, addr);
       return false;
     }
+  else
+    debug (4, "%d: Patched address %"PRIxPTR" to contain %"PRIxPTR,
+	   tcb->pid, addr, value);
 
   return true;
 }
@@ -762,6 +789,8 @@ struct fixup
 {
   /* The instruction prior to the SWI.  */
   uintptr_t preceeding_ins;
+  /* The number of instructions prior to the SWI.  */
+  int displacement;
   /* What to load in R7.  */
   uintptr_t reg_value;
 };
@@ -771,59 +800,6 @@ struct patch
   uintptr_t base_offset;
   struct fixup *fixup;
 };
-
-struct library_patches
-{
-  struct patch *patches;
-  int patch_count;
-  uintptr_t size;
-};
-struct library_patches libc;
-struct library_patches ld;
-
-/* Revert any fixups applied to a thread.  TCB must be the process
-   group leader.  */
-static void
-thread_revert_patches (struct tcb *tcb)
-{
-  assert (pthread_equal (pthread_self (), process_monitor_tid));
-
-  assert (tcb->process_group_leader_pid == tcb->pid);
-  if (! tcb_patched (tcb))
-    return;
-
-  void revert (struct library_patches *patches, uintptr_t base)
-  {
-    int i;
-    for (i = 0; i < patches->patch_count; i ++)
-      {
-	struct patch *p = &patches->patches[i];
-
-	uintptr_t addr = base + p->base_offset;
-	uintptr_t value = p->fixup->preceeding_ins;
-
-	if (ptrace (PTRACE_POKEDATA, tcb->pid, addr, value) < 0)
-	  {
-	    /* Can we do anything other than print a warning?  */
-	    debug (0, "Failed to write to process %d's memory, "
-		   "location %"PRIxPTR": %m",
-		   tcb->pid, addr);
-	  }
-      }
-  }
-
-  if (tcb->libc_base)
-    {
-      revert (&libc, tcb->libc_base);
-      tcb->libc_base = 0;
-    }
-
-  if (tcb->ld_base)
-    {
-      revert (&ld, tcb->ld_base);
-      tcb->ld_base = 0;
-    }
-}
 
 #ifdef __arm__
 #define BREAKPOINT_INS 0xe7f001f0
@@ -836,25 +812,31 @@ thread_revert_patches (struct tcb *tcb)
      0x4001503c <open+12>:	mov	r7, r12
      0x40015040 <open+16>:	cmn	r0, #4096	; 0x1000
 
-   Just using the first two instructions seems to result in some false
-   positives.
-
-   Including restoring r7 from r12 results in false negatives:
+   But there are other patterns:
 
      0x00054e2c <renameat+248>:	mov	r7, #38	; 0x26
      0x00054e30 <renameat+252>:	svc	0x00000000
      0x00054e34 <renameat+256>:	cmn	r0, #4096	; 0x1000
 
-   A good heuristic seems to be to check for an svc and an errno check
-   either immediately after the svc or one instruction later.  */
+   A good heuristic seems to be to find svcs and look for the mov
+   instruction up to 4 instructions earlier and the errno check up to
+   4 instructions later.  */
 #define SYSCALL_INS 0xef000000
 #define SYSCALL_ERRNO_CHECK 0xe3700a01
+#define SYSCALL_NUM_LOAD 0xe3a07000
+#else
+#define SYSCALL_NUM_LOAD 0
+#define BREAKPOINT_INS 0
 #endif
 
 struct fixup fixups[] =
   {
 #ifdef __arm__
-#define X(NUM) { 0xe3a07000 + NUM - __NR_SYSCALL_BASE, NUM - __NR_SYSCALL_BASE }
+#define Y(NUM, DISP) \
+    { SYSCALL_NUM_LOAD + NUM - __NR_SYSCALL_BASE, \
+      DISP, \
+      NUM - __NR_SYSCALL_BASE }
+#define X(NUM) Y(NUM, 1), Y(NUM, 2), Y(NUM, 3), Y(NUM, 4)
     X(__NR_open),
     X(__NR_close),
     X(__NR_openat),
@@ -873,15 +855,55 @@ thread_apply_patches (struct tcb *thread)
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
   struct tcb *tcb = tcb_group_leader (thread);
-  if (tcb_patched (tcb))
+
+  bool fully_patched (void)
+  {
+    bool ret = true;
+    int bad = 0;
+    int total = 0;
+    int i;
+    for (i = 0; i < LIBRARY_COUNT; i ++)
+      {
+	if (tcb->lib_base[i])
+	  {
+	    struct library_patch *lib = &library_patches[i];
+	    uintptr_t base = tcb->lib_base[i];
+	    int j;
+	    for (j = 0; j < lib->patch_count; j ++)
+	      {
+		struct patch *p = &lib->patches[j];
+
+		uintptr_t addr = base + p->base_offset;
+		if (! thread_check_word (thread, addr, BREAKPOINT_INS) != 0)
+		  {
+		    debug (0, "Bad patch at %"PRIxPTR" "
+			   "in lib %s, off %"PRIxPTR,
+			   addr, lib->filename, p->base_offset);
+		    bad ++;
+		  }
+	      }
+	  }
+	else
+	  ret = false;
+      }
+
+    if (bad)
+      {
+	debug (0, DEBUG_BOLD ("%d/%d: %d of %d locations incorrectly patched"),
+	       thread->pid, tcb->pid, bad, total);
+	sleep (3);
+      }
+    return ret;
+  }
+
+  if (fully_patched ())
     {
-      debug (0, DEBUG_BOLD ("Already patched %d"), thread->pid);
+      debug (4, "Already fully patched %d", thread->pid);
       return;
     }
-  assert (! tcb->ld_base || ! tcb->libc_base);
 
 #ifdef __arm__
-  void scan (struct library_patches *lib,
+  void scan (struct library_patch *lib,
 	     uintptr_t map_start, uintptr_t map_end)
   {
     assert (lib->patch_count == 0);
@@ -893,8 +915,8 @@ thread_apply_patches (struct tcb *thread)
 
     uintptr_t map_length = map_end - map_start;
 
-    debug (0, "Scanning %"PRIxPTR"-%"PRIxPTR" (0x%x bytes)",
-	   map_start, map_end, map_length);
+    debug (0, DEBUG_BOLD ("Scanning %s: %"PRIxPTR"-%"PRIxPTR" (0x%x bytes)"),
+	   lib->filename, map_start, map_end, map_length);
 
     /* mmap always fails.  */
     if (lseek (memfd, map_start, SEEK_SET) < 0)
@@ -934,33 +956,98 @@ thread_apply_patches (struct tcb *thread)
 
     GSList *patches = NULL;
 
+    int syscall_count = 0;
+    int sigs[5][5][2];
+    memset (sigs, 0, sizeof (sigs));
+
     uintptr_t i;
-    for (i = 1; (i + 3) * sizeof (uintptr_t) <= map_length; i ++)
-      if (map[i] == SYSCALL_INS
-	  && (map[i + 1] == SYSCALL_ERRNO_CHECK
-	      || map[i + 2] == SYSCALL_ERRNO_CHECK))
-	/* Got a system call.  */
-	{
-	  int j;
-	  for (j = 0; j < sizeof (fixups) / sizeof (fixups[0]); j ++)
-	    {
-	      struct fixup *f = &fixups[j];
-	      if (map[i - 1] == f->preceeding_ins)
-		{
-		  debug (0, "Patching offset 0x%"PRIxPTR" with fixup %d",
-			 i, j);
+    for (i = 4; (i + 4) * sizeof (uintptr_t) <= map_length; i ++)
+      {
+	int mov = 0;
+	int errno_check = 0;
 
-		  struct patch *p = alloca (sizeof (*p));
-		  p->base_offset = (i - 1) * 4;
-		  p->fixup = f;
-		  patches = g_slist_prepend (patches, p);
-		  lib->patch_count ++;
-		  break;
-		}
-	    }
-	}
+	if (map[i] == SYSCALL_INS)
+	  {
+	    syscall_count ++;
 
-    debug (0, "Generated %d patches.", lib->patch_count);
+	    int j;
+	    for (j = 1; j < 5; j ++)
+	      {
+		if ((map[i - j] & ~0xff) == SYSCALL_NUM_LOAD)
+		  mov = j;
+		if (map[i + j] == SYSCALL_ERRNO_CHECK)
+		  errno_check = j;
+	      }
+
+	    sigs[mov][errno_check][0] ++;
+
+	    /* System call instruction.  Print the context.  */
+	    debug (4, "Candidate syscall at %p: "
+		   "%c%08x %c%08x %c%08x %c%08x *%08x* "
+		   "%c%08x %c%08x %c%08x %c%08x%s%s",
+		   i * 4,
+		   /* This mask filters loading r7 with the values 0-255.  */
+		   mov == 4 ? '!' : ' ', map[i-4],
+		   mov == 3 ? '!' : ' ', map[i-3],
+		   mov == 2 ? '!' : ' ', map[i-2],
+		   mov == 1 ? '!' : ' ', map[i-1],
+		   map[i],
+		   errno_check == 1 ? '!' : ' ', map[i + 1],
+		   errno_check == 2 ? '!' : ' ', map[i + 2],
+		   errno_check == 3 ? '!' : ' ', map[i + 3],
+		   errno_check == 4 ? '!' : ' ', map[i + 4],
+		   mov ? " <<" : "", errno_check ? " >>" : "");
+	  }
+
+	if (map[i] == SYSCALL_INS
+	    && (map[i + 1] == SYSCALL_ERRNO_CHECK
+		|| map[i + 2] == SYSCALL_ERRNO_CHECK
+		|| map[i + 3] == SYSCALL_ERRNO_CHECK
+		|| map[i + 4] == SYSCALL_ERRNO_CHECK))
+	  /* Got a system call.  */
+	  {
+	    int j;
+	    for (j = 0; j < sizeof (fixups) / sizeof (fixups[0]); j ++)
+	      {
+		struct fixup *f = &fixups[j];
+		if (map[i - f->displacement] == f->preceeding_ins)
+		  {
+		    debug (4, "Patching offset 0x%"PRIxPTR" with fixup %d",
+			   i, j);
+		    sigs[mov][errno_check][1] ++;
+
+		    struct patch *p = alloca (sizeof (*p));
+		    p->base_offset = (i - f->displacement) * 4;
+		    p->fixup = f;
+		    patches = g_slist_prepend (patches, p);
+		    lib->patch_count ++;
+		    break;
+		  }
+	      }
+	  }
+      }
+
+    debug (0, "%d system call sites in %s.", syscall_count, lib->filename);
+    for (i = 0; i < 2; i ++)
+      {
+	char *b = g_strdup_printf
+	  ("\n  errno check displacement\n"
+	   "       0    1    2    3    4\n"
+	   "  0 %4d %4d %4d %4d %4d\n"
+	   "m 1 %4d %4d %4d %4d %4d\n"
+	   "o 2 %4d %4d %4d %4d %4d\n"
+	   "v 3 %4d %4d %4d %4d %4d\n"
+	   "  4 %4d %4d %4d %4d %4d",
+	   sigs[0][0][i], sigs[0][1][i], sigs[0][2][i], sigs[0][3][i], sigs[0][4][i],
+	   sigs[1][0][i], sigs[1][1][i], sigs[1][2][i], sigs[1][3][i], sigs[1][4][i],
+	   sigs[2][0][i], sigs[2][1][i], sigs[2][2][i], sigs[2][3][i], sigs[2][4][i],
+	   sigs[3][0][i], sigs[3][1][i], sigs[3][2][i], sigs[3][3][i], sigs[3][4][i],
+	   sigs[4][0][i], sigs[4][1][i], sigs[4][2][i], sigs[4][3][i], sigs[4][4][i]);
+	debug (0, "%s", b);
+	g_free (b);
+      }
+
+    debug (0, "%s: %d patches.", lib->filename, lib->patch_count);
     g_free (map);
 
     lib->patches = g_malloc (sizeof (struct patch) * lib->patch_count);
@@ -975,31 +1062,37 @@ thread_apply_patches (struct tcb *thread)
     assert (! patches);
   }
 
-  bool grep_maps (const char *maps, const char *str,
+  bool grep_maps (const char *maps, const char *filename,
 		  uintptr_t *map_start, uintptr_t *map_end)
   {
-    assert (str [strlen (str) - 1] == '\n');
+    int filename_len = strlen (filename);
 
-    const char *str_loc = maps;
-    while ((str_loc = strstr (str_loc, str)))
+    const char *filename_loc = maps;
+    while ((filename_loc = strstr (filename_loc, filename)))
       {
+	if (filename_loc[filename_len] != '\n')
+	  {
+	    filename_loc ++;
+	    continue;
+	  }
+
 	/* Find the start of the line.  */
-	const char *line = memrchr (maps, '\n',
-				    (uintptr_t) str_loc - (uintptr_t) maps);
+	const char *line
+	  = memrchr (maps, '\n', (uintptr_t) filename_loc - (uintptr_t) maps);
 	if (line)
 	  line ++;
 	else
 	  line = maps;
 
 	debug (4, "Considering '%.*s'",
-	       (uintptr_t) str_loc - (uintptr_t) line + strlen (str) - 1,
+	       (uintptr_t) filename_loc - (uintptr_t) line + filename_len,
 	       line);
 
 	const char *p = line;
 
 	/* Advance by one so that the next strstr doesn't return
 	   the same location.  */
-	str_loc ++;
+	filename_loc ++;
 
 	char *tailp = NULL;
 	*map_start = strtol (p, &tailp, 16);
@@ -1058,31 +1151,23 @@ thread_apply_patches (struct tcb *thread)
 
   debug (4, "%s: %s", filename, maps);
 
-  bool patch_ld = false;
-  if (! tcb->ld_base)
+  bool patch[LIBRARY_COUNT];
+  int i;
+  for (i = 0; i < LIBRARY_COUNT; i ++)
     {
-      uintptr_t map_addr, map_end;
-      if (grep_maps (maps, "/lib/ld-2.5.so\n", &map_addr, &map_end))
+      patch[i] = false;
+      if (! tcb->lib_base[i])
 	{
-	  if (! libc.patches)
-	    /* We have not yet generated the patch list.  */
-	    scan (&ld, map_addr, map_end);
-	  tcb->ld_base = map_addr;
-	  patch_ld = true;
-	}
-    }
-
-  bool patch_libc = false;
-  if (! tcb->libc_base)
-    {
-      uintptr_t map_addr, map_end;
-      if (grep_maps (maps, "/lib/libc-2.5.so\n", &map_addr, &map_end))
-	{
-	  if (! libc.patches)
-	    /* We have not yet generated the patch list.  */
-	    scan (&libc, map_addr, map_end);
-	  tcb->libc_base = map_addr;
-	  patch_libc = true;
+	  uintptr_t map_addr, map_end;
+	  if (grep_maps (maps, library_patches[i].filename,
+			 &map_addr, &map_end))
+	    {
+	      if (! library_patches[i].patches)
+		/* We have not yet generated the patch list.  */
+		scan (&library_patches[i], map_addr, map_end);
+	      tcb->lib_base[i] = map_addr;
+	      patch[i] = true;
+	    }
 	}
     }
 
@@ -1090,55 +1175,89 @@ thread_apply_patches (struct tcb *thread)
 
   /* Patch the current process.  */
   int bad = 0;
-  int i;
-  if (patch_ld)
-    for (i = 0; i < ld.patch_count; i ++)
+  int total = 0;
+  for (i = 0; i < LIBRARY_COUNT; i ++)
+    if (patch[i])
       {
-	struct patch *p = &ld.patches[i];
-	if (! thread_check_word (tcb, tcb->ld_base + p->base_offset,
-				 p->fixup->preceeding_ins))
-	  bad ++;
-      }
-  if (patch_libc)
-    for (i = 0; i < libc.patch_count; i ++)
-      {
-	struct patch *p = &libc.patches[i];
-	if (! thread_check_word (tcb, tcb->libc_base + p->base_offset,
-				 p->fixup->preceeding_ins))
-	  bad ++;
+	total += library_patches[i].patch_count;
+
+	int j;
+	for (j = 0; j < library_patches[i].patch_count; j ++)
+	  {
+	    struct patch *p = &library_patches[i].patches[j];
+	    if (thread_check_word (tcb, tcb->lib_base[i] + p->base_offset,
+				   p->fixup->preceeding_ins) != 1)
+	      bad ++;
+	  }
       }
 
   if (bad)
     {
-      debug (0, "%d of %d locations contain unexpected values.  Not patching.",
-	     bad,
-	     (patch_ld ? ld.patch_count : 0)
-	     + (patch_libc ? libc.patch_count : 0));
+      debug (0, DEBUG_BOLD ("%d of %d locations contain unexpected values.  "
+			    "Not patching."),
+	     bad, total);
       return;
     }
 
   int count = 0;
-  if (patch_ld)
-    for (i = 0; i < ld.patch_count; i ++)
+  for (i = 0; i < LIBRARY_COUNT; i ++)
+    if (patch[i])
       {
-	struct patch *p = &ld.patches[i];
-	if (thread_update_word (tcb, tcb->ld_base + p->base_offset,
-				BREAKPOINT_INS))
-	  count ++;
+	int j;
+	for (j = 0; j < library_patches[i].patch_count; j ++)
+	  {
+	    struct patch *p = &library_patches[i].patches[j];
+	    if (thread_update_word (tcb, tcb->lib_base[i] + p->base_offset,
+				    BREAKPOINT_INS))
+	      count ++;
+	  }
       }
-  if (patch_libc)
-    for (i = 0; i < libc.patch_count; i ++)
-      {
-	struct patch *p = &libc.patches[i];
-	if (thread_update_word (tcb, tcb->libc_base + p->base_offset,
-				BREAKPOINT_INS))
-	  count ++;
-      }
-  debug (0, "%d: Applied %d of %d updates",
-	 tcb->pid, count,
-	 (patch_ld ? ld.patch_count : 0)
-	 + (patch_libc ? libc.patch_count : 0));
+
+  debug (4, "Patched %d %s;%s;%s: applied %d of %d patches",
+	 tcb->pid, tcb->exe, tcb->arg0, tcb->arg1, count, total);
+
+  fully_patched ();
 #endif
+}
+
+/* Revert any fixups applied to a thread.  TCB must be the process
+   group leader.  */
+static void
+thread_revert_patches (struct tcb *tcb)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+  assert (tcb->process_group_leader_pid == tcb->pid);
+
+  int i;
+  for (i = 0; i < LIBRARY_COUNT; i ++)
+    if (tcb->lib_base[i])
+      {
+	uintptr_t base = tcb->lib_base[i];
+	struct library_patch *lib = &library_patches[i];
+
+	int bad = 0;
+	int j;
+	for (j = 0; j < lib->patch_count; j ++)
+	  {
+	    struct patch *p = &lib->patches[j];
+
+	    uintptr_t addr = base + p->base_offset;
+	    uintptr_t value = p->fixup->preceeding_ins;
+
+	    if (thread_check_word (tcb, addr, BREAKPOINT_INS) == 0)
+	      bad ++;
+	    else
+	      thread_update_word (tcb, addr, value);
+	  }
+
+	if (bad)
+	  debug (0, DEBUG_BOLD ("Patched process %d missing "
+				"%d of %d patches for %s."),
+		 tcb->pid, bad, lib->patch_count, lib->filename);
+
+	tcb->lib_base[i] = 0;
+      }
 }
 
 #ifdef __x86_64__
@@ -1147,54 +1266,72 @@ thread_apply_patches (struct tcb *thread)
 # define REGS_IP ARM_pc
 #endif
 
+/* The thread hit a break point.  If it is a breakpoint we set, fix up
+   the thread's register state and return true.  Otherwise, return
+   false.  */
 static bool
 thread_fixup_advance (struct tcb *thread, struct pt_regs *regs)
 {
   struct tcb *tcb = tcb_group_leader (thread);
+  if (! tcb_patched (tcb))
+    return false;
 
-  bool fixup (struct library_patches *lib, uintptr_t lib_base)
-  {
-    int i;
-    for (i = 0; i < lib->patch_count; i ++)
+  uintptr_t IP = regs->REGS_IP;
+  bool fixed = false;
+  int i;
+  for (i = 0; i < LIBRARY_COUNT; i ++)
+    if (tcb->lib_base[i]
+	&& tcb->lib_base[i] <= IP
+	&& IP < tcb->lib_base[i] + library_patches[i].size)
+      /* The address is coverd by this library.  */
       {
-	struct patch *p = &lib->patches[i];
+	struct library_patch *lib = &library_patches[i];
+	debug (4, "%d: IP %x covered by library %s",
+	       thread->pid, IP, lib->filename);
 
-	if (lib_base + p->base_offset == regs->REGS_IP)
+	int j;
+	for (j = 0; j < lib->patch_count; j ++)
 	  {
-#ifdef __arm__
-	    regs->REGS_IP = (uintptr_t) regs->REGS_IP + 4;
-	    regs->ARM_r7 = p->fixup->reg_value;
+	    struct patch *p = &lib->patches[j];
 
-	    if (ptrace (PTRACE_SETREGS, thread->pid, 0, (void *) regs) < 0)
-	      debug (0, "Failed to update thread's register set: %m");
-	    else
-	      debug (4, "Fixed up thread (fixup %d, syscall %s (%d)).",
-		     ((uintptr_t) p->fixup - (uintptr_t) fixups)
-		     / sizeof (fixups[0]),
-		     syscall_str (p->fixup->reg_value), p->fixup->reg_value);
+	    if (tcb->lib_base[i] + p->base_offset == regs->REGS_IP)
+	      {
+#ifdef __arm__
+		regs->REGS_IP = (uintptr_t) regs->REGS_IP + 4;
+		regs->ARM_r7 = p->fixup->reg_value;
+
+		if (ptrace (PTRACE_SETREGS, thread->pid, 0, (void *) regs) < 0)
+		  debug (0, "Failed to update thread's register set: %m");
+		else
+		  {
+		    fixed = true;
+		    debug (4, "%d: Fixed up thread "
+			   "(%s, fixup %d, syscall %s (%d)).",
+			   thread->pid, lib->filename,
+			   (((uintptr_t) p->fixup - (uintptr_t) fixups)
+			    / sizeof (fixups[0])),
+			   syscall_str (p->fixup->reg_value), 
+			   p->fixup->reg_value);
+		  }
 #endif
 
-	    return true;
+		break;
+	      }
 	  }
+
+	/* Libraries don't overlap.  We're done.  */
+	break;
       }
 
-    debug (4, DEBUG_BOLD ("Fix up unnecessary."));
-    return false;
-  }
+  if (i == LIBRARY_COUNT)
+    debug (4, DEBUG_BOLD ("%d: %"PRIxPTR" not covered by any library."),
+	   tcb->pid, regs->REGS_IP);
 
-  if (tcb->ld_base <= regs->REGS_IP
-      && regs->REGS_IP <= tcb->ld_base + ld.size)
-    return fixup (&ld, tcb->ld_base);
-  if (tcb->libc_base <= regs->REGS_IP
-      && regs->REGS_IP <= tcb->libc_base + libc.size)
-    return fixup (&libc, tcb->libc_base);
+  if (! fixed)
+    debug (4, "%d: IP: %p.  No fix up applied.",
+	   thread->pid, regs->REGS_IP);
 
-  debug (4, "%d: %p not in relevant code (%p..%p / %p..%p).",
-	 thread->pid, regs->REGS_IP,
-	 tcb->ld_base, tcb->ld_base + ld.size,
-	 tcb->libc_base, tcb->libc_base + libc.size);
-
-  return false;
+  return fixed;
 }
 
 /* Stop tracing a thread.  The thread must already be detached, i.e.,
@@ -2057,6 +2194,9 @@ process_monitor (void *arg)
 	      debug (4, "%d exec'd", (int) (pid_t) msg);
 	      tcb_read_exe (tcb);
 
+	      /* It has a new memory image.  We need to fix it up.  */
+	      memset (&tcb->lib_base, 0, sizeof (tcb->lib_base));
+
 	      goto out;
 	    case PTRACE_EVENT_CLONE:
 	    case PTRACE_EVENT_FORK:
@@ -2072,6 +2212,14 @@ process_monitor (void *arg)
 		    /* It automatically gets the options set on its
 		       parent.  */
 		    tcb2->trace_options = tcb->trace_options;
+
+		    /* It has the same memory image.  If the parent is
+		       fixed up, so is the child.  */
+		    memcpy (&tcb2->lib_base, &tcb->lib_base,
+			    sizeof (tcb->lib_base));
+		    int i;
+		    for (i = 0; i < LIBRARY_COUNT; i ++)
+		      tcb->lib_fd[i] = -1;
 		  }
 
 		goto out;
@@ -2176,9 +2324,9 @@ process_monitor (void *arg)
 	  return false;
       }
 
-      debug (4, "%d: %s (%ld) %s",
+      debug (4, "%d: %s (%ld) %s, IP: %"PRIxPTR,
 	     (int) pid, syscall_str (syscall), syscall,
-	     syscall_entry ? "entry" : "exit");
+	     syscall_entry ? "entry" : "exit", regs.REGS_IP);
 
       switch (syscall)
 	{
@@ -2327,11 +2475,10 @@ process_monitor (void *arg)
 				      buffer, NULL, flags, &s);
 		  }
 
-		if (strcmp (buffer, "/lib/libc-2.5.so") == 0)
-		  {
-		    debug (0, "got libc fd");
-		    tcb->libc_fd = fd;
-		  }
+		int i;
+		for (i = 0; i < LIBRARY_COUNT; i ++)
+		  if (strcmp (buffer, library_patches[i].filename) == 0)
+		    tcb->lib_fd[i] = fd;
 	      }
 	  }
 
@@ -2344,11 +2491,14 @@ process_monitor (void *arg)
 
 	    int fd = (int) ARG1;
 
-	    if (fd == tcb->libc_fd)
-	      {
-		debug (0, "libc fd closed");
-		tcb->libc_fd = -1;
-	      }
+	    int i;
+	    for (i = 0; i < LIBRARY_COUNT; i ++)
+	      if (fd == tcb->lib_fd[i])
+		{
+		  debug (4, "lib %s closed",
+			 library_patches[i].filename);
+		  tcb->lib_fd[i] = -1;
+		}
 
 	    char buffer[1024];
 	    if (lookup_fd (tcb->pid, fd, buffer, sizeof (buffer)))
@@ -2378,7 +2528,6 @@ process_monitor (void *arg)
 		     (int) tcb->pid, tcb->exe,
 		     /* fd.  */
 		     (long) ARG1);
-
 	  }
 
 	  break;
@@ -2386,7 +2535,6 @@ process_monitor (void *arg)
 #ifdef __NR_mmap2
 	case __NR_mmap2:
 	  if (! syscall_entry
-	      && ! tcb_patched (tcb)
 	      && tcb->process_group_leader_pid == tcb->pid)
 	    {
 	      uintptr_t addr = ARG1;
@@ -2397,21 +2545,27 @@ process_monitor (void *arg)
 	      uintptr_t file_offset = ARG6;
 	      uintptr_t map_addr = RET;
 
-	      debug (0, DEBUG_BOLD ("mmap (%p, %x,%s%s%s (0x%x), 0x%x, %d (= %s), %x) -> %p"),
+	      struct library_patch *lib = NULL;
+	      if (fd != -1)
+		{
+		  int i;
+		  for (i = 0; i < LIBRARY_COUNT; i ++)
+		    if (fd == tcb->lib_fd[i])
+		      lib = &library_patches[i];
+		}
+
+	      debug (4, "mmap (%p, %x,%s%s%s (0x%x), 0x%x, %d (= %s), %x) "
+		     "-> %p",
 		     addr, (int) length,
 		     prot & PROT_READ ? " READ" : "",
 		     prot & PROT_WRITE ? " WRITE" : "",
 		     prot & PROT_EXEC ? " EXEC" : "",
 		     prot, flags, fd,
-		     fd != -1 && fd == tcb->libc_fd ? "libc" : "other",
+		     lib ? lib->filename : "other",
 		     file_offset, map_addr);
 
-	      if (tcb->libc_fd == fd && (prot & PROT_EXEC))
-		{
-		  debug (0, "libc mapped executable at 0x%x+0x%x",
-			 map_addr, map_addr + length);
-		  thread_apply_patches (tcb);
-		}
+	      if (lib && (prot & PROT_EXEC))
+		thread_apply_patches (tcb);
 	    }
 	  break;
 #endif
@@ -2535,6 +2689,10 @@ process_monitor (void *arg)
 
 	  break;
 	}
+
+      if (tcb_patched (tcb) && ! syscall_entry)
+	/* Don't intercept system calls anymore.  */
+	ptrace_op = PTRACE_CONT;
 
     out:
       load_shed_maybe ();
