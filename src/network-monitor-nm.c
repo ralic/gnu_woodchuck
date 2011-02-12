@@ -90,7 +90,7 @@ connection_connection_active_properties_changed_cb (DBusGProxy *proxy,
   {
     GValue *value = data;
 
-    debug (0, "%s: key %s changed", c->name, key);
+    debug (0, "%s: key %s changed", c->name, (char *) key);
 
     if (strcmp (key, "Default") == 0)
       /* The default route changed!  */
@@ -98,7 +98,7 @@ connection_connection_active_properties_changed_cb (DBusGProxy *proxy,
 	if (G_VALUE_TYPE (value) != G_TYPE_BOOLEAN)
 	  {
 	    debug (0, "%s's type should be boolean but got %s",
-		   key, g_type_name (G_VALUE_TYPE (value)));
+		   (char *) key, g_type_name (G_VALUE_TYPE (value)));
 	  }
 	else
 	  {
@@ -112,7 +112,7 @@ connection_connection_active_properties_changed_cb (DBusGProxy *proxy,
 	if (G_VALUE_TYPE (value) != G_TYPE_UINT)
 	  {
 	    debug (0, "%s's type should be uint but got %s",
-		   key, g_type_name (G_VALUE_TYPE (value)));
+		   (char *) key, g_type_name (G_VALUE_TYPE (value)));
 	  }
 	else
 	  connection_state_set (c, g_value_get_uint (value), false);

@@ -131,7 +131,7 @@ default_connection_scan_cb (gpointer user_data)
 
 	    if (d == d2)
 	      {
-		debug (dl, "Default device belongs to connection %s",
+		debug (dl, "Default device %s belongs to connection %s",
 		       interface, c->name);
 		if (connection_state_is_connected (c->state))
 		  /* If it is not connected, it is likely

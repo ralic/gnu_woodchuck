@@ -34,7 +34,8 @@ extern int output_debug;
 
 extern void debug_(const char *file, const char *function, int line,
 		   void *return_address,
-		   int level, const char *fmt, ...);
+		   int level, const char *fmt, ...)
+  __attribute__ ((format (printf, 6, 7)));
 
 /* Print a debug message if DEBUG_COND is true.  */
 #define debug(level, fmt, ...)						\

@@ -449,7 +449,8 @@ process_monitor_callback (struct wc_process_monitor_cb *cb)
       GSList *services = services_lookup (cb->top_levels_pid);
       if (! services)
 	{
-	  debug (0, "Warning: notification for unmonitored pid %s");
+	  debug (0, "Warning: notification for unmonitored pid %d",
+		 cb->top_levels_pid);
 	  return;
 	}
 
@@ -465,7 +466,8 @@ process_monitor_callback (struct wc_process_monitor_cb *cb)
   GSList *services = services_lookup (cb->top_levels_pid);
   if (! services)
     {
-      debug (0, "Warning: notification for unmonitored pid %s");
+      debug (0, "Warning: notification for unmonitored pid %d",
+	     cb->top_levels_pid);
       return;
     }
 

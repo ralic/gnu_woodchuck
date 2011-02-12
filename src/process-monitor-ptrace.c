@@ -142,7 +142,7 @@ struct tcb
      for the stat buffer.  We have a similar problem when moving a
      file: once we move the file we can not get the absoluate file
      name of the full.  */
-  void *saved_src;
+  char *saved_src;
   struct stat *saved_stat;
 
   /* Ptrace has a few help options.  This field indicates whether we
@@ -744,7 +744,7 @@ thread_check_word (struct tcb *tcb, uintptr_t addr, uintptr_t value)
   int memfd = tcb_memfd (tcb);
   if (lseek (memfd, addr, SEEK_SET) < 0)
     {
-      debug (0, "Error seeking in process %s's memory: %m", tcb->pid);
+      debug (0, "Error seeking in process %d's memory: %m", (int) tcb->pid);
       return -1;
     }
 
@@ -982,9 +982,10 @@ thread_apply_patches (struct tcb *thread)
 	    sigs[mov][errno_check][0] ++;
 
 	    /* System call instruction.  Print the context.  */
-	    debug (4, "Candidate syscall at %p: "
-		   "%c%08x %c%08x %c%08x %c%08x *%08x* "
-		   "%c%08x %c%08x %c%08x %c%08x%s%s",
+	    debug (4, "Candidate syscall at %"PRIxPTR": "
+		   "%c%08"PRIxPTR" %c%08"PRIxPTR" %c%08"PRIxPTR" "
+		   "%c%08"PRIxPTR" *%08"PRIxPTR"* %c%08"PRIxPTR" "
+		   "%c%08"PRIxPTR" %c%08"PRIxPTR" %c%08"PRIxPTR"%s%s",
 		   i * 4,
 		   /* This mask filters loading r7 with the values 0-255.  */
 		   mov == 4 ? '!' : ' ', map[i-4],
@@ -1286,7 +1287,7 @@ thread_fixup_advance (struct tcb *thread, struct pt_regs *regs)
       /* The address is coverd by this library.  */
       {
 	struct library_patch *lib = &library_patches[i];
-	debug (4, "%d: IP %x covered by library %s",
+	debug (4, "%d: IP %"PRIxPTR" covered by library %s",
 	       thread->pid, IP, lib->filename);
 
 	int j;
@@ -1325,11 +1326,11 @@ thread_fixup_advance (struct tcb *thread, struct pt_regs *regs)
 
   if (i == LIBRARY_COUNT)
     debug (4, DEBUG_BOLD ("%d: %"PRIxPTR" not covered by any library."),
-	   tcb->pid, regs->REGS_IP);
+	   (int) tcb->pid, (uintptr_t) regs->REGS_IP);
 
   if (! fixed)
-    debug (4, "%d: IP: %p.  No fix up applied.",
-	   thread->pid, regs->REGS_IP);
+    debug (4, "%d: IP: %"PRIxPTR".  No fix up applied.",
+	   (int) thread->pid, (uintptr_t) regs->REGS_IP);
 
   return fixed;
 }
@@ -2316,7 +2317,7 @@ process_monitor (void *arg)
 
       debug (4, "%d: %s (%ld) %s, IP: %"PRIxPTR,
 	     (int) pid, syscall_str (syscall), syscall,
-	     syscall_entry ? "entry" : "exit", regs.REGS_IP);
+	     syscall_entry ? "entry" : "exit", (uintptr_t) regs.REGS_IP);
 
       switch (syscall)
 	{
@@ -2544,8 +2545,8 @@ process_monitor (void *arg)
 		      lib = &library_patches[i];
 		}
 
-	      debug (4, "mmap (%p, %x,%s%s%s (0x%x), 0x%x, %d (= %s), %x) "
-		     "-> %p",
+	      debug (4, "mmap (%"PRIxPTR", %x,%s%s%s (0x%x), 0x%x, "
+		     "%d (= %s), %x) -> %"PRIxPTR,
 		     addr, (int) length,
 		     prot & PROT_READ ? " READ" : "",
 		     prot & PROT_WRITE ? " WRITE" : "",

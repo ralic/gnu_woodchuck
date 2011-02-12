@@ -375,7 +375,7 @@ upload (void)
 
   wget_status = pclose (wget);
   debug (0, "wget returned %d (%s, %d)",
-	 wget_status, wget_output, strlen (wget_output));
+	 wget_status, wget_output, (int) strlen (wget_output));
 
   if (wget_status != 0)
     /* An error occured.  Try again later.  */

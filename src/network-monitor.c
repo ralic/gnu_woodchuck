@@ -755,7 +755,7 @@ nc_network_connection_info (NCNetworkConnection *c, uint32_t mask)
 	   will be good...  */
 	{
 	  debug (0, "Device %s unknown (associated with interface %s).",
-		 e->data, c->name);
+		 cd->device_name, c->name);
 	  continue;
 	}
 

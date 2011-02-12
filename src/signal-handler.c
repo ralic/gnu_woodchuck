@@ -168,8 +168,7 @@ wc_signal_handler_ignore_mask (WCSignalHandler *sh, sigset_t *mask)
       {
 	if (sh->signals[i] == 0)
 	  {
-	    debug (0, "Ignoring signal %d, but it is not being watched.",
-		   signal);
+	    debug (0, "Ignoring signal %d, but it is not being watched.", i);
 	    continue;
 	  }
 
