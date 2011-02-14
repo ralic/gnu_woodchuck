@@ -123,7 +123,13 @@ extern void wc_process_monitor_ptrace_init (void);
 extern void wc_process_monitor_ptrace_quit (void);
 
 /* Trace process PID and any subsequent child processes.  PID must be
-   the unix process id; it may not be a thread id.  */
+   the unix process id; it may not be a thread id.  (Actually, we
+   don't just trace the process: we also trace any child processes,
+   which are created after we start tracing the process under the
+   assumption that the program either has a multi-process
+   architecture, uses plug-ins, etc.  As we attach to most processes
+   shortly after they are created, we are unlikely to miss any child
+   processes.)  */
 extern bool wc_process_monitor_ptrace_trace (pid_t pid);
 
 /* Stop tracing a previously traced process group.  Say you trace bash

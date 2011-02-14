@@ -76,19 +76,100 @@ const char *syscall_str (long syscall)
       return "unknown";
     }
 }
-
+
 static int
 tkill (int tid, int sig)
 {
   return syscall (__NR_tkill, tid, sig);
 }
+
+/* Given a Linux thread id, return the thread id of its process's
+   group leader.  */
+static pid_t
+tid_to_process_group_leader (pid_t tid)
+{
+  char filename[32];
+  gchar *contents = NULL;
+  gsize length = 0;
+  GError *error = NULL;
+  snprintf (filename, sizeof (filename),
+	    "/proc/%d/status", tid);
+  if (! g_file_get_contents (filename, &contents, &length, &error))
+    {
+      debug (0, "Error reading %s: %s; can't trace non-existent process",
+	     filename, error->message);
+      g_error_free (error);
+      error = NULL;
+      return 0;
+    }
 
-/* A hash from pids to TCBs.  */
-static GHashTable *tcbs;
-static int tcb_count;
+  char *tgid_str = strstr (contents, "\nTgid:");
+  tgid_str += 7;
+  pid_t process_group_leader_pid = atoi (tgid_str);
+  g_free (contents);
 
-/* List of suspends threads as required to shed some load.  */
-static GSList *suspended_tcbs;
+  return process_group_leader_pid;
+}
+
+/* When ptracing a process, all signals and, optionally, all system
+   calls are redirected to the debugger.  Intercepting every system
+   call is expensive, particularly if we are only interested in
+   examining a small fraction of all system calls.  In our case, we
+   are interested in the relatively infrequent open, close,
+   etc. system calls.
+
+   To selectively intercept system calls, we instrument binaries, in
+   particular, the libraries that actually make the system calls.  We
+   search the binary for syscall signatures and, if it looks like it
+   might be an interesting system call, we insert a break point.  The
+   breakpoint causes a SIGTRAP to be sent, which we intercept.  We can
+   then fix up the thread by emulating the instruction we replaced and
+   advancing the thread's IP beyond the break point instruction.  */
+
+/* The patches for each library.  */
+struct library_patch
+{
+  /* As it appears in /proc/pid/maps.  */
+  char *filename;
+  struct patch *patches;
+  int patch_count;
+  /* The size of the binary.  We assume that each binary has at most
+     one executable section.  */
+  uintptr_t size;
+};
+
+struct fixup
+{
+  /* The instruction prior to the SWI.  */
+  uintptr_t preceeding_ins;
+  /* The number of instructions prior to the SWI.  */
+  int displacement;
+  /* What to load in R7.  */
+  uintptr_t reg_value;
+};
+
+struct patch
+{
+  uintptr_t base_offset;
+  struct fixup *fixup;
+};
+
+/* The libraries we are interested in.  This is a static list, because
+   there are very few libraries that actually make system calls.
+   Because we only instrument these libraries, we might have false
+   negatives, i.e., we'll miss some interesting system calls.  That's
+   okay.  There are very few such binaries.  */
+struct library_patch library_patches[] =
+  {
+#define LIBRARY_LD 0
+    { "/lib/ld-2.5.so", },
+    { "/lib/libc-2.5.so", },
+    { "/lib/libpthread-2.5.so", },
+  };
+#define LIBRARY_COUNT (sizeof (library_patches) / sizeof (library_patches[0]))
+
+/* We monitor the tracing overhead of each thread.  If the load
+   appears to be too high, we can suspend tracing the thread.  */
 
 struct load
 {
@@ -102,30 +183,14 @@ struct load
   uint64_t callback_count_reset[CALLBACK_COUNT_BUCKETS];
   int callback_count_bucket;
 };
-
-struct library_patch
-{
-  /* As it appears in /proc/pid/maps.  */
-  char *filename;
-  struct patch *patches;
-  int patch_count;
-  uintptr_t size;
-};
-struct library_patch library_patches[] =
-  {
-#define LIBRARY_LD 0
-    { "/lib/ld-2.5.so", },
-    { "/lib/libc-2.5.so", },
-    { "/lib/libpthread-2.5.so", },
-  };
-#define LIBRARY_COUNT (sizeof (library_patches) / sizeof (library_patches[0]))
-
-/* A thread's control block.  */
+
+/* A thread's control block.  One for each linux tid.  */
 struct tcb
 {
-  /* The thread's PID (or, rather, its tid).  */
-  pid_t pid;
+  pid_t tid;
+  struct pcb *pcb;
 
+  /* This thread's load.  */
   struct load load;
 
   /* When we are notified that the thread performed a system call,
@@ -151,45 +216,10 @@ struct tcb
      tracing.  */
   int trace_options;
 
-  /* Typically, we don't want to just trace a thread, we want to trace
-     all threads in that task.  This indicates whether we have scanned
-     for the thread's siblings.  */
-  bool scanned_siblings;
-
-  /* We build a hierarchy of which thread started which thread
-     (independent of task).  The reason is that the user wants to know
-     what files some process accessed.  If it starts a sub-process and
-     the user does not explicitly register that sub-process, then
-     anything that that subprocess accesses should be attributed to
-     the process.
-
-     If the user adds this thread explicitly, parent is NULL.  */
-  struct tcb *parent;
-  GSList *children;
-
   /* We can't just stop tracing a thread at any time.  We have to wait
      until it has "yielded" to us.  To properly detach, we set this
      field to true and detach at the next opportunity.  */
   bool stop_tracing;
-
-  /* A top-level thread is one that the user explicitly request we
-     monitor.  When it, a sibling or a child does something, we send
-     notify the user using this thread's pid.  */
-  bool top_level;
-
-  /* If a thread exits, it has children and is the user-visible handle
-     (i.e., the user explicitly added it), we can't destroy it.  To
-     remember that it is dead, we mark it as a zombie.  */
-  bool zombie;
-
-  /* The group leader of the process.  PROCESS_GROUP_LEADER may be
-     NULL initially as we may allocate the child's tcb prior to
-     initializing the group leader.  To avoid issues, always use
-     tcb_group_leader to get the process group leader.  Note the
-     process group leader will only exit after all other threads have
-     exited.  */
-  struct tcb *process_group_leader;
-  pid_t process_group_leader_pid;
 
   /* If non-zero, we've decided to suspend the thread (for load
      shedding purposes).  If less then 0, then we need to suspend it
@@ -197,6 +227,50 @@ struct tcb
      suspended.  The absolute value is the time we wanted to suspend
      it. */
   int64_t suspended;
+};
+
+/* A hash from tids to struct tcb *s.  */
+static GHashTable *tcbs;
+static int tcb_count;
+
+/* List of suspended threads as required to shed some load.  */
+static GSList *suspended_tcbs;
+
+/* A process's control block.  All threads in the same process are
+   mapped to the same pcb.  */
+struct pcb
+{
+  /* The tcb of the process's group leader.  */
+  struct tcb group_leader;
+
+  /* The list of all threads in this process (including the group
+     leader).  */
+  GSList *tcbs;
+
+  /* Typically, we don't want to just trace a thread, we want to trace
+     all threads in that task.  This indicates whether we have scanned
+     for the thread's siblings.  */
+  bool scanned_siblings;
+
+  /* We build a hierarchy of which process started which process.  The
+     reason is that the user wants to know what files some process
+     accessed.  If it starts a sub-process and the user does not
+     explicitly register that sub-process, then anything that that
+     subprocess accesses should be attributed to the process.
+
+     If the user adds this thread explicitly, parent is NULL.  */
+  struct pcb *parent;
+  GSList *children;
+
+  /* A top-level thread is one that the user explicitly request we
+     monitor.  When it, a sibling or a child does something, we send
+     notify the user using this thread's pid.  */
+  bool top_level;
+
+  /* If a process exits, it has children and is the user-visible
+     handle (i.e., the user explicitly added it), we can't destroy it.
+     To remember that it is dead, we mark it as a zombie.  */
+  bool zombie;
 
   /* The executable and the first two arguments of the command
      line.  */
@@ -214,8 +288,14 @@ struct tcb
   uintptr_t lib_base[LIBRARY_COUNT];
 };
 
-static int memfd_count;
+/* A hash from pids to PCBs.  */
+static GHashTable *pcbs;
+static int pcb_count;
 
+static int memfd_count;
+
+/* The pthread id of the process monitor thread (the thread that does
+   the actually ptracing.  */
 static pthread_t process_monitor_tid;
 
 /* Events occur in the process monitor thread, which need to be
@@ -332,20 +412,20 @@ callback_enqueue (struct tcb *tcb, int op,
 
   cb->cb = op;
 
-  struct tcb *tl = tcb;
+  struct pcb *tl = tcb->pcb;
   while (! tl->top_level)
     {
       assert (tl->parent);
       tl = tl->parent;
     }
   assert (! tl->parent);
-  cb->top_levels_pid = tl->pid;
+  cb->top_levels_pid = tl->group_leader.tid;
 
-  cb->tid = tcb->pid;
+  cb->tid = tcb->tid;
 
-  cb->exe = tcb->exe;
-  cb->arg0 = tcb->arg0;
-  cb->arg1 = tcb->arg1;
+  cb->exe = tcb->pcb->exe;
+  cb->arg0 = tcb->pcb->arg0;
+  cb->arg1 = tcb->pcb->arg1;
 
   if (! stat_buf)
     /* STAT_BUF may be NULL.  Don't seg fault.  */
@@ -395,89 +475,176 @@ callback_enqueue (struct tcb *tcb, int op,
   pthread_mutex_unlock (&pending_callbacks_lock);
 }
 
-/* Set TCB's parent to PARENT.  We sometimes have to do this after we
+/* Set PCB's parent to PARENT.  We sometimes have to do this after we
    create a thread because the initial SIGSTOPs and, indeed, some
    SIGTRAPs due to system calls can be delivered before the
    PTRACE_EVENT_CLONE event.  */
 static void
-tcb_parent_set (struct tcb *tcb, struct tcb *parent)
+pcb_parent_set (struct pcb *pcb, struct pcb *parent)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  if (tcb->parent == parent)
+  if (pcb->parent == parent)
     return;
 
   if (! parent)
+    /* Clear the parent.  */
     {
-      if (tcb->parent)
+      if (pcb->parent)
 	{
-	  tcb->parent->children = g_slist_remove (tcb->parent->children, tcb);
-	  tcb->parent = NULL;
+	  pcb->parent->children = g_slist_remove (pcb->parent->children, pcb);
+	  pcb->parent = NULL;
 	}
       return;
     }
 
   /* We don't allow changing parents.  */
-  assert (! tcb->parent);
+  assert (! pcb->parent);
 
-  tcb->parent = parent;
-  parent->children = g_slist_prepend (parent->children, tcb);
+  pcb->parent = parent;
+  parent->children = g_slist_prepend (parent->children, pcb);
 }
 
-/* Remove a TCB from the TCBS hash and release the TCB data structure.
-   The thread must already be detached.  The TCB must have no children
-   and no parent.  */
+/* Remove a PCB from the PCBs hash and release the PCB data structure.
+   All the process's threads must be freed.  */
 static void
-tcb_free (struct tcb *tcb)
+pcb_free (struct pcb *pcb)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  debug (4, "tcb_free (%d)", tcb->pid);
+  debug (4, "pcb_free (%d)", pcb->group_leader.tid);
 
-  assert (! tcb->parent);
-  assert (! tcb->children);
+  /* We better have no threads.  */
+  assert (! pcb->tcbs);
 
-  if (! g_hash_table_remove (tcbs, (gpointer) (uintptr_t) tcb->pid))
+  /* We need to reparent any children.  */
+  if (pcb->children)
     {
-      debug (0, "Failed to remove tcb for %d from hash table?!?",
-	     (int) tcb->pid);
-      assert (0 == 1);
+      if (pcb->top_level)
+	/* Whoops...  we are a top-level process: we need to stay
+	   around as a zombie.  */
+	{
+	  assert (! pcb->parent);
+	  pcb->zombie = true;
+	  return;
+	}
+
+      /* Our parent inherits the children.  */
+      assert (pcb->parent);
+
+      GSList *l;
+      for (l = pcb->children; l; l = l->next)
+	{
+	  struct pcb *child = l->data;
+	  assert (child->parent == pcb);
+	  assert (! child->top_level);
+
+	  child->parent = pcb->parent;
+	}
+
+      pcb->parent->children
+	= g_slist_concat (pcb->parent->children, pcb->children);
+      pcb->children = NULL;
     }
 
-  if (tcb->memfd != -1)
+  struct pcb *top_level = NULL;
+  if (pcb->parent)
+    /* Remove ourself from our parent.  */
     {
-      close (tcb->memfd);
-      memfd_count --;
+      assert (! pcb->top_level);
+
+      pcb->parent->children = g_slist_remove (pcb->parent->children, pcb);
+
+      if (! pcb->parent->children && pcb->parent->zombie)
+	/* We were the last child and our parent is a zombie (which
+	   implies it is a top-level thread).  We can free our
+	   parent.  */
+	{
+	  assert (pcb->parent->top_level);
+	  assert (! pcb->parent->parent);
+
+	  top_level = pcb->parent;
+	}
+
+      pcb->parent = NULL;
+    }
+  else
+    /* We are the top-level thread.  */
+    {
+      /* Actually, that may not be the case.  Consider the following:
+	 a thread forks, we process the initial SIGSTOP and add it
+	 (without its parent), it exits, and then we get the
+	 PTRACE_EVENT_CLONE event.  */
+      if (pcb->top_level)
+	if (! pcb->children)
+	  /* And, we have no children.  */
+	  top_level = pcb;
     }
 
-  if (tcb->suspended)
-    suspended_tcbs = g_slist_remove (suspended_tcbs, tcb);
+  /* Free PCB and any of its children.  */
+  void do_free (struct pcb *pcb)
+  {
+    assert (! pcb->parent);
+    assert (! pcb->children);
+    assert (! pcb->tcbs);
 
-  /* We may still have pending callbacks.  These callbacks reference
-     TCB->EXE.  To ensure we do not free TCB->EXE too early, we only
-     free it after any pending callbacks.  (TCB->ARG0 and TCB->ARG1
-     are allocated out of the same memory.)  */
-  callback_enqueue (tcb, -1, NULL, NULL, 0, (void *) tcb->exe);
-  g_free (tcb->saved_src);
-  g_free (tcb->saved_stat);
-  g_free (tcb);
+    if (! g_hash_table_remove (pcbs,
+			       (gpointer) (uintptr_t) pcb->group_leader.tid))
+      {
+	debug (0, "Failed to remove pcb for %d from hash table?!?",
+	       (int) pcb->group_leader.tid);
+	assert (0 == 1);
+      }
 
-  tcb_count --;
+    if (pcb->memfd != -1)
+      {
+	close (pcb->memfd);
+	memfd_count --;
+      }
+
+    /* We may still have pending callbacks.  These callbacks reference
+       PCB->EXE.  To ensure we do not free PCB->EXE too early, we only
+       free it after any pending callbacks.  (PCB->ARG0 and PCB->ARG1
+       are allocated out of the same memory.)  */
+    callback_enqueue (&pcb->group_leader,
+		      -1, NULL, NULL, 0, (void *) pcb->exe);
+    g_free (pcb);
+
+    pcb_count --;
+  }
+
+  if (top_level)
+    /* We are freeing a top-level thread.  */
+    {
+      /* XXX: Signal the user.  */
+      assert (top_level->top_level);
+      assert (! top_level->parent);
+
+      do_free (top_level);
+    }
+
+  if (top_level != pcb)
+    do_free (pcb);
+
+  debug (4, "%d processes still being traced (%d threads)",
+	 pcb_count, tcb_count);
 }
 
-/* Read the TCB's executable and command line.  Normally done on
+/* Read the PCB's executable and command line.  Normally done on
    start up and exec.  */
 static void
-tcb_read_exe (struct tcb *tcb)
+pcb_read_exe (struct pcb *pcb)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  if (tcb->exe)
-    callback_enqueue (tcb, -1, NULL, NULL, 0, (void *) tcb->exe);
-  tcb->exe = tcb->arg0 = tcb->arg1 = NULL;
+  if (pcb->exe)
+    /* Free it.  */
+    callback_enqueue (&pcb->group_leader,
+		      -1, NULL, NULL, 0, (void *) pcb->exe);
+  pcb->exe = pcb->arg0 = pcb->arg1 = NULL;
 
   char exe[256];
-  snprintf (exe, sizeof (exe), "/proc/%d/exe", tcb->pid);
+  snprintf (exe, sizeof (exe), "/proc/%d/exe", pcb->group_leader.tid);
   int exe_len = readlink (exe, exe, sizeof (exe) - 1);
   if (exe_len < 0)
     {
@@ -494,7 +661,8 @@ tcb_read_exe (struct tcb *tcb)
   int arg1len = 0;
 
   char cmdline[32];
-  snprintf (cmdline, sizeof (cmdline), "/proc/%d/cmdline", tcb->pid);
+  snprintf (cmdline, sizeof (cmdline), "/proc/%d/cmdline",
+	    pcb->group_leader.tid);
   int fd = open (cmdline, O_RDONLY);
   char buffer[512];
   if (fd < 0)
@@ -545,34 +713,34 @@ tcb_read_exe (struct tcb *tcb)
 	}
     }
 
-  tcb->exe = g_malloc (exe_len + arg0len + arg1len);
-  char *end = mempcpy (tcb->exe, exe, exe_len);
+  pcb->exe = g_malloc (exe_len + arg0len + arg1len);
+  char *end = mempcpy (pcb->exe, exe, exe_len);
   if (arg0)
     {
-      tcb->arg0 = end;
-      end = mempcpy (tcb->arg0, arg0, arg0len);
+      pcb->arg0 = end;
+      end = mempcpy (pcb->arg0, arg0, arg0len);
     }
   if (arg1)
     {
-      tcb->arg1 = end;
-      end = mempcpy (tcb->arg1, arg1, arg1len);
+      pcb->arg1 = end;
+      end = mempcpy (pcb->arg1, arg1, arg1len);
     }
 }
 
 static void
-tcb_memfd_cleanup (void)
+pcb_memfd_cleanup (void)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
   void iter (gpointer key, gpointer value, gpointer user_data)
   {
-    struct tcb *tcb = value;
+    struct pcb *pcb = value;
     uintptr_t horizon = (uintptr_t) user_data;
 
-    if (tcb->memfd != -1 && tcb->memfd_lastuse < horizon)
+    if (pcb->memfd != -1 && pcb->memfd_lastuse < horizon)
       {
-	close (tcb->memfd);
-	tcb->memfd = -1;
+	close (pcb->memfd);
+	pcb->memfd = -1;
 	memfd_count --;
       }
   }
@@ -581,184 +749,188 @@ tcb_memfd_cleanup (void)
 
   if (memfd_count > 96)
     /* Close any fd not used in the last 60 seconds.  */
-    g_hash_table_foreach (tcbs, iter, (gpointer) (uintptr_t) (n - 60*1000));
+    g_hash_table_foreach (pcbs, iter, (gpointer) (uintptr_t) (n - 60*1000));
   if (memfd_count > 128)
     /* That apparently didn't close enough.  Try again.  Close any fd
        not used in the last 5 seconds.  */
-    g_hash_table_foreach (tcbs, iter, (gpointer) (uintptr_t) (n - 5*1000));
+    g_hash_table_foreach (pcbs, iter, (gpointer) (uintptr_t) (n - 5*1000));
 }
 
 static int
-tcb_memfd (struct tcb *tcb)
+pcb_memfd (struct pcb *pcb)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  tcb->memfd_lastuse = now ();
+  pcb->memfd_lastuse = now ();
 
-  if (tcb->memfd == -1)
+  if (pcb->memfd == -1)
     {
-      tcb_memfd_cleanup ();
+      pcb_memfd_cleanup ();
 
       char filename[32];
-      snprintf (filename, sizeof (filename), "/proc/%d/mem", (int) tcb->pid);
-      tcb->memfd = open (filename, O_RDONLY);
-      if (tcb->memfd < 0)
+      snprintf (filename, sizeof (filename), "/proc/%d/mem",
+		(int) pcb->group_leader.tid);
+      pcb->memfd = open (filename, O_RDONLY);
+      if (pcb->memfd < 0)
 	{
 	  debug (0, "Failed to open %s: %m", filename);
-	  tcb->memfd = -1;
+	  pcb->memfd = -1;
 	  return -1;
 	}
       memfd_count ++;
     }
 
-  return tcb->memfd;
+  return pcb->memfd;
 }
 
-/* Return the TCB of TCB's process group leader.  */
-static struct tcb *
-tcb_group_leader (struct tcb *tcb)
-{
-  assert (pthread_equal (pthread_self (), process_monitor_tid));
-
-#ifdef NDEBUG
-  if (tcb->process_group_leader)
-    return tcb->process_group_leader;
-#endif
-
-  struct tcb *pgl = g_hash_table_lookup
-    (tcbs, (gpointer) (uintptr_t) tcb->process_group_leader_pid);
-
-  if (tcb->process_group_leader)
-    assert (tcb->process_group_leader == pgl);
-
-  tcb->process_group_leader = pgl;
-
-  return pgl;
-}
-
-/* Returns whether the thread has been patched.  */
+/* Returns whether the process has been patched.  */
 static bool
-tcb_patched (struct tcb *tcb)
+pcb_patched (struct pcb *pcb)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
-
-  struct tcb *pgl = tcb_group_leader (tcb);
-  if (! pgl)
-    return false;
 
   /* Whenever a new relevant library is loaded, we parse it.  Until it
-     is loaded, no system calls can be made.  */
-  return pgl->lib_base[LIBRARY_LD] != 0;
+     is loaded, no system calls from it can be made.  */
+  return pcb->lib_base[LIBRARY_LD] != 0;
 }
-
-/* Start tracing PID.  Its parent is PARENT.  ALREADY_PTRACING
-   indicates whether the thread is in trace mode or not.  */
+
+/* Start tracing PID.  The process that stared it is PARENT.
+   ALREADY_PTRACING indicates whether the thread is being ptraced.  */
 static struct tcb *
-thread_trace (pid_t pid, struct tcb *parent, bool already_ptracing)
+thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
   debug (3, "thread_trace (%d, %p (= %d), %s ptracing)",
-	 (int) pid, parent, parent ? parent->pid : 0,
+	 (int) tid, parent, parent ? parent->group_leader.tid : 0,
 	 already_ptracing ? "already" : "not yet");
 
-  struct tcb *tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) pid);
+  struct tcb *tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) tid);
   if (tcb)
     /* It's already being traced.  This happens in two cases: when we
        see the SIGSTOP before the PTRACE_EVENT_CLONE event; and, when
        the user explicitly traces a process that is already being
        traced.  */
     {
-      assert (pid == tcb->pid);
-      tcb_parent_set (tcb, parent);
+      assert (tid == tcb->tid);
+
+      if (tid == tcb->pcb->group_leader.tid)
+	/* TID is the process group leader.  PARENT is the process's
+	   (as opposed to the thread's) parent.  */
+	{
+	  assert (tcb == &tcb->pcb->group_leader);
+	  /* A process's parent can't be itself...  */
+	  assert (parent != tcb->pcb);
+	  pcb_parent_set (tcb->pcb, parent);
+	}
+
       return tcb;
     }
+
+  pid_t pgl = tid_to_process_group_leader (tid);
+  if (! pgl)
+    /* Failed to get the process group leader.  The thread no longer
+       exists.  */
+    return NULL;
+
+  struct pcb *pcb = g_hash_table_lookup (pcbs, (gpointer) (uintptr_t) pgl);
+  if (! pcb)
+    /* This is the first thread in an as-yet unknown process.  */
+    {
+      pcb = g_malloc0 (sizeof (struct pcb));
+
+      pcb->group_leader.tid = pgl;
+
+      g_hash_table_insert (pcbs, (gpointer) (uintptr_t) pgl, pcb);
+      pcb_count ++;
+
+      pcb->memfd = -1;
+
+      pcb_read_exe (pcb);
+
+      int i;
+      for (i = 0; i < LIBRARY_COUNT; i ++)
+	pcb->lib_fd[i] = -1;
+
+      debug (4, "%d processes being traced (%d threads)",
+	     pcb_count, tcb_count);
+
+      if (tid != pgl)
+	/* We've added a thread before we've added the group leader.
+	   (It can happen depending on how thread creation events are
+	   ordered.)  Add the group leader now.  Then add TID.  */
+	thread_trace (pgl, NULL, false);
+    }
+
 
   /* NB: After tracing a process, we first receive two SIGSTOPs
      (signal 0x13) for that process.  Subsequently, we receive
      SIGTRAPs on system calls.  */
   if (! already_ptracing)
     {
-      if (ptrace (PTRACE_ATTACH, pid) == -1)
+      if (ptrace (PTRACE_ATTACH, tid) == -1)
 	{
-	  debug (0, "Error attaching to %d: %m", pid);
+	  debug (0, "Error attaching to %d: %m", tid);
 	  return NULL;
 	}
     }
 
-  tcb = g_malloc0 (sizeof (struct tcb));
-  tcb->pid = pid;
 
-  tcb->memfd = -1;
+  if (tid == pgl)
+    {
+      tcb = &pcb->group_leader;
+      /* TID is the process group leader.  PARENT is the process's (as
+	 opposed to the thread's) parent.  */
+      assert (pcb != parent);
+      pcb_parent_set (pcb, parent);
+    }
+  else
+    tcb = g_malloc0 (sizeof (*tcb));
 
-  int i;
-  for (i = 0; i < LIBRARY_COUNT; i ++)
-    tcb->lib_fd[i] = -1;
-
+  tcb->tid = tid;
+  tcb->pcb = pcb;
   tcb->current_syscall = -1;
+  g_hash_table_insert (tcbs, (gpointer) (uintptr_t) tid, tcb);
+  pcb->tcbs = g_slist_prepend (pcb->tcbs, tcb);
 
-  tcb_parent_set (tcb, parent);
-
-  g_hash_table_insert (tcbs, (gpointer) (uintptr_t) pid, tcb);
   tcb_count ++;
 
-  tcb_read_exe (tcb);
+  debug (0, "Now tracing thread %d (%s;%s;%s).  Process: %d",
+	 tid, pcb->exe, pcb->arg0, pcb->arg1, pcb->group_leader.tid);
 
-  char filename[32];
-  gchar *contents = NULL;
-  gsize length = 0;
-  GError *error = NULL;
-  snprintf (filename, sizeof (filename),
-	    "/proc/%d/status", pid);
-  if (! g_file_get_contents (filename, &contents, &length, &error))
-    {
-      debug (0, "Error reading %s: %s; can't trace non-existent process",
-	     filename, error->message);
-      g_error_free (error);
-      error = NULL;
-      return false;
-    }
-
-  char *tgid_str = strstr (contents, "\nTgid:");
-  tgid_str += 7;
-  tcb->process_group_leader_pid = atoi (tgid_str);
-  g_free (contents);
-
-  do_debug (0)
-    {
-      debug (0, "Now tracing %d (%s;%s;%s).  Thread group: %d",
-	     tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
-	     tcb->process_group_leader_pid);
-    }
+  debug (4, "%d processes being traced (%d threads)",
+	 pcb_count, tcb_count);
 
   return tcb;
 }
 
-/* Returns 0 if ADDR does not contain VALUE.  1 if it does.  -1 if an
-   error occurs.  */
+/* Returns 0 if ADDR does not contain VALUE.  1 if it does.  -errno if
+   an error occurs.  */
 static int
 thread_check_word (struct tcb *tcb, uintptr_t addr, uintptr_t value)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  int memfd = tcb_memfd (tcb);
+  int memfd = pcb_memfd (tcb->pcb);
   if (lseek (memfd, addr, SEEK_SET) < 0)
     {
-      debug (0, "Error seeking in process %d's memory: %m", (int) tcb->pid);
-      return -1;
-    }
+      debug (0, "Error seeking in process %d's memory: %m",
+	     (int) tcb->pcb->group_leader.tid);
+      return -errno;
+   }
 
   uintptr_t real = 0;
   if (read (memfd, &real, sizeof (real)) < 0)
     {
-      debug (0, "Failed to read from process %d's memory: %m", tcb->pid);
-      return -1;
+      debug (0, "Failed to read from process %d's memory: %m",
+	     (int) tcb->pcb->group_leader.tid);
+      return -errno;
     }
 
   if (real != value)
     debug (0, DEBUG_BOLD ("Reading process %d's memory: "
 			  "at %"PRIxPTR": expected %"PRIxPTR", got: %"PRIxPTR),
-	   tcb->pid, addr, value, real);
+	   (int) tcb->pcb->group_leader.tid, addr, value, real);
 
   if (real == value)
     return 1;
@@ -771,35 +943,19 @@ thread_update_word (struct tcb *tcb, uintptr_t addr, uintptr_t value)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  if (ptrace (PTRACE_POKEDATA, tcb->pid, addr, value) < 0)
+  if (ptrace (PTRACE_POKEDATA, tcb->tid, addr, value) < 0)
     {
       debug (0, "Failed to write to process %d's memory, "
 	     "location %"PRIxPTR": %m",
-	     tcb->pid, addr);
+	     tcb->tid, addr);
       return false;
     }
   else
     debug (4, "%d: Patched address %"PRIxPTR" to contain %"PRIxPTR,
-	   tcb->pid, addr, value);
+	   tcb->tid, addr, value);
 
   return true;
 }
-
-struct fixup
-{
-  /* The instruction prior to the SWI.  */
-  uintptr_t preceeding_ins;
-  /* The number of instructions prior to the SWI.  */
-  int displacement;
-  /* What to load in R7.  */
-  uintptr_t reg_value;
-};
-
-struct patch
-{
-  uintptr_t base_offset;
-  struct fixup *fixup;
-};
 
 #ifdef __arm__
 #define BREAKPOINT_INS 0xe7f001f0
@@ -850,11 +1006,9 @@ struct fixup fixups[] =
   };
 
 static void
-thread_apply_patches (struct tcb *thread)
+thread_apply_patches (struct tcb *tcb)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
-
-  struct tcb *tcb = tcb_group_leader (thread);
 
   bool fully_patched (void)
   {
@@ -864,17 +1018,18 @@ thread_apply_patches (struct tcb *thread)
     int i;
     for (i = 0; i < LIBRARY_COUNT; i ++)
       {
-	if (tcb->lib_base[i])
+	uintptr_t base = tcb->pcb->lib_base[i];
+	if (base)
 	  {
 	    struct library_patch *lib = &library_patches[i];
-	    uintptr_t base = tcb->lib_base[i];
+
 	    int j;
 	    for (j = 0; j < lib->patch_count; j ++)
 	      {
 		struct patch *p = &lib->patches[j];
 
 		uintptr_t addr = base + p->base_offset;
-		if (! thread_check_word (thread, addr, BREAKPOINT_INS) != 0)
+		if (! thread_check_word (tcb, addr, BREAKPOINT_INS) != 0)
 		  {
 		    debug (0, "Bad patch at %"PRIxPTR" "
 			   "in lib %s, off %"PRIxPTR,
@@ -888,17 +1043,14 @@ thread_apply_patches (struct tcb *thread)
       }
 
     if (bad)
-      {
-	debug (0, DEBUG_BOLD ("%d/%d: %d of %d locations incorrectly patched"),
-	       thread->pid, tcb->pid, bad, total);
-	sleep (3);
-      }
+      debug (0, DEBUG_BOLD ("%d: %d of %d locations incorrectly patched"),
+	     tcb->pcb->group_leader.tid, bad, total);
     return ret;
   }
 
   if (fully_patched ())
     {
-      debug (4, "Already fully patched %d", thread->pid);
+      debug (4, "Already fully patched %d", tcb->pcb->group_leader.tid);
       return;
     }
 
@@ -909,7 +1061,7 @@ thread_apply_patches (struct tcb *thread)
     assert (lib->patch_count == 0);
     assert (map_start < map_end);
 
-    int memfd = tcb_memfd (tcb);
+    int memfd = pcb_memfd (tcb->pcb);
     if (memfd == -1)
       return;
 
@@ -921,7 +1073,8 @@ thread_apply_patches (struct tcb *thread)
     /* mmap always fails.  */
     if (lseek (memfd, map_start, SEEK_SET) < 0)
       {
-	debug (0, "Error seeking in process %d's memory: %m", tcb->pid);
+	debug (0, "Error seeking in process %d's memory: %m",
+	       tcb->pcb->group_leader.tid);
 	return;
       }
 
@@ -934,7 +1087,7 @@ thread_apply_patches (struct tcb *thread)
 	if (r < 0)
 	  {
 	    debug (0, "Error reading from process %d's memory: %m",
-		   tcb->pid);
+		   tcb->pcb->group_leader.tid);
 	    break;
 	  }
 
@@ -945,7 +1098,7 @@ thread_apply_patches (struct tcb *thread)
     if (s)
       {
 	debug (0, "Failed to read %d of %d bytes from process %d's memory.",
-	       s, map_length, tcb->pid);
+	       s, map_length, tcb->pcb->group_leader.tid);
 	map_length -= s;
       }
 
@@ -982,7 +1135,7 @@ thread_apply_patches (struct tcb *thread)
 	    sigs[mov][errno_check][0] ++;
 
 	    /* System call instruction.  Print the context.  */
-	    debug (4, "Candidate syscall at %"PRIxPTR": "
+	    debug (5, "Candidate syscall at %"PRIxPTR": "
 		   "%c%08"PRIxPTR" %c%08"PRIxPTR" %c%08"PRIxPTR" "
 		   "%c%08"PRIxPTR" *%08"PRIxPTR"* %c%08"PRIxPTR" "
 		   "%c%08"PRIxPTR" %c%08"PRIxPTR" %c%08"PRIxPTR"%s%s",
@@ -1140,7 +1293,7 @@ thread_apply_patches (struct tcb *thread)
   gsize length = 0;
   GError *error = NULL;
   snprintf (filename, sizeof (filename),
-	    "/proc/%d/maps", tcb->pid);
+	    "/proc/%d/maps", tcb->tid);
   if (! g_file_get_contents (filename, &maps, &length, &error))
     {
       debug (0, "Error reading %s: %s; can't trace non-existent process",
@@ -1157,7 +1310,7 @@ thread_apply_patches (struct tcb *thread)
   for (i = 0; i < LIBRARY_COUNT; i ++)
     {
       patch[i] = false;
-      if (! tcb->lib_base[i])
+      if (! tcb->pcb->lib_base[i])
 	{
 	  uintptr_t map_addr, map_end;
 	  if (grep_maps (maps, library_patches[i].filename,
@@ -1166,7 +1319,7 @@ thread_apply_patches (struct tcb *thread)
 	      if (! library_patches[i].patches)
 		/* We have not yet generated the patch list.  */
 		scan (&library_patches[i], map_addr, map_end);
-	      tcb->lib_base[i] = map_addr;
+	      tcb->pcb->lib_base[i] = map_addr;
 	      patch[i] = true;
 	    }
 	}
@@ -1186,7 +1339,7 @@ thread_apply_patches (struct tcb *thread)
 	for (j = 0; j < library_patches[i].patch_count; j ++)
 	  {
 	    struct patch *p = &library_patches[i].patches[j];
-	    if (thread_check_word (tcb, tcb->lib_base[i] + p->base_offset,
+	    if (thread_check_word (tcb, tcb->pcb->lib_base[i] + p->base_offset,
 				   p->fixup->preceeding_ins) != 1)
 	      bad ++;
 	  }
@@ -1208,33 +1361,32 @@ thread_apply_patches (struct tcb *thread)
 	for (j = 0; j < library_patches[i].patch_count; j ++)
 	  {
 	    struct patch *p = &library_patches[i].patches[j];
-	    if (thread_update_word (tcb, tcb->lib_base[i] + p->base_offset,
+	    if (thread_update_word (tcb, tcb->pcb->lib_base[i] + p->base_offset,
 				    BREAKPOINT_INS))
 	      count ++;
 	  }
       }
 
   debug (4, "Patched %d %s;%s;%s: applied %d of %d patches",
-	 tcb->pid, tcb->exe, tcb->arg0, tcb->arg1, count, total);
+	 tcb->pcb->group_leader.tid,
+	 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+	 count, total);
 
   fully_patched ();
 #endif
 }
 
-/* Revert any fixups applied to a thread.  TCB must be the process
-   group leader.  */
+/* Revert any fixups applied to a process.  */
 static void
 thread_revert_patches (struct tcb *tcb)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  assert (tcb->process_group_leader_pid == tcb->pid);
-
   int i;
   for (i = 0; i < LIBRARY_COUNT; i ++)
-    if (tcb->lib_base[i])
+    if (tcb->pcb->lib_base[i])
       {
-	uintptr_t base = tcb->lib_base[i];
+	uintptr_t base = tcb->pcb->lib_base[i];
 	struct library_patch *lib = &library_patches[i];
 
 	int bad = 0;
@@ -1246,18 +1398,27 @@ thread_revert_patches (struct tcb *tcb)
 	    uintptr_t addr = base + p->base_offset;
 	    uintptr_t value = p->fixup->preceeding_ins;
 
-	    if (thread_check_word (tcb, addr, BREAKPOINT_INS) == 0)
-	      bad ++;
-	    else
-	      thread_update_word (tcb, addr, value);
+	    switch (thread_check_word (tcb, addr, BREAKPOINT_INS))
+	      {
+	      case 0:
+		bad ++;
+		break;
+	      case 1:
+		thread_update_word (tcb, addr, value);
+		break;
+	      case -ESRCH:
+		/* The process is dead.  */
+		return;
+	      }
 	  }
 
 	if (bad)
 	  debug (0, DEBUG_BOLD ("Patched process %d missing "
 				"%d of %d patches for %s."),
-		 tcb->pid, bad, lib->patch_count, lib->filename);
+		 tcb->pcb->group_leader.tid, bad, lib->patch_count,
+		 lib->filename);
 
-	tcb->lib_base[i] = 0;
+	tcb->pcb->lib_base[i] = 0;
       }
 }
 
@@ -1271,44 +1432,44 @@ thread_revert_patches (struct tcb *tcb)
    the thread's register state and return true.  Otherwise, return
    false.  */
 static bool
-thread_fixup_advance (struct tcb *thread, struct pt_regs *regs)
+thread_fixup_and_advance (struct tcb *tcb, struct pt_regs *regs)
 {
-  struct tcb *tcb = tcb_group_leader (thread);
-  if (! tcb_patched (tcb))
+  if (! pcb_patched (tcb->pcb))
     return false;
 
   uintptr_t IP = regs->REGS_IP;
   bool fixed = false;
   int i;
   for (i = 0; i < LIBRARY_COUNT; i ++)
-    if (tcb->lib_base[i]
-	&& tcb->lib_base[i] <= IP
-	&& IP < tcb->lib_base[i] + library_patches[i].size)
+    if (tcb->pcb->lib_base[i]
+	&& tcb->pcb->lib_base[i] <= IP
+	&& IP < tcb->pcb->lib_base[i] + library_patches[i].size)
       /* The address is coverd by this library.  */
       {
 	struct library_patch *lib = &library_patches[i];
-	debug (4, "%d: IP %"PRIxPTR" covered by library %s",
-	       thread->pid, IP, lib->filename);
+	debug (4, "Thread %d: IP %"PRIxPTR" covered by library %s",
+	       tcb->tid, IP, lib->filename);
 
 	int j;
 	for (j = 0; j < lib->patch_count; j ++)
 	  {
 	    struct patch *p = &lib->patches[j];
 
-	    if (tcb->lib_base[i] + p->base_offset == regs->REGS_IP)
+	    if (tcb->pcb->lib_base[i] + p->base_offset == regs->REGS_IP)
 	      {
 #ifdef __arm__
 		regs->REGS_IP = (uintptr_t) regs->REGS_IP + 4;
 		regs->ARM_r7 = p->fixup->reg_value;
 
-		if (ptrace (PTRACE_SETREGS, thread->pid, 0, (void *) regs) < 0)
-		  debug (0, "Failed to update thread's register set: %m");
+		if (ptrace (PTRACE_SETREGS, tcb->tid, 0, (void *) regs) < 0)
+		  debug (0, "Failed to update thread %d's register set: %m",
+			 tcb->tid);
 		else
 		  {
 		    fixed = true;
-		    debug (4, "%d: Fixed up thread "
+		    debug (4, "Thread %d: Fixed up thread "
 			   "(%s, fixup %d, syscall %s (%d)).",
-			   thread->pid, lib->filename,
+			   tcb->tid, lib->filename,
 			   (((uintptr_t) p->fixup - (uintptr_t) fixups)
 			    / sizeof (fixups[0])),
 			   syscall_str (p->fixup->reg_value), 
@@ -1325,161 +1486,138 @@ thread_fixup_advance (struct tcb *thread, struct pt_regs *regs)
       }
 
   if (i == LIBRARY_COUNT)
-    debug (4, DEBUG_BOLD ("%d: %"PRIxPTR" not covered by any library."),
-	   (int) tcb->pid, (uintptr_t) regs->REGS_IP);
+    debug (4, "Thread %d: IP %"PRIxPTR" not covered by any library.",
+	   (int) tcb->tid, (uintptr_t) regs->REGS_IP);
 
   if (! fixed)
-    debug (4, "%d: IP: %"PRIxPTR".  No fix up applied.",
-	   (int) thread->pid, (uintptr_t) regs->REGS_IP);
+    debug (4, "Thread %d: IP: %"PRIxPTR".  No fix up applied.",
+	   (int) tcb->tid, (uintptr_t) regs->REGS_IP);
 
   return fixed;
 }
 
-/* Stop tracing a thread.  The thread must already be detached, i.e.,
-   it terminated or we called ptrace (PTRACE_DETACH, tcb->pid).  */
-static void
-thread_untrace (struct tcb *tcb)
-{
-  assert (pthread_equal (pthread_self (), process_monitor_tid));
-
-  debug (4, "thread_untrace (%d)", tcb->pid);
-
-  /* We need to reparent any children.  */
-  if (tcb->children)
-    {
-      if (tcb->top_level)
-	/* Whoops...  we are a top-level process: we need to stay
-	   around as a zombie.  */
-	{
-	  assert (! tcb->parent);
-	  tcb->zombie = true;
-	  return;
-	}
-
-      /* Our parent inherits the children.  */
-      assert (tcb->parent);
-
-      GSList *l;
-      for (l = tcb->children; l; l = l->next)
-	{
-	  struct tcb *c = l->data;
-	  assert (c->parent == tcb);
-	  assert (! c->top_level);
-
-	  c->parent = tcb->parent;
-	}
-
-      tcb->parent->children
-	= g_slist_concat (tcb->parent->children, tcb->children);
-      tcb->children = NULL;
-    }
-
-  struct tcb *top_level = NULL;
-  if (tcb->parent)
-    /* Remove ourself from our parent.  */
-    {
-      assert (! tcb->top_level);
-
-      tcb->parent->children = g_slist_remove (tcb->parent->children, tcb);
-
-      if (! tcb->parent->children && tcb->parent->zombie)
-	/* We were the last child and our parent is a zombie (which
-	   implies it is a top-level thread).  We can free our
-	   parent.  */
-	{
-	  assert (tcb->parent->top_level);
-	  assert (! tcb->parent->parent);
-
-	  top_level = tcb->parent;
-	}
-
-      tcb->parent = NULL;
-    }
-  else
-    /* We are the top-level thread.  */
-    {
-      /* Actually, that may not be the case.  Consider the following:
-	 a thread forks, we process the initial SIGSTOP and add it
-	 (without its parent), it exits, and then we get the
-	 PTRACE_EVENT_CLONE event.  */
-      if (tcb->top_level)
-	if (! tcb->children)
-	  /* And, we have no children.  */
-	  top_level = tcb;
-    }
-
-  if (top_level)
-    /* We are freeing a top-level thread.  */
-    {
-      /* XXX: Signal the user.  */
-      assert (top_level->top_level);
-      assert (! top_level->parent);
-
-      tcb_free (top_level);
-    }
-
-  if (top_level != tcb)
-    tcb_free (tcb);
-}
-
+/* Stop tracking a process.  But, don't release its TCB.  */
 static void
 thread_detach (struct tcb *tcb)
 {
-  debug (4, "Detaching %d", (int) tcb->pid);
-  if (tcb->process_group_leader_pid == tcb->pid)
-    thread_revert_patches (tcb);
-  if (ptrace (PTRACE_DETACH, tcb->pid, 0, SIGCONT) < 0)
-    debug (0, "Detaching from %d failed: %m", tcb->pid);
+  debug (4, "Detaching %d", (int) tcb->tid);
+  if (ptrace (PTRACE_DETACH, tcb->tid, 0, SIGCONT) < 0)
+    debug (0, "Detach from %d failed: %m", tcb->tid);
+}
+
+/* Free a TCB data structure.  The thread must already be detached,
+   i.e., it terminated or we called ptrace (PTRACE_DETACH, tcb->tid).
+   Remove it from the TCB hash, unlink it from its pcb and release the
+   memory.  */
+static void
+thread_untrace (struct tcb *tcb, bool need_detach)
+{
+  debug (3, "thread_untrace (%d)", tcb->tid);
+
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+  assert (g_slist_find (tcb->pcb->tcbs, tcb));
+  tcb->pcb->tcbs = g_slist_remove (tcb->pcb->tcbs, tcb);
+
+  if (! g_hash_table_remove (tcbs, (gpointer) (uintptr_t) tcb->tid))
+    {
+      debug (0, "Failed to remove tcb for %d from TCBS hash table?!?",
+	     (int) tcb->tid);
+      assert (0 == 1);
+    }
+
+  if (tcb->suspended)
+    {
+      assert (g_slist_find (suspended_tcbs, tcb));
+      suspended_tcbs = g_slist_remove (suspended_tcbs, tcb);
+    }
+
+  g_free (tcb->saved_src);
+  g_free (tcb->saved_stat);
+
+  /* After calling pcb_free, TCB may be freed.  Copy some data.  */
+  pid_t tid = tcb->tid;
+  pid_t pid = tcb->pcb->group_leader.tid;
+  bool need_free = (tcb != &tcb->pcb->group_leader);
+  bool last_thread = tcb->pcb->tcbs == NULL;
+
+  tcb_count --;
+
+  if (last_thread)
+    /* We were the last thread.  Free the PCB.  */
+    {
+      if (need_detach)
+	/* We need to revert any patches we applied: the thread may
+	   not have actually exited, but been detached by the
+	   user.  */
+	{
+	  debug (0, "Reverting patches on process %d (last thread %d, quit)",
+		 pid, tid);
+	  thread_revert_patches (tcb);
+	}
+      pcb_free (tcb->pcb);
+    }
+
+  /* At this point, TCB may have been freed (due to pcb_free)!  */
+
+  if (need_detach)
+    {
+      debug (4, "Detaching %d", (int) tid);
+      if (ptrace (PTRACE_DETACH, tid, 0, SIGCONT) < 0)
+	debug (0, "Detach from %d failed: %m", tid);
+    }
+
+  if (need_free)
+    g_free (tcb);
+
+  debug (4, "%d processes still being traced (%d threads)",
+	 pcb_count, tcb_count);
 }
 
-/* Start tracing a process.  Return the corresponding TCB for the
-   thread group leader.
-
-   Actually, we don't just trace the process: we also trace any child
-   processes, which are created after we start tracing the process
-   under the assumption that the program either has a multi-process
-   architecture, uses plug-ins, etc.  As we attach to most processes
-   shortly after they are created, we are unlikely to miss any child
-   processes.  */
-static struct tcb *
+/* Start tracing a process.  Return the corresponding PCB for the
+   thread group leader.  */
+static struct pcb *
 process_trace (pid_t pid)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
   struct tcb *tcb = thread_trace (pid, NULL, false);
-  if (tcb)
-    {
-      assert (! tcb->top_level);
-      tcb->top_level = true;
-    }
-  return tcb;
+  if (! tcb)
+    return NULL;
+
+  /* The user is explicitly adding this process.  Make it a top-level
+     process.  */
+  pcb_parent_set (tcb->pcb, NULL);
+  tcb->pcb->top_level = true;
+  return tcb->pcb;
 }
 
-/* Stop tracing a process and its children.  */
+/* Stop tracing a process and any children.  The corresponding PCB(s)
+   will be freed once all of the associated threads have exited.  */
 static void
 process_untrace (pid_t pid)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  struct tcb *tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) pid);
-  if (! tcb)
-    /* A user can untrace a PID more than once.  */
+  struct pcb *pcb = g_hash_table_lookup (pcbs, (gpointer) (uintptr_t) pid);
+  if (! pcb)
+    /* A user can call untrace on a PID more than once.  */
     {
       debug (0, "Can't untrace %d: not being traced.", pid);
       return;
     }
 
-  if (! tcb->top_level)
+  if (! pcb->top_level)
     {
-      assert (tcb->parent);
+      assert (pcb->parent);
       debug (0, "Bad untrace: %d never explicitly traced.", pid);
       return;
     }
   else
     /* Top-level threads don't have parents.  */
-    assert (! tcb->parent);
+    assert (! pcb->parent);
 
-  if (tcb->stop_tracing)
+  if (pcb->group_leader.stop_tracing)
     {
       debug (0, "Already untracing %d.", pid);
       return;
@@ -1487,23 +1625,39 @@ process_untrace (pid_t pid)
 
   debug (4, "Will detach from %d (and children) at next opportunity.", pid);
 
-  void stop (struct tcb *tcb)
+  GSList *dofree = NULL;
+  void stop (struct pcb *pcb)
   {
-    if (tcb->suspended <= 0 && tkill (tcb->pid, SIGSTOP) < 0)
-      debug (0, "tkill (%d, SIGSTOP): %m", pid);
-    tcb->stop_tracing = true;
+    GSList *t;
+    for (t = pcb->tcbs; t; t = t->next)
+      {
+	struct tcb *tcb = t->data;
+	if (tcb->suspended <= 0 && tkill (tcb->tid, SIGSTOP) < 0)
+	  {
+	    debug (0, "tkill (%d, SIGSTOP): %m", tcb->tid);
+	    dofree = g_slist_prepend (dofree, tcb);
+	  }
+	tcb->stop_tracing = true;
+      }
 
     GSList *l;
-    for (l = tcb->children; l; l = l->next)
+    for (l = pcb->children; l; l = l->next)
       {
-	struct tcb *child = l->data;
-	assert (child->parent == tcb);
-	assert (! child->stop_tracing);
+	struct pcb *child = l->data;
+	assert (child->parent == pcb);
+	assert (! child->group_leader.stop_tracing);
 	assert (! child->top_level);
 	stop (child);
       }
   }
-  stop (tcb);
+  stop (pcb);
+
+  while (dofree)
+    {
+      struct tcb *tcb = dofree->data;
+      thread_untrace (tcb, false);
+      dofree = g_slist_delete_link (dofree, dofree);
+    }
 }
 
 static bool quit;
@@ -1606,13 +1760,14 @@ grab_string (struct tcb *tcb, uintptr_t addr, char *buffer, int size)
   char *b = buffer;
   *b = 0;
 
-  int memfd = tcb_memfd (tcb);
+  int memfd = pcb_memfd (tcb->pcb);
   if (memfd == -1)
     goto try_ptrace;
 
   if (lseek (memfd, addr, SEEK_SET) < 0)
     {
-      debug (0, "Error seeking in process %d's memory: %m", tcb->pid);
+      debug (0, "Error seeking in process %d's memory: %m",
+	     tcb->pcb->group_leader.tid);
       goto try_ptrace;
     }
 
@@ -1658,10 +1813,10 @@ grab_string (struct tcb *tcb, uintptr_t addr, char *buffer, int size)
       {
 	uintptr_t word;
 	char byte[0];
-      } data = { .word = ptrace (PTRACE_PEEKDATA, tcb->pid, word, 0) };
+      } data = { .word = ptrace (PTRACE_PEEKDATA, tcb->tid, word, 0) };
       if (errno)
 	{
-	  debug (0, "Reading user's address space: %m.");
+	  debug (0, "Reading from thread %d address space: %m.", tcb->tid);
 	  *b = 0;
 	  return b;
 	}
@@ -1805,8 +1960,10 @@ load_shed_maybe (void)
   candidates = g_slist_sort (candidates, compare);
 
   struct tcb *tcb = candidates->data;
-  debug (0, DEBUG_BOLD ("Suspending %d: %s;%s;%s: %d callbacks per second"),
-	 tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
+  debug (0, DEBUG_BOLD ("Suspending thread %d (process %d: %s;%s;%s): "
+			"%d callbacks per second"),
+	 tcb->tid, tcb->pcb->group_leader.tid,
+	 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
 	 summarize (&tcb->load).callbacks_per_sec);
 
   g_slist_free (candidates);
@@ -1867,8 +2024,8 @@ process_monitor (void *arg)
 	 Because adding the command also tickled the wait process, we
 	 will wake up immediately.  */
       int status = 0;
-      pid_t pid = waitpid (-1, &status, __WALL|__WCLONE);
-      if (pid == signal_process_pid || process_monitor_commands)
+      pid_t tid = waitpid (-1, &status, __WALL|__WCLONE);
+      if (tid == signal_process_pid || process_monitor_commands)
 	{
 	  debug (4, "signal from signal process");
 
@@ -1899,28 +2056,31 @@ process_monitor (void *arg)
 		     when we've captured it.  Is there a way to force
 		     the thread to do something so we can capture it
 		     or do we have to wait for a convenient moment?
-		     IT APPEARS that we can send the process a SIGSTOP
-		     and it gets woken up.  */
+		     IT APPEARS that we can send a thread a SIGSTOP to
+		     (reliably) wake it up.  */
 		  debug (1, "Quitting.  Need to detach from:");
 
-		  bool have_one = false;
 		  void iter (gpointer key, gpointer value, gpointer user_data)
 		  {
-		    pid_t pid = (int) (uintptr_t) key;
+		    pid_t tid = (int) (uintptr_t) key;
 		    struct tcb *tcb = value;
 		    debug (1, "%d: %s;%s;%s",
-			   pid, tcb->exe, tcb->arg0, tcb->arg1);
+			   tid, tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
+		    assert (tid == tcb->tid);
+
 		    if (tcb->suspended > 0)
 		      /* Already suspended.  */
-		      thread_untrace (tcb);
-		    else if (tkill (pid, SIGSTOP) < 0)
+		      thread_untrace (tcb, false);
+		    else if (tkill (tid, SIGSTOP) < 0)
+		      /* Failed to send it SIGSTOP.  Assume it is
+			 dead.  */
 		      {
-			* (bool *) user_data = true;
-			debug (0, "tkill (%d, SIGSTOP): %m", pid);
-			thread_untrace (tcb);
+			debug (0, "tkill (%d, SIGSTOP): %m", tid);
+			thread_untrace (tcb, false);
 		      }
 		  }
-		  g_hash_table_foreach (tcbs, iter, (gpointer) &have_one);
+		  g_hash_table_foreach (tcbs, iter, NULL);
+		  tcb = NULL;
 
 		  quit = true;
 		  break;
@@ -1946,14 +2106,15 @@ process_monitor (void *arg)
 
 	  /* Resume the signal process so it can be signaled
 	     again.  */
-	  goto out;
+	  if (tid == signal_process_pid)
+	    goto out;
 	}
 
       int event = status >> 16;
 
       do_debug (4)
 	{
-	  debug (0, "Signal from %d: status: %x", pid, status);
+	  debug (0, "Signal from %d: status: %x", tid, status);
 	  if (WIFEXITED (status))
 	    debug (0, " Exited: %d", WEXITSTATUS (status));
 	  if (WIFSIGNALED (status))
@@ -1970,9 +2131,9 @@ process_monitor (void *arg)
 	}
 
       /* Look up the thread.  */
-      if (! (tcb && tcb->pid == pid))
+      if (! (tcb && tcb->tid == tid))
 	{
-	  tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) pid);
+	  tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) tid);
 	  if (! tcb)
 	    /* We aren't monitoring this process...  There are two
 	       possibilities: either it is a new thread and the initial
@@ -1983,15 +2144,15 @@ process_monitor (void *arg)
 	       a program and we just got in its way.  OUCH.  */
 	    {
 	      if (WSTOPSIG (status) == (0x80 | SIGTRAP))
-		/* It's got the ptrace monitor bit set.  Assume it belongs
-		   to us.  */
+		/* It's got the ptrace monitor bit set.  It was
+		   started by some thread that we are tracing.  We'll
+		   get ptrace event message soon.  */
 		{
-		  tcb = thread_trace (pid, NULL, true);
-		  tcb->scanned_siblings = true;
+		  tcb = thread_trace (tid, NULL, true);
 		  tcb->trace_options = 1;
 		}
 	      else
-		debug (3, "Got signal for %d, but not monitoring it!", pid);
+		debug (3, "Got signal for %d, but not monitoring it!", tid);
 
 	      if (! tcb)
 		goto out;
@@ -2000,13 +2161,13 @@ process_monitor (void *arg)
 
       /* If the process has been fixed up, then let it run.
 	 Otherwise, default to stopping it at the next signal.  */
-      ptrace_op = tcb_patched (tcb) ? PTRACE_CONT : PTRACE_SYSCALL;
+      ptrace_op = pcb_patched (tcb->pcb) ? PTRACE_CONT : PTRACE_SYSCALL;
 
       /* See if the child exited.  */
       if (WIFEXITED (status))
 	{
-	  debug (4, "%d exited: %d.", (int) pid, WEXITSTATUS (status));
-	  thread_untrace (tcb);
+	  debug (4, "%d exited: %d.", (int) tid, WEXITSTATUS (status));
+	  thread_untrace (tcb, false);
 	  tcb = NULL;
 	  continue;
 	}
@@ -2014,8 +2175,8 @@ process_monitor (void *arg)
       if (WIFSIGNALED (status))
 	{
 	  debug (4, "%d exited due to signal: %s.",
-		 (int) pid, strsignal (WTERMSIG (status)));
-	  thread_untrace (tcb);
+		 (int) tid, strsignal (WTERMSIG (status)));
+	  thread_untrace (tcb, false);
 	  tcb = NULL;
 	  continue;
 	}
@@ -2028,7 +2189,7 @@ process_monitor (void *arg)
       if (! WIFSTOPPED (status))
 	/* Ignore.  Not stopped.  */
 	{
-	  debug (4, "%d: Not stopped.", (int) tcb->pid);
+	  debug (4, "%d: Not stopped.", (int) tid);
 	  goto out;
 	}
 
@@ -2038,9 +2199,8 @@ process_monitor (void *arg)
 	/* We are trying to exit or we want to detach from this
 	   process.  */
 	{
-	  debug (4, "Detaching %d", (int) tcb->pid);
-	  thread_detach (tcb);
-	  thread_untrace (tcb);
+	  debug (4, "Detaching %d", (int) tid);
+	  thread_untrace (tcb, true);
 	  tcb = NULL;
 	  continue;
 	}
@@ -2051,7 +2211,7 @@ process_monitor (void *arg)
 	  /* XXX: We shouldn't detach.  Instead, we should resume it
 	     with PTRACE_CONT so we can still catch clones, exits and
 	     signals.  */
-	  debug (4, "Detaching %d", (int) tcb->pid);
+	  debug (4, "Detaching %d", (int) tid);
 	  thread_detach (tcb);
 	  tcb->suspended = -tcb->suspended;
 	  continue;
@@ -2061,24 +2221,24 @@ process_monitor (void *arg)
 	/* This is a running thread that we have manually attached to.
 	   The thread is now running.  */
 	{
-	  if (ptrace (PTRACE_SETOPTIONS, pid, 0,
+	  if (ptrace (PTRACE_SETOPTIONS, tid, 0,
 		      (PTRACE_O_TRACESYSGOOD|PTRACE_O_TRACECLONE
 		       |PTRACE_O_TRACEFORK|PTRACE_O_TRACEEXEC)) == -1)
 	    {
-	      debug (0, "Warning: Setting ptrace options on %d: %m", pid);
+	      debug (0, "Warning: Setting ptrace options on %d: %m", tid);
 	      tcb->trace_options = -1;
 	    }
 	  else
 	    tcb->trace_options = 1;
 
-	  if (! tcb->scanned_siblings)
+	  if (! tcb->pcb->scanned_siblings)
 	    /* Find sibling threads.  */
 	    {
-	      tcb->scanned_siblings = true;
+	      tcb->pcb->scanned_siblings = true;
 
 	      char filename[32];
 	      snprintf (filename, sizeof (filename),
-			"/proc/%d/task", tcb->pid);
+			"/proc/%d/task", tid);
 	      GError *error = NULL;
 	      GDir *d = g_dir_open (filename, 0, &error);
 	      if (! d)
@@ -2103,23 +2263,20 @@ process_monitor (void *arg)
 		      const char *e;
 		      while ((e = g_dir_read_name (d)))
 			{
-			  int t = atoi (e);
-			  if (t)
+			  int tid2 = atoi (e);
+			  if (tid2)
 			    {
-			      struct tcb *tcb2
-				= g_hash_table_lookup
-				(tcbs, (gpointer) (uintptr_t) t);
+			      struct tcb *tcb2 = g_hash_table_lookup
+				(tcbs, (gpointer) (uintptr_t) tid2);
 			      if (! tcb2)
 				/* We are not monitoring it yet.  */
 				{
-				  if ((tcb2 = thread_trace (t, tcb, false)))
-				    {
-				      tcb2->scanned_siblings = true;
-				      added_one = true;
-				    }
+				  if ((tcb2 = thread_trace (tid2, tcb->pcb,
+							    false)))
+				    added_one = true;
 				}
-			      else if (t != pid)
-				debug (4, "Already monitoring %d", t);
+			      else if (tid2 != tid)
+				debug (4, "Already monitoring %d", tid2);
 			    }
 			}
 
@@ -2149,9 +2306,9 @@ process_monitor (void *arg)
 	     || (tcb->trace_options == 1 && signo == SIGTRAP)))
 	/* Ignore.  Not our signal.  */
 	{
-	  debug (0, "%d: ignoring and forwarding signal '%s' (%d) "
+	  debug (4, "%d: ignoring and forwarding signal '%s' (%d) "
 		 "(trace options: %d)",
-		 pid, strsignal (signo), signo, tcb->trace_options);
+		 tid, strsignal (signo), signo, tcb->trace_options);
 	  goto out;
 	}
 
@@ -2163,8 +2320,8 @@ process_monitor (void *arg)
       if (event)
 	{
 	  unsigned long msg = -1;
-	  if (ptrace (PTRACE_GETEVENTMSG, pid, 0, (uintptr_t) &msg) < 0)
-	    debug (0, "PTRACE_GETEVENTMSG(%d): %m", pid);
+	  if (ptrace (PTRACE_GETEVENTMSG, tid, 0, (uintptr_t) &msg) < 0)
+	    debug (0, "PTRACE_GETEVENTMSG(%d): %m", tid);
 
 	  switch (event)
 	    {
@@ -2173,14 +2330,15 @@ process_monitor (void *arg)
 		 options are cleared on exec, e.g., SIGTRAP is sent
 		 without the high-bit set.  If we do set it, the
 		 options are inherited.  */
-	      debug (4, "%d: exec'd", tcb->pid);
-	      tcb_read_exe (tcb);
+	      debug (4, "%d: exec'd", tid);
+	      pcb_read_exe (tcb->pcb);
 
 	      /* It has a new memory image.  We need to fix it up.  */
-	      memset (&tcb->lib_base, 0, sizeof (tcb->lib_base));
+	      memset (&tcb->pcb->lib_base, 0, sizeof (tcb->pcb->lib_base));
 	      ptrace_op = PTRACE_SYSCALL;
 
 	      goto out;
+
 	    case PTRACE_EVENT_CLONE:
 	    case PTRACE_EVENT_FORK:
 	      {
@@ -2190,10 +2348,14 @@ process_monitor (void *arg)
 		if (child)
 		  {
 		    /* Set up its TCB.  */
-		    struct tcb *tcb2 = thread_trace ((pid_t) child, tcb, true);
-		    tcb2->scanned_siblings = true;
-		    /* It automatically gets the options set on its
-		       parent.  */
+		    struct tcb *tcb2 = thread_trace ((pid_t) child, tcb->pcb,
+						     true);
+		    /* If it is the same process, we already scanned
+		       for siblings.  If it is a new process, it must
+		       be the first (and only) thread, because it has
+		       not yet had a chance to run.  */
+		    tcb2->pcb->scanned_siblings = true;
+		    /* It inherits the options set on its parent.  */
 		    tcb2->trace_options = tcb->trace_options;
 
 		    int i;
@@ -2201,15 +2363,11 @@ process_monitor (void *arg)
 		      /* It has the same memory image.  If the parent
 			 is fixed up, so is the child.  */
 		      {
-			if (event == PTRACE_EVENT_CLONE)
-			  /* Non-process leaders are set to 0.  */
-			  tcb2->lib_base[i] = 0;
-			else 
-			  /* New process means new group leader.  */
-			  tcb2->lib_base[i] = tcb->lib_base[i];
+			if (event != PTRACE_EVENT_CLONE)
+			  tcb2->pcb->lib_base[i] = tcb->pcb->lib_base[i];
 
 			/* The same fds are open.  */
-			tcb2->lib_fd[i] = tcb->lib_fd[i];
+			tcb2->pcb->lib_fd[i] = tcb->pcb->lib_fd[i];
 		      }
 		  }
 
@@ -2254,9 +2412,9 @@ process_monitor (void *arg)
 # error Not ported to your architecture.
 #endif
 
-      if (ptrace (PTRACE_GETREGS, pid, 0, &regs) < 0)
+      if (ptrace (PTRACE_GETREGS, tid, 0, &regs) < 0)
 	{
-	  debug (0, "%d: Failed to get thread's registers: %m", (int) pid);
+	  debug (0, "%d: Failed to get thread's registers: %m", (int) tid);
 	  goto out;
 	}
 
@@ -2266,10 +2424,9 @@ process_monitor (void *arg)
 	/* See if we inserted a break point.  If so, try to advance
 	   the thread.  If that works, just continue the thread.  It
 	   will be back in a moment...  */
-	if (thread_fixup_advance (tcb, &regs))
+	if (thread_fixup_and_advance (tcb, &regs))
 	  goto out;
 
-      /* At least on ARM, ARM_ip will be 0 on entry and 1 on exit.  */
       bool syscall_entry = tcb->current_syscall == -1;
       long syscall;
       if (syscall_entry)
@@ -2278,7 +2435,7 @@ process_monitor (void *arg)
 	{
 	  /* It would be nice to have:
 
-	       assert (syscall == tcb->current_syscall)
+	       assert (syscall == pcb->current_syscall)
 
 	     Unfortunately, at least rt_sigreturn on x86-64 clobbers
 	     the syscall number of syscall exit!  */
@@ -2286,7 +2443,7 @@ process_monitor (void *arg)
 	    {
 	      debug (4, "%d: warning syscall %ld entry "
 		     "followed by syscall %ld!?!",
-		     (int) pid, tcb->current_syscall, (long) SYSCALL);
+		     (int) tid, tcb->current_syscall, (long) SYSCALL);
 	    }
 
 	  syscall = tcb->current_syscall;
@@ -2316,13 +2473,13 @@ process_monitor (void *arg)
       }
 
       debug (4, "%d: %s (%ld) %s, IP: %"PRIxPTR,
-	     (int) pid, syscall_str (syscall), syscall,
+	     (int) tid, syscall_str (syscall), syscall,
 	     syscall_entry ? "entry" : "exit", (uintptr_t) regs.REGS_IP);
 
       switch (syscall)
 	{
 	default:
-	  if (tcb_patched (tcb))
+	  if (pcb_patched (tcb->pcb))
 	    /* Don't intercept system calls anymore.  */
 	    ptrace_op = PTRACE_CONT;
 	  break;
@@ -2340,7 +2497,7 @@ process_monitor (void *arg)
 			 "%s%s%s%s%s"
 			 "%s%s%s%s%s"
 			 "%s%s%s%s%s",
-			 (int) tcb->pid, flags,
+			 (int) tid, flags,
 			 flags & CSIGNAL,
 			 (flags & CLONE_VM) ? " VM" : "",
 			 (flags & CLONE_FS) ? " FS" : "",
@@ -2369,19 +2526,13 @@ process_monitor (void *arg)
 	    }
 	  else
 	    {
-	      pid_t child_pid = (pid_t) RET;
+	      pid_t child_tid = (pid_t) RET;
 
 	      if (tcb->trace_options != 1)
 		/* Had we set PTRACE_O_TRACECLONE, we would automatically
 		   trace new children.  Since we didn't we try to
 		   intercept clone calls.  */
-		{
-		  struct tcb *child = thread_trace (child_pid, tcb, false);
-		  if (child)
-		    /* Either its part of the same thread group or its a new
-		       task, which only has one thread.  */
-		    child->scanned_siblings = true;
-		}
+		thread_trace (child_tid, tcb->pcb, false);
 	    }
 	  break;
 
@@ -2442,10 +2593,11 @@ process_monitor (void *arg)
 		  debug (0, "opening %s failed.", buffer);
 	      }
 
-	    if (lookup_fd (tcb->pid, fd, buffer, sizeof (buffer)))
+	    if (lookup_fd (tid, fd, buffer, sizeof (buffer)))
 	      {
 		debug (4, "%d: %s;%s;%s: %s (%s, %c%c) -> %d",
-		       (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
+		       (int) tid,
+		       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
 		       syscall_str (syscall),
 		       buffer,
 		       ((flags & O_RDONLY) == O_RDONLY) || (flags & O_RDWR)
@@ -2469,7 +2621,7 @@ process_monitor (void *arg)
 		int i;
 		for (i = 0; i < LIBRARY_COUNT; i ++)
 		  if (strcmp (buffer, library_patches[i].filename) == 0)
-		    tcb->lib_fd[i] = fd;
+		    tcb->pcb->lib_fd[i] = fd;
 	      }
 	  }
 
@@ -2484,21 +2636,22 @@ process_monitor (void *arg)
 
 	    int i;
 	    for (i = 0; i < LIBRARY_COUNT; i ++)
-	      if (fd == tcb->lib_fd[i])
+	      if (fd == tcb->pcb->lib_fd[i])
 		{
 		  debug (4, "lib %s closed",
 			 library_patches[i].filename);
-		  tcb->lib_fd[i] = -1;
+		  tcb->pcb->lib_fd[i] = -1;
 		}
 
 	    char buffer[1024];
-	    if (lookup_fd (tcb->pid, fd, buffer, sizeof (buffer)))
+	    if (lookup_fd (tid, fd, buffer, sizeof (buffer)))
 	      /* There is little reason to believe that a close on a
 		 valid file descriptor will fail.  Don't save and wait
 		 for the exit.  Marshall now.  */
 	      {
-		debug (4, "%d: %s: close (%ld) -> %s",
-		       (int) tcb->pid, tcb->exe,
+		debug (4, "%d: %s;%s;%s: close (%ld) -> %s",
+		       (int) tid,
+		       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
 		       /* fd.  */
 		       (long) ARG1, buffer);
 
@@ -2515,8 +2668,9 @@ process_monitor (void *arg)
 		  }
 	      }
 	    else
-	      debug (4, "%d: %s: close (%ld)",
-		     (int) tcb->pid, tcb->exe,
+	      debug (4, "%d: %s;%s;%s: close (%ld)",
+		     (int) tid,
+		     tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
 		     /* fd.  */
 		     (long) ARG1);
 	  }
@@ -2525,8 +2679,7 @@ process_monitor (void *arg)
 
 #ifdef __NR_mmap2
 	case __NR_mmap2:
-	  if (! syscall_entry
-	      && tcb->process_group_leader_pid == tcb->pid)
+	  if (! syscall_entry)
 	    {
 	      uintptr_t addr = ARG1;
 	      size_t length = ARG2;
@@ -2541,12 +2694,15 @@ process_monitor (void *arg)
 		{
 		  int i;
 		  for (i = 0; i < LIBRARY_COUNT; i ++)
-		    if (fd == tcb->lib_fd[i])
+		    if (fd == tcb->pcb->lib_fd[i])
 		      lib = &library_patches[i];
 		}
 
-	      debug (4, "mmap (%"PRIxPTR", %x,%s%s%s (0x%x), 0x%x, "
+	      debug (4, "%d: %s;%s;%s: "
+		     "mmap (%"PRIxPTR", %x,%s%s%s (0x%x), 0x%x, "
 		     "%d (= %s), %x) -> %"PRIxPTR,
+		     tid,
+		     tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
 		     addr, (int) length,
 		     prot & PROT_READ ? " READ" : "",
 		     prot & PROT_WRITE ? " WRITE" : "",
@@ -2582,14 +2738,14 @@ process_monitor (void *arg)
 		  char *p;
 		  if (buffer[0] == '/')
 		    /* Absolute path.  */
-		    p = g_strdup_printf ("/proc/%d/root/%s", pid, buffer);
+		    p = g_strdup_printf ("/proc/%d/root/%s", tid, buffer);
 		  else if (syscall != __NR_renameat || ARG1 == AT_FDCWD)
 		    /* relative path.  */
-		    p = g_strdup_printf ("/proc/%d/cwd/%s", pid, buffer);
+		    p = g_strdup_printf ("/proc/%d/cwd/%s", tid, buffer);
 		  else
 		    /* renameat, relative path.  */
 		    p = g_strdup_printf ("/proc/%d/fd/%d/%s",
-					 (int) pid, (int) ARG3, buffer);
+					 (int) tid, (int) ARG3, buffer);
 
 		  tcb->saved_src = canonicalize_file_name (p);
 		  g_free (p);
@@ -2603,7 +2759,8 @@ process_monitor (void *arg)
 		}
 
 	      debug (4, "%d: %s;%s;%s: %s (%s)",
-		     (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
+		     (int) tcb->tid,
+		     tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
 		     syscall_str (syscall), tcb->saved_src);
 	    }
 	  else if (syscall == __NR_unlink
@@ -2613,7 +2770,8 @@ process_monitor (void *arg)
 	      assert (! syscall_entry);
 
 	      debug (4, "%d: %s;%s;%s: %s (%s) -> %d",
-		     (int) tcb->pid, tcb->exe, tcb->arg0, tcb->arg1,
+		     (int) tcb->tid,
+		     tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
 		     syscall_str (syscall), tcb->saved_src, (int) RET);
 
 	      if ((int) RET >= 0
@@ -2649,19 +2807,21 @@ process_monitor (void *arg)
 		      char *p;
 		      if (buffer[0] == '/')
 			/* Absolute path.  */
-			p = g_strdup_printf ("/proc/%d/root/%s", pid, buffer);
+			p = g_strdup_printf ("/proc/%d/root/%s", tid, buffer);
 		      else if (syscall != __NR_renameat || ARG1 == AT_FDCWD)
 			/* relative path.  */
-			p = g_strdup_printf ("/proc/%d/cwd/%s", pid, buffer);
+			p = g_strdup_printf ("/proc/%d/cwd/%s", tid, buffer);
 		      else
 			/* renameat, relative path.  */
 			p = g_strdup_printf ("/proc/%d/fd/%d/%s",
-					     (int) pid, (int) ARG3, buffer);
+					     (int) tid, (int) ARG3, buffer);
 		      dest = canonicalize_file_name (p);
 		      g_free (p);
 		    }
 
-		  debug (4, "%s (%s, %s) -> %d",
+		  debug (4, "%d: %s;%s;%s: %s (%s, %s) -> %d",
+			 tcb->tid,
+			 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
 			 syscall_str (syscall), src, dest, (int) RET);
 
 		  if (process_monitor_filename_whitelisted (src)
@@ -2681,8 +2841,10 @@ process_monitor (void *arg)
 	  break;
 	}
 
-      if (tcb_patched (tcb) && ! syscall_entry)
-	/* Don't intercept system calls anymore.  */
+      if (pcb_patched (tcb->pcb) && ! syscall_entry)
+	/* The process is patched and we've processed the system call
+	   entry and exit.  We don't intercept system calls
+	   anymore.  */
 	ptrace_op = PTRACE_CONT;
 
     out:
@@ -2691,16 +2853,15 @@ process_monitor (void *arg)
       debug (4, "ptrace(%s, %d, sig: %d)",
 	     ptrace_op == PTRACE_CONT ? "CONT"
 	     : ptrace_op == PTRACE_SYSCALL ? "SYSCALL" : "UNKNOWN",
-	     pid, signo);
-      if (ptrace (ptrace_op, pid, 0, (void *) (uintptr_t) signo) < 0)
+	     tid, signo);
+      if (ptrace (ptrace_op, tid, 0, (void *) (uintptr_t) signo) < 0)
 	{
-	  debug (0, "Resuming %d: %m", pid);
+	  debug (0, "Resuming %d: %m", tid);
 	  /* The process likely disappeared, perhaps violently.  */
 	  if (tcb)
 	    {
-	      debug (4, "Detaching %d", (int) tcb->pid);
-	      thread_detach (tcb);
-	      thread_untrace (tcb);
+	      debug (4, "Detaching %d", (int) tid);
+	      thread_untrace (tcb, true);
 	      tcb = NULL;
 	    }
 	}
@@ -2789,6 +2950,7 @@ wc_process_monitor_ptrace_init (void)
 		    G_CALLBACK (unix_signal_handler), NULL);
 
   /* pid_t fits in a pointer.  */
+  pcbs = g_hash_table_new (g_direct_hash, g_direct_equal);
   tcbs = g_hash_table_new (g_direct_hash, g_direct_equal);
 
   pthread_create (&process_monitor_tid, NULL, process_monitor, NULL);
