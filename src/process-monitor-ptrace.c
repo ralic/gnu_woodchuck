@@ -272,9 +272,7 @@ struct pcb
      reason is that the user wants to know what files some process
      accessed.  If it starts a sub-process and the user does not
      explicitly register that sub-process, then anything that that
-     subprocess accesses should be attributed to the process.
-
-     If the user adds this thread explicitly, parent is NULL.  */
+     subprocess accesses should be attributed to the process.  */
   struct pcb *parent;
   GSList *children;
 
@@ -439,7 +437,6 @@ callback_enqueue (struct tcb *tcb, int op,
       assert (tl->parent);
       tl = tl->parent;
     }
-  assert (! tl->parent);
   cb->top_levels_pid = tl->group_leader.tid;
 
   cb->tid = tcb->tid;
@@ -505,22 +502,12 @@ pcb_parent_set (struct pcb *pcb, struct pcb *parent)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  if (pcb->parent == parent)
-    return;
-
-  if (! parent)
-    /* Clear the parent.  */
+  assert (parent);
+  if (pcb->parent)
     {
-      if (pcb->parent)
-	{
-	  pcb->parent->children = g_slist_remove (pcb->parent->children, pcb);
-	  pcb->parent = NULL;
-	}
+      assert (parent == pcb->parent);
       return;
     }
-
-  /* We don't allow changing parents.  */
-  assert (! pcb->parent);
 
   pcb->parent = parent;
   parent->children = g_slist_prepend (parent->children, pcb);
@@ -538,74 +525,9 @@ pcb_free (struct pcb *pcb)
   /* We better have no threads.  */
   assert (! pcb->tcbs);
 
-  /* We need to reparent any children.  */
-  if (pcb->children)
-    {
-      if (pcb->top_level)
-	/* Whoops...  we are a top-level process: we need to stay
-	   around as a zombie.  */
-	{
-	  assert (! pcb->parent);
-	  pcb->zombie = true;
-	  return;
-	}
-
-      /* Our parent inherits the children.  */
-      assert (pcb->parent);
-
-      GSList *l;
-      for (l = pcb->children; l; l = l->next)
-	{
-	  struct pcb *child = l->data;
-	  assert (child->parent == pcb);
-	  assert (! child->top_level);
-
-	  child->parent = pcb->parent;
-	}
-
-      pcb->parent->children
-	= g_slist_concat (pcb->parent->children, pcb->children);
-      pcb->children = NULL;
-    }
-
-  struct pcb *top_level = NULL;
-  if (pcb->parent)
-    /* Remove ourself from our parent.  */
-    {
-      assert (! pcb->top_level);
-
-      pcb->parent->children = g_slist_remove (pcb->parent->children, pcb);
-
-      if (! pcb->parent->children && pcb->parent->zombie)
-	/* We were the last child and our parent is a zombie (which
-	   implies it is a top-level thread).  We can free our
-	   parent.  */
-	{
-	  assert (pcb->parent->top_level);
-	  assert (! pcb->parent->parent);
-
-	  top_level = pcb->parent;
-	}
-
-      pcb->parent = NULL;
-    }
-  else
-    /* We don't have a parent.  We are likely a top-level process.
-       But that is not necessarily the case.  Consider the following:
-       a thread forks, we process the initial SIGSTOP and add it
-       (without its parent), it exits, and then we get the
-       PTRACE_EVENT_CLONE event.  */
-    {
-      if (pcb->top_level)
-	if (! pcb->children)
-	  /* And, we have no children.  */
-	  top_level = pcb;
-    }
-
   /* Free PCB and any of its children.  */
   void do_free (struct pcb *pcb)
   {
-    assert (! pcb->parent);
     assert (! pcb->children);
     assert (! pcb->tcbs);
 
@@ -629,23 +551,59 @@ pcb_free (struct pcb *pcb)
        are allocated out of the same memory.)  */
     callback_enqueue (&pcb->group_leader,
 		      -1, NULL, NULL, 0, (void *) pcb->exe);
-    g_free (pcb);
 
+    struct pcb *p = NULL;
+    if (pcb->parent)
+      /* Remove ourself from our parent.  */
+      {
+	pcb->parent->children = g_slist_remove (pcb->parent->children, pcb);
+
+	if (! pcb->parent->children && pcb->parent->zombie)
+	  /* We are our parent's last descendant and it is a zombie.
+	     Free it.  */
+	  {
+	    assert (pcb->parent->top_level);
+	    p = pcb->parent;
+	  }
+      }
+
+    g_free (pcb);
     pcb_count --;
+
+    if (p)
+      do_free (p);
   }
 
-  if (top_level)
-    /* We are freeing a top-level thread.  */
+  /* We need to reparent any children.  */
+  if (pcb->children)
     {
-      /* XXX: Signal the user.  */
-      assert (top_level->top_level);
-      assert (! top_level->parent);
+      if (pcb->top_level)
+	/* Whoops...  we are a top-level process: we need to stay
+	   around as a zombie.  */
+	{
+	  pcb->zombie = true;
+	  return;
+	}
 
-      do_free (top_level);
+      /* We are not a top-level.  We can exit now.  Our parent
+	 inherits our children.  */
+
+      assert (pcb->parent);
+      GSList *l;
+      for (l = pcb->children; l; l = l->next)
+	{
+	  struct pcb *child = l->data;
+	  assert (child->parent == pcb);
+
+	  child->parent = pcb->parent;
+	}
+
+      pcb->parent->children
+	= g_slist_concat (pcb->parent->children, pcb->children);
+      pcb->children = NULL;
     }
 
-  if (top_level != pcb)
-    do_free (pcb);
+  do_free (pcb);
 
   debug (4, "%d processes still being traced (%d threads)",
 	 pcb_count, tcb_count);
@@ -903,7 +861,8 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
 	  assert (tcb == &tcb->pcb->group_leader);
 	  /* A process's parent can't be itself...  */
 	  assert (parent != tcb->pcb);
-	  pcb_parent_set (tcb->pcb, parent);
+	  if (parent)
+	    pcb_parent_set (tcb->pcb, parent);
 	}
 
       return tcb;
@@ -967,7 +926,8 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
       /* TID is the process group leader.  PARENT is the process's (as
 	 opposed to the thread's) parent.  */
       assert (pcb != parent);
-      pcb_parent_set (pcb, parent);
+      if (parent)
+	pcb_parent_set (pcb, parent);
     }
   else
     tcb = g_malloc0 (sizeof (*tcb));
@@ -1643,7 +1603,6 @@ process_trace (pid_t pid)
 
   /* The user is explicitly adding this process.  Make it a top-level
      process.  */
-  pcb_parent_set (tcb->pcb, NULL);
   tcb->pcb->top_level = true;
   return tcb->pcb;
 }
@@ -1669,13 +1628,17 @@ process_untrace (pid_t pid)
       debug (0, "Bad untrace: %d never explicitly traced.", pid);
       return;
     }
-  else
-    /* Top-level threads don't have parents.  */
-    assert (! pcb->parent);
 
   if (pcb->group_leader.stop_tracing)
     {
       debug (0, "Already untracing %d.", pid);
+      return;
+    }
+
+  if (pcb->parent)
+    /* Don't actually detach.  An ancestor is still traced.  */
+    {
+      pcb->top_level = false;
       return;
     }
 
@@ -1702,8 +1665,8 @@ process_untrace (pid_t pid)
 	struct pcb *child = l->data;
 	assert (child->parent == pcb);
 	assert (! child->group_leader.stop_tracing);
-	assert (! child->top_level);
-	stop (child);
+	if (! child->top_level)
+	  stop (child);
       }
   }
   stop (pcb);
