@@ -1802,13 +1802,13 @@ grab_string (struct tcb *tcb, uintptr_t addr, char *buffer, int size)
 
   int memfd = pcb_memfd (tcb->pcb);
   if (memfd == -1)
-    goto try_ptrace;
+    return NULL;
 
   if (lseek (memfd, addr, SEEK_SET) < 0)
     {
       debug (0, "Error seeking in process %d's memory: %m",
 	     tcb->pcb->group_leader.tid);
-      goto try_ptrace;
+      return NULL;
     }
 
   int s = size;
@@ -1821,7 +1821,7 @@ grab_string (struct tcb *tcb, uintptr_t addr, char *buffer, int size)
 
 	  if (buffer == b)
 	    /* We didn't manage to read anything...  */
-	    goto try_ptrace;
+	    return NULL;
 
 	  /* We got something.  Likely we are okay.  */
 	  *b = 0;
@@ -1837,45 +1837,6 @@ grab_string (struct tcb *tcb, uintptr_t addr, char *buffer, int size)
 
   /* B points at the next byte to write.  */
   return b - 1;
-  
- try_ptrace:
-  b = buffer;
-
-  int offset = addr & (sizeof (uintptr_t) - 1);
-  uintptr_t word = addr - offset;
-
-  for (;;)
-    {
-      /* Clear ERRNO as we can't tell if ptrace failed (-1 implies an
-	 error, but is a valid return value).  */
-      errno = 0;
-      union
-      {
-	uintptr_t word;
-	char byte[0];
-      } data = { .word = ptrace (PTRACE_PEEKDATA, tcb->tid, word, 0) };
-      if (errno)
-	{
-	  debug (0, "Reading from thread %d address space: %m.", tcb->tid);
-	  *b = 0;
-	  return b;
-	}
-
-      int i;
-      for (i = offset; i < sizeof (uintptr_t); i ++)
-	{
-	  *b = data.byte[i];
-	  if (! *b)
-	    return b;
-	  size --;
-	  if (size == 0)
-	    return b;
-	  b ++;
-	}
-
-      offset = 0;
-      word += sizeof (uintptr_t);
-    }
 }
 
 static struct load global_load;
