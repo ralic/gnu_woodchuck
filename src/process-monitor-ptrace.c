@@ -808,6 +808,60 @@ pcb_memfd (struct pcb *pcb)
   return pcb->memfd;
 }
 
+/* Read up to SIZE bytes from a process PCB's memory starting at
+   address ADDR into buffer BUFFER.  If STRING is true, stop reading
+   if we see a NUL byte.  Returns the location of the last byte
+   written.  On error, returns NULL.  */
+static char *
+pcb_mem_read (struct pcb *pcb, uintptr_t addr, char *buffer, int size,
+	      bool string)
+{
+  if (size == 0)
+    return buffer;
+
+  int memfd = pcb_memfd (pcb);
+  if (memfd == -1)
+    return NULL;
+
+  if (lseek (memfd, addr, SEEK_SET) < 0)
+    {
+      debug (0, "Error seeking in process %d's memory: %m",
+	     pcb->group_leader.tid);
+      return NULL;
+    }
+
+  char *b = buffer;
+  int s = size;
+  while (s > 0)
+    {
+      int r = read (memfd, b, s);
+      if (r < 0)
+	{
+	  debug (0, "Error reading from process %d's memory: %m",
+		 pcb->group_leader.tid);
+
+	  if (buffer == b)
+	    /* We didn't manage to read anything...  */
+	    return NULL;
+
+	  /* We got something.  Likely we are okay.  */
+	  break;
+	}
+
+      if (string)
+	{
+	  char *end = memchr (b, 0, r);
+	  if (end)
+	    return end;
+	}
+
+      s -= r;
+    }
+
+  /* B points at the next byte to write.  */
+  return b - 1;
+}
+
 /* Returns whether the process has been patched.  */
 static bool
 pcb_patched (struct pcb *pcb)
@@ -942,18 +996,9 @@ thread_check_word (struct tcb *tcb, uintptr_t addr, uintptr_t value)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  /* A seek + read appears to be cheaper than a ptrace (tid,
-     PTRACE_PEEKDATA).  */
-  int memfd = pcb_memfd (tcb->pcb);
-  if (lseek (memfd, addr, SEEK_SET) < 0)
-    {
-      debug (0, "Error seeking in process %d's memory: %m",
-	     (int) tcb->pcb->group_leader.tid);
-      return -errno;
-   }
-
+  errno = EFAULT;
   uintptr_t real = 0;
-  if (read (memfd, &real, sizeof (real)) < 0)
+  if (! pcb_mem_read (tcb->pcb, addr, (char *) &real, sizeof (real), false))
     {
       debug (0, "Failed to read from process %d's memory: %m",
 	     (int) tcb->pcb->group_leader.tid);
@@ -1097,45 +1142,17 @@ thread_apply_patches (struct tcb *tcb)
     assert (lib->patch_count == 0);
     assert (map_start < map_end);
 
-    int memfd = pcb_memfd (tcb->pcb);
-    if (memfd == -1)
-      return;
-
     uintptr_t map_length = map_end - map_start;
 
     debug (4, DEBUG_BOLD ("Scanning %s: %"PRIxPTR"-%"PRIxPTR" (0x%x bytes)"),
 	   lib->filename, map_start, map_end, map_length);
 
-    if (lseek (memfd, map_start, SEEK_SET) < 0)
-      {
-	debug (0, "Error seeking in process %d's memory: %m",
-	       tcb->pcb->group_leader.tid);
-	return;
-      }
-
     uintptr_t *map = g_malloc (map_length);
-    void *p = map;
-    int s = map_length;
-    while (s > 0)
-      {
-	int r = read (memfd, p, s);
-	if (r < 0)
-	  {
-	    debug (0, "Error reading from process %d's memory: %m",
-		   tcb->pcb->group_leader.tid);
-	    break;
-	  }
-
-	s -= r;
-	p += r;
-      }
-
-    if (s)
-      {
-	debug (0, "Failed to read %d of %d bytes from process %d's memory.",
-	       s, map_length, tcb->pcb->group_leader.tid);
-	map_length -= s;
-      }
+    char *end = pcb_mem_read (tcb->pcb, map_start,
+			      (char *) map, map_length, false);
+    if (! end)
+      return;
+    map_length = (uintptr_t) end - (uintptr_t) map + 1;
 
     /* We want to cache the real map length, not the truncated
        one.  */
@@ -1784,59 +1801,6 @@ process_monitor_command (enum process_monitor_commands command, pid_t pid)
     }
   
   pthread_mutex_unlock (&process_monitor_commands_lock);
-}
-
-/* Extract a string (at most SIZE bytes long) from at address ADDR in
-   thread PID's address space and save it in BUFFER.  If we have to
-   fall back to ptrace, this becomes expensive because we can only
-   read a word at a time.  Returns the location of the last character
-   written.  Does not necessarily NUL terminate the string.  */
-static char *
-grab_string (struct tcb *tcb, uintptr_t addr, char *buffer, int size)
-{
-  assert (pthread_equal (pthread_self (), process_monitor_tid));
-
-  assert (size > 0);
-  char *b = buffer;
-  *b = 0;
-
-  int memfd = pcb_memfd (tcb->pcb);
-  if (memfd == -1)
-    return NULL;
-
-  if (lseek (memfd, addr, SEEK_SET) < 0)
-    {
-      debug (0, "Error seeking in process %d's memory: %m",
-	     tcb->pcb->group_leader.tid);
-      return NULL;
-    }
-
-  int s = size;
-  while (s > 0)
-    {
-      int r = read (memfd, b, s);
-      if (r < 0)
-	{
-	  debug (0, "Error reading from process memory: %m");
-
-	  if (buffer == b)
-	    /* We didn't manage to read anything...  */
-	    return NULL;
-
-	  /* We got something.  Likely we are okay.  */
-	  *b = 0;
-	  return b;
-	}
-
-      char *end = memchr (b, 0, r);
-      if (end)
-	return end;
-
-      s -= r;
-    }
-
-  /* B points at the next byte to write.  */
-  return b - 1;
 }
 
 static struct load global_load;
@@ -2531,9 +2495,14 @@ process_monitor (void *arg)
 	    char buffer[1024];
 	    do_debug (5)
 	      {
-		grab_string (tcb, ARG1, buffer, sizeof (buffer));
-		/* Ensure it is NUL terminated.  */
-		buffer[sizeof (buffer) - 1] = 0;
+		char *end = pcb_mem_read (tcb->pcb, ARG1, buffer,
+					  sizeof (buffer) - 1, true);
+		if (end)
+		  /* Ensure the string is NUL terminated.  */
+		  end[1] = 0;
+		else
+		  buffer[0] = 0;
+
 		if (fd < 0)
 		  debug (0, "opening %s failed.", buffer);
 	      }
@@ -2676,9 +2645,11 @@ process_monitor (void *arg)
 		filename = ARG1;
 
 	      char buffer[1024];
-	      if (grab_string (tcb, filename, buffer, sizeof (buffer)))
+	      char *end;
+	      if ((end = pcb_mem_read (tcb->pcb, filename,
+				       buffer, sizeof (buffer) - 1, true)))
 		{
-		  buffer[sizeof (buffer) - 1] = 0;
+		  end[1] = 0;
 
 		  char *p;
 		  if (buffer[0] == '/')
@@ -2745,9 +2716,11 @@ process_monitor (void *arg)
 		    filename = ARG2;
 
 		  char buffer[1024];
-		  if (grab_string (tcb, filename, buffer, sizeof (buffer)))
+		  char *end;
+		  if ((end = pcb_mem_read (tcb->pcb, filename,
+					   buffer, sizeof (buffer) - 1, true)))
 		    {
-		      buffer[sizeof (buffer) - 1] = 0;
+		      end[1] = 0;
 
 		      char *p;
 		      if (buffer[0] == '/')
