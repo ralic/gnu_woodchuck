@@ -227,9 +227,8 @@ struct tcb
   struct stat *saved_stat;
 
   /* Ptrace has a few helpful options.  This field indicates whether
-     we have tried to set them and what the result was.  0:
-     unintialized.  1: successfully set the options.  -1:
-     initialization failed, but tracing.  */
+     we have tried to set them yet.  0: unintialized.  1: successfully
+     set the options.  */
   int trace_options;
 
   /* We can't just stop tracing a thread at any time.  We have to wait
@@ -2264,8 +2263,11 @@ process_monitor (void *arg)
 		      (PTRACE_O_TRACESYSGOOD|PTRACE_O_TRACECLONE
 		       |PTRACE_O_TRACEFORK|PTRACE_O_TRACEEXEC)) == -1)
 	    {
-	      debug (0, "Warning: Setting ptrace options on %d: %m", tid);
-	      tcb->trace_options = -1;
+	      debug (0, "Failed to set trace options on thread %d: %m", tid);
+	      thread_detach (tcb);
+	      thread_untrace (tcb, true);
+	      tcb = NULL;
+	      continue;
 	    }
 	  else
 	    tcb->trace_options = 1;
@@ -2340,21 +2342,16 @@ process_monitor (void *arg)
 	 system call is indicated by setting the signal to
 	 0x80|SIGTRAP.  If this is not the case, just forward the
 	 signal to the process.  */
-      if (! ((tcb->trace_options == 1 && (signo == (0x80 | SIGTRAP) || event))
-	     || (tcb->trace_options == -1 && (signo == SIGTRAP))
-	     || (tcb->trace_options == 1 && signo == SIGTRAP)))
+      if (! ((signo == (0x80 | SIGTRAP) || event || signo == SIGTRAP)))
 	/* Ignore.  Not our signal.  */
 	{
-	  debug (4, "%d: ignoring and forwarding signal '%s' (%d) "
-		 "(trace options: %d)",
-		 tid, strsignal (signo), signo, tcb->trace_options);
+	  debug (4, "%d: ignoring and forwarding signal '%s' (%d) ",
+		 tid, strsignal (signo), signo);
 	  goto out;
 	}
 
-      /* When we resume the process, don't do send it a signal.  */
+      /* When we resume the process, forward it the signal.  */
       signo = 0;
-
-      /* If EVENT is not 0, then we got a thread-create event.  */
 
       if (event)
 	{
@@ -2521,58 +2518,6 @@ process_monitor (void *arg)
 	  if (pcb_patched (tcb->pcb))
 	    /* Don't intercept system calls anymore.  */
 	    ptrace_op = PTRACE_CONT;
-	  break;
-
-	case __NR_clone:
-	  if (syscall_entry)
-	    {
-	      do_debug (4)
-		{
-		  uintptr_t flags = ARG1;
-		  debug (0, "%d clone (flags: %"PRIxPTR"); "
-			 "signal mask: %"PRIxPTR"; "
-			 "flags:%s%s%s"
-			 "%s%s%s%s%s"
-			 "%s%s%s%s%s"
-			 "%s%s%s%s%s"
-			 "%s%s%s%s%s",
-			 (int) tid, flags,
-			 flags & CSIGNAL,
-			 (flags & CLONE_VM) ? " VM" : "",
-			 (flags & CLONE_FS) ? " FS" : "",
-			 (flags & CLONE_FILES) ? " FILES" : "",
-			 (flags & CLONE_SIGHAND) ? " SIGHAND" : "",
-			 (flags & CLONE_PTRACE) ? " PTRACE" : "",
-			 (flags & CLONE_VFORK) ? " VFORK" : "",
-			 (flags & CLONE_PARENT) ? " PARENT" : "",
-			 (flags & CLONE_THREAD) ? " THREAD" : "",
-			 (flags & CLONE_NEWNS) ? " NEWNS" : "",
-			 (flags & CLONE_SYSVSEM) ? " SYSVSEM" : "",
-			 (flags & CLONE_SETTLS) ? " SETTLS" : "",
-			 (flags & CLONE_PARENT_SETTID) ? " P_SETTID" : "",
-			 (flags & CLONE_CHILD_CLEARTID) ? " C_CLEARTID" : "",
-			 (flags & CLONE_DETACHED) ? " DETACHED" : "",
-			 (flags & CLONE_UNTRACED) ? " UNTRACED" : "",
-			 (flags & CLONE_CHILD_SETTID) ? " C_SETTID" : "",
-			 (flags & CLONE_STOPPED) ? " STOPPED" : "",
-			 (flags & CLONE_NEWUTS) ? " NEWUTS" : "",
-			 (flags & CLONE_NEWIPC) ? " NEWIPC" : "",
-			 (flags & CLONE_NEWUSER) ? " NEWUSER" : "",
-			 (flags & CLONE_NEWPID) ? " NEWPID" : "",
-			 (flags & CLONE_NEWNET) ? " NEWNET" : "",
-			 (flags & CLONE_IO) ? " IO" : "");
-		}
-	    }
-	  else
-	    {
-	      pid_t child_tid = (pid_t) RET;
-
-	      if (tcb->trace_options != 1)
-		/* Had we set PTRACE_O_TRACECLONE, we would automatically
-		   trace new children.  Since we didn't we try to
-		   intercept clone calls.  */
-		thread_trace (child_tid, tcb->pcb, false);
-	    }
 	  break;
 
 	case __NR_open:
