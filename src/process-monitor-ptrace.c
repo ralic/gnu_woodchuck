@@ -431,6 +431,7 @@ callback_enqueue (struct tcb *tcb, int op,
     }
 
   cb->cb = op;
+  cb->timestamp = now ();
 
   /* Find the top-level process.  */
   struct pcb *tl = tcb->pcb;

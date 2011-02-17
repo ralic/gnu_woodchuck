@@ -63,6 +63,9 @@ struct wc_process_monitor_cb
   /* Which callback.  */
   enum wc_process_monitor_cbs cb;
 
+  /* The time at which the event occured (as returned by now()).  */
+  uint64_t timestamp;
+
   /* The PID that the user added explicitly via
      wc_process_monitor_ptrace_trace.  */
   int top_levels_pid;
