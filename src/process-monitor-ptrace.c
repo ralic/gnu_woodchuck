@@ -545,6 +545,9 @@ pcb_free (struct pcb *pcb)
 	memfd_count --;
       }
 
+    callback_enqueue (&pcb->group_leader,
+		      WC_PROCESS_EXIT_CB, NULL, NULL, 0, NULL);
+
     /* We may still have pending callbacks.  These callbacks reference
        PCB->EXE.  To ensure we do not free PCB->EXE too early, we only
        free it after any pending callbacks.  (PCB->ARG0 and PCB->ARG1
