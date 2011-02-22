@@ -817,6 +817,7 @@ pcb_mem_read (struct pcb *pcb, uintptr_t addr, char *buffer, int size,
 	}
 
       s -= r;
+      b += r;
     }
 
   /* B points at the next byte to write.  */
