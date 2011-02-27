@@ -1,5 +1,5 @@
 /* sqlq.c - SQL command queuer.
-   Copyright (C) 2010 Neal H. Walfield <neal@walfield.org>
+   Copyright (C) 2010, 2011 Neal H. Walfield <neal@walfield.org>
 
    Smart storage is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -18,6 +18,8 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sqlite3.h>
+#include <glib.h>
+#include <assert.h>
 
 #include "sqlq.h"
 #include "debug.h"
@@ -30,6 +32,7 @@ sqlq_new_static (sqlite3 *db, void *buffer, int size)
   q->db = db;
   q->used = 0;
   q->size = size - sizeof (*q);
+  q->flush_source = 0;
 
   return q;
 }
@@ -50,6 +53,12 @@ sqlq_free (struct sqlq *q)
 {
   if (q->used != 0)
     debug (0, "sqlq_free with unflushed data!");
+
+  if (q->flush_source)
+    {
+      g_source_remove (q->flush_source);
+      q->flush_source = 0;
+    }
 
   /* Clear it (for debugging purposes).  */
   memset (q, 0, sizeof (*q) + q->size);
@@ -109,6 +118,21 @@ flush (sqlite3 *db, const char *command_string1, const char *command_string2)
     }
 }
 
+static gboolean
+do_delayed_flush (gpointer user_data)
+{
+  struct sqlq *q = user_data;
+
+  assert (q->flush_source);
+  q->flush_source = 0;
+
+  debug (0, DEBUG_BOLD ("Delayed flush (have %d bytes)"), q->used);
+
+  sqlq_flush (q);
+
+  return false;
+}
+
 bool
 sqlq_append (struct sqlq *q, bool force_flush, const char *command)
 {
@@ -129,11 +153,21 @@ sqlq_append (struct sqlq *q, bool force_flush, const char *command)
 
       /* Flush the commands.  */
       flush (q->db, q->buffer, command);
+
+      if (q->flush_source)
+	{
+	  g_source_remove (q->flush_source);
+	  q->flush_source = 0;
+	}
     }
   else
     {
       memcpy (&q->buffer[q->used], command, len);
       q->used += len;
+
+      if (! q->flush_source)
+	/* Wait at most 20 seconds before flushing.  */
+	q->flush_source = g_timeout_add_seconds (20, do_delayed_flush, q);
     }
 
   return q->used != 0;
