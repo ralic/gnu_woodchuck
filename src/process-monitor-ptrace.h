@@ -33,6 +33,7 @@ enum wc_process_monitor_cbs
     WC_PROCESS_UNLINK_CB,
     WC_PROCESS_RENAME_CB,
     WC_PROCESS_EXIT_CB,
+    WC_PROCESS_TRACING_CB,
   };
 
 static inline const char *
@@ -50,6 +51,8 @@ wc_process_monitor_cb_str (enum wc_process_monitor_cbs cb)
       return "rename";
     case WC_PROCESS_EXIT_CB:
       return "exit";
+    case WC_PROCESS_TRACING_CB:
+      return "tracing";
     case -1:
       /* Nothing to see here...  */
       return "free";
@@ -66,19 +69,19 @@ struct wc_process_monitor_cb
   /* The time at which the event occured (as returned by now()).  */
   uint64_t timestamp;
 
-  /* The PID that the user added explicitly via
-     wc_process_monitor_ptrace_trace.  */
+  /* The PID, executable, arg0 and arg1 of the thread that the user
+     added explicitly via wc_process_monitor_ptrace_trace.  */
   int top_levels_pid;
+  const char *top_levels_exe;
+  const char *top_levels_arg0;
+  const char *top_levels_arg1;
 
-  /* The thread id of the thread that actually performed the
-     action.  */
-  int tid;
-
-  /* The exe, arg0 and arg1 of the thread that caused the event (not
-     the top-level thread).  */
-  const char *exe;
-  const char *arg0;
-  const char *arg1;
+  /* The PID, executable, arg0 and arg1 of the process that actually
+     performed the action.  */
+  int actor_pid;
+  const char *actor_exe;
+  const char *actor_arg0;
+  const char *actor_arg1;
 
   union
   {
@@ -108,6 +111,11 @@ struct wc_process_monitor_cb
     struct
     {
     } exit;
+    struct
+    {
+      /* 0 on success.  */
+      bool added;
+    } tracing;
   };
 };
 

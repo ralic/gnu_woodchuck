@@ -31,6 +31,7 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <unistd.h>
 
 #include "org.freedesktop.DBus.h"
 
@@ -61,150 +62,202 @@ static WCServiceMonitor *service_monitor;
 
 /* The implementation of the service monitor object.  */
 
-/* Maps pids to GSList's of struct wc_service *s.  */
-static GHashTable *pid_to_services;
-/* Maps a dbus name to struct wc_service *s.  */
-static GHashTable *dbus_name_to_service;
+/* Maps pids to struct wc_process *'s.  */
+static GHashTable *pid_to_process;
+/* Maps dbus names to struct wc_process *'s.  */
+static GHashTable *dbus_name_to_process;
 
-static GSList *
-services_lookup (pid_t pid)
+static struct wc_process *
+process_lookup (pid_t pid)
 {
-  return g_hash_table_lookup (pid_to_services, (gpointer) (uintptr_t) pid);
+  return g_hash_table_lookup (pid_to_process, (gpointer) (uintptr_t) pid);
 }
 
-static struct wc_service *
-service_lookup_by_dbus_name (const char *dbus_name)
+static struct wc_process *
+process_lookup_by_dbus_name (const char *dbus_name)
 {
-  return g_hash_table_lookup (dbus_name_to_service, dbus_name);
+  return g_hash_table_lookup (dbus_name_to_process, dbus_name);
 }
 
-static struct wc_service *
-service_new (WCServiceMonitor *m,
-	     pid_t pid, const char *dbus_name, const char *exe,
-	     const char *arg0, const char *arg1)
+#if 0
+static bool
+process_info (pid_t pid, char **exep, char **arg0p, char **arg1p)
 {
-  debug (0, "service_new (%d, %s, %s, %s, %s)",
-	 pid, dbus_name, exe, arg0, arg1);
+  *exep = *arg0p = *arg1p = NULL;
 
+  char exe[256];
+  snprintf (exe, sizeof (exe), "/proc/%d/exe", pid);
+  int exe_len = readlink (exe, exe, sizeof (exe) - 1);
+  if (exe_len < 0)
+    {
+      debug (0, "Failed to read link %s: %m", exe);
+      exe_len = 0;
+    }
+  /* Add a NUL terminator.  */
+  exe_len ++;
+  exe[exe_len - 1] = 0;
+
+  char *arg0 = NULL;
+  char *arg1 = NULL;
+
+  char filename[32];
+  snprintf (filename, sizeof (filename), "/proc/%d/cmdline", pid);
+
+  gsize length = 0;
+  GError *error = NULL;
+  if (! g_file_get_contents (filename, &arg0, &length, &error))
+    {
+      debug (0, "Error reading %s: %s", filename, error->message);
+      g_error_free (error);
+      error = NULL;
+
+      if (exe_len == 0)
+	/* We can read neither the exe nor the arguments.  */
+	return false;
+    }
+  else if (length)
+    {
+      arg1 = memchr (arg0, 0, length);
+      if (! arg1)
+	{
+	  arg0[length - 1] = 0;
+	  arg1 = &arg0[length - 1];
+	}
+      arg1 ++;
+
+      length -= (uintptr_t) arg1 - (uintptr_t) arg0;
+      if (! length)
+	arg1 = NULL;
+      else
+	{
+	  char *end = memchr (arg1, 0, length);
+	  if (! end)
+	    arg1[length - 1] = 0;
+	}
+
+      *arg1p = g_strdup (arg1);
+    }
+
+  *exep = g_strdup (exe);
+
+  return true;
+}
+#endif
+
+static struct wc_process *
+service_new (WCServiceMonitor *m, pid_t pid, const char *dbus_name)
+{
+  debug (0, "service_new (%d, %s)", pid, dbus_name);
   assert (dbus_name);
 
-  struct wc_service *service = service_lookup_by_dbus_name (dbus_name);
-  if (service)
+  struct wc_process *process = process_lookup_by_dbus_name (dbus_name);
+  if (process)
     {
       debug (0, "Service %s already associated with pid %d "
 	     "(you are trying to associate it with %d)",
-	     dbus_name, service->pid, pid);
+	     dbus_name, process->pid, pid);
       assert (0 == 1);
+
+      if (process->pid == pid)
+	return process;
+      else
+	return NULL;
     }
 
-  int d_len = strlen (dbus_name) + 1;
-  int e_len = exe ? strlen (exe) + 1 : 0;
-  int a0_len = arg0 ? strlen (arg0) + 1 : 0;
-  int a1_len = arg1 ? strlen (arg1) + 1 : 0;
-  int len = d_len + e_len + a0_len + a1_len;
-
-  service = g_malloc0 (sizeof (struct wc_service) + len);
-  service->pid = pid;
-
-  char *end = mempcpy (service->dbus_name, dbus_name, d_len);
-  if (exe)
+  process = process_lookup (pid);
+  if (! process)
+    /* Not yet tracking this process.  */
     {
-      service->exe = end;
-      end = mempcpy (service->exe, exe, e_len);
-    }
-  if (arg0)
-    {
-      service->arg0 = end;
-      end = mempcpy (service->arg0, arg0, a0_len);
-    }
-  if (arg1)
-    {
-      service->arg1 = end;
-      end = mempcpy (service->arg1, arg1, a1_len);
+      process = g_malloc0 (sizeof (struct wc_process));
+      process->pid = pid;
+      process->attached = false;
+
+      g_hash_table_insert (pid_to_process,
+			   (gpointer) (uintptr_t) pid, process);
+
+      wc_process_monitor_ptrace_trace (process->pid);
     }
 
-  /* Get the list of services that share this dbus_name (if any).  */
-  GSList *pids_services = services_lookup (pid);
   do_debug (3)
     {
       GSList *l;
-      for (l = pids_services; l; l = l->next)
-	{
-	  struct wc_service *service = l->data;
-	  debug (0, "Pid %d also has %s",
-		 pid, service->dbus_name);
-	}
+      for (l = process->dbus_names; l; l = l->next)
+	debug (0, "Pid %d also has %s", pid, (char *) l->data);
     }
 
-  /* Add the service to the list and update the hash.  */
-  pids_services = g_slist_prepend (pids_services, service);
-  g_hash_table_insert (pid_to_services,
-		       (gpointer) (uintptr_t) pid, pids_services);
+  /* Add the dbus name to the list of names owned by this process.  */
+  char *s = g_strdup (dbus_name);
+  process->dbus_names = g_slist_insert_sorted (process->dbus_names, s,
+					       (GCompareFunc) g_strcmp0);
 
-  g_hash_table_insert (dbus_name_to_service,
-		       service->dbus_name, service);
+  g_hash_table_insert (dbus_name_to_process, s, process);
 
-  if (! pids_services->next)
-    /* We are the first service associated with this pid.  */
-    wc_process_monitor_ptrace_trace (service->pid);
+  if (process->attached)
+    g_signal_emit (m,
+		   WC_SERVICE_MONITOR_GET_CLASS (m)->service_started_signal_id,
+		   0, dbus_name, process);
 
-  g_signal_emit (m, WC_SERVICE_MONITOR_GET_CLASS (m)->service_started_signal_id,
-		 0, service);
-
-  return service;
+  return process;
 }
 
-/* Returns true if there are no other services associated with PID.  */
-static bool
-service_free (WCServiceMonitor *m, struct wc_service *service)
+static void
+service_free (WCServiceMonitor *m,
+	      struct wc_process *process, const char *dbus_name)
 {
-  GSList *pids_services = services_lookup (service->pid);
-  assert (g_slist_find (pids_services, service));
+  /* We must remove DBUS_NAME from the hash before we free the
+     string.  */
+  if (! g_hash_table_remove (dbus_name_to_process, dbus_name))
+    {
+      debug (0, "Failed to remove %s from dbus_name_to_process hash table.",
+	     dbus_name);
+      assert (0 == 1);
+    }
+
+  assert (process->dbus_names);
+  GSList *next = process->dbus_names;
+  bool found = false;
+  while (next)
+    {
+      GSList *l = next;
+      char *name = l->data;
+      next = next->next;
+
+      if (strcmp (name, dbus_name) == 0)
+	{
+	  process->dbus_names = g_slist_delete_link (process->dbus_names, l);
+	  g_free (name);
+	  found = true;
+	}
+      else
+	debug (0, "Process %d still provides: %s",
+	       process->pid, name);
+    }
+  assert (found);
 
   g_signal_emit (m,
 		 WC_SERVICE_MONITOR_GET_CLASS (m)->service_stopped_signal_id,
-		 0, service);
+		 0, dbus_name, process);
 
-  pids_services = g_slist_remove (pids_services, service);
-
-  if (pids_services)
-    /* There are other services provided by this pid.  */
+  if (! process->dbus_names)
     {
-      do_debug (3)
+      debug (3, "No other services provided by process %d",
+	     process->pid);
+      if (! g_hash_table_remove (pid_to_process,
+				 (gpointer) (uintptr_t) process->pid))
 	{
-	  debug (0, "Not freeing %s (%d).  It still provides:",
-		 service->arg0, service->pid);
-	  GSList *l;
-	  for (l = pids_services; l; l = l->next)
-	    {
-	      struct wc_service *s = l->data;
-	      assert (s->pid == service->pid);
-	      debug (0, "%s", s->dbus_name);
-	    }
-	}
-      g_hash_table_insert (pid_to_services,
-			   (gpointer) (uintptr_t) service->pid, pids_services);
-    }
-  else
-    {
-      debug (3, "No other services provided by %s (%d)",
-	     service->arg0, service->pid);
-      if (! g_hash_table_remove (pid_to_services,
-				 (gpointer) (uintptr_t) service->pid))
-	{
-	  debug (0, "Failed to remove %s (%d) from hash table?!?",
-		 service->dbus_name, service->pid);
+	  debug (0, "Failed to remove %d from pid_to_process hash table",
+		 process->pid);
 	  assert (0 == 1);
 	}
 
-      wc_process_monitor_ptrace_untrace (service->pid);
+      wc_process_monitor_ptrace_untrace (process->pid);
+
+      g_free (process->exe);
+      g_free (process->arg0);
+      g_free (process->arg1);
+
+      g_free (process);
     }
-
-  g_hash_table_remove (dbus_name_to_service, service->dbus_name);
-
-  g_free (service);
-
-  return pids_services != NULL;
 }
 
 /* List of binaries that we are not interested in tracing.  The main
@@ -255,6 +308,10 @@ static const char *arg0_blacklist[] =
 static bool
 blacklisted_arg0 (const char *arg0)
 {
+  if (! arg0)
+    /* If we couldn't get arg0, we likely can't trace it.  */
+    return false;
+
   int i;
   for (i = 0;
        i < sizeof (arg0_blacklist) / sizeof (arg0_blacklist[0]);
@@ -286,91 +343,50 @@ name_owner_changed_signal_cb (DBusGProxy *proxy,
       if (old_owner && *old_owner)
 	{
 	  debug (1, "%s abandoned %s", old_owner, name);
-
-	  struct wc_service *service = service_lookup_by_dbus_name (name);
-	  if (service)
-	    service_free (m, service);
+	  struct wc_process *process = process_lookup_by_dbus_name (name);
+	  if (process)
+	    service_free (m, process, name);
 	}
 
       if (new_owner && *new_owner)
 	{
 	  debug (1, "%s assumed %s", new_owner, name);
 	  guint pid = 0;
-	  char *exe = NULL;
-	  char *arg0 = NULL;
-	  char *arg1 = NULL;
-
-	  if (org_freedesktop_DBus_get_connection_unix_process_id
-	      (m->dbus_proxy, name, &pid, &error))
-	    {
-	      char filename[32];
-	      snprintf (filename, sizeof (filename), "/proc/%d/exe", pid);
-	      exe = g_file_read_link (filename, &error);
-	      if (! exe)
-		{
-		  debug (0, "Failed to read %s: %s",
-			 filename, error->message);
-		  g_error_free (error);
-		  error = NULL;
-		}
-
-	      snprintf (filename, sizeof (filename), "/proc/%d/cmdline", pid);
-	      gsize length = 0;
-	      g_file_get_contents (filename, &arg0, &length, &error);
-	      if (error)
-		{
-		  debug (0, "Failed to read %s: %s",
-			 filename, error->message);
-		  g_error_free (error);
-		  error = NULL;
-		}
-	      else if (arg0 && length)
-		{
-		  char *arg0end = memchr (arg0, 0, length);
-		  if (! arg0end)
-		    {
-		      char *t = g_malloc (length + 1);
-		      memcpy (t, arg0, length);
-		      t[length] = 0;
-		      g_free (arg0);
-		      arg0 = t;
-		    }
-		  else if (arg0end + 1 < arg0 + length)
-		    {
-		      arg1 = arg0end + 1;
-		      length -= ((uintptr_t) arg1 - (uintptr_t) arg0);
-		      char *arg1end = memchr (arg1, 0, length);
-		      if (! arg1end && length > 0)
-			{
-			  /* Stack allocate and then there is no need
-			     to free it.  */
-			  char *t = alloca (length + 1);
-			  memcpy (t, arg1, length);
-			  t[length] = 0;
-			  arg1 = t;
-			}
-		    }
-		}
-	    }
-	  else
+	  if (! (org_freedesktop_DBus_get_connection_unix_process_id
+		 (m->dbus_proxy, name, &pid, &error)))
 	    {
 	      debug (0, "Error fetching pid associated with %s: %s",
 		     name, error->message);
 	      g_error_free (error);
 	      error = NULL;
 	    }
-
-	  /* If we can't read /proc/PID/cmdline, then we probably
-	     can't trace the process.  */
-	  if (pid && arg0)
+	  else
 	    {
-	      if (! blacklisted_arg0 (arg0))
-		service_new (m, pid, name, exe, arg0, arg1);
-	    }
+	      /* /proc/pid/cmdline contains the command line.
+		 Arguments are separated by NULs.  */
+	      char filename[32];
+	      snprintf (filename, sizeof (filename), "/proc/%d/cmdline", pid);
 
-	  /* There is no need to free arg1.  */
-	  g_free (exe);
-	  g_free (arg0);
+	      gchar *contents = NULL;
+	      gsize length = 0;
+	      GError *error = NULL;
+
+	      if (! g_file_get_contents (filename, &contents, &length, &error))
+		{
+		  debug (0, "Error reading %s: %s", filename, error->message);
+		  g_error_free (error);
+		  error = NULL;
+		}
+	      else if (length)
+		{
+		  /* Ensure it is NUL termianted.  */
+		  contents[length - 1] = 0;
+		  if (! blacklisted_arg0 (contents))
+		    service_new (m, pid, name);
+		}
+
+	      g_free (contents);
+	    }
 	}
     }
 }
@@ -382,12 +398,16 @@ wc_service_monitor_list (WCServiceMonitor *m)
 
   void iter (gpointer key, gpointer value, gpointer user_data)
   {
-    GSList *list = *(GSList **) user_data;
-    list = g_slist_prepend (list, value);
-    *(GSList **) user_data = list;
+    struct wc_process *process = value;
+    if (process->attached)
+      {
+	GSList *list = *(GSList **) user_data;
+	list = g_slist_prepend (list, process);
+	*(GSList **) user_data = list;
+      }
   }
 
-  g_hash_table_foreach (dbus_name_to_service, iter, &list);
+  g_hash_table_foreach (pid_to_process, iter, &list);
 
   return list;
 }
@@ -444,37 +464,59 @@ process_monitor_filename_whitelisted (const char *filename)
 void
 process_monitor_callback (struct wc_process_monitor_cb *cb)
 {
-  if (cb->cb == WC_PROCESS_EXIT_CB)
-    {
-      GSList *services = services_lookup (cb->top_levels_pid);
-      if (! services)
-	{
-	  debug (0, "Warning: notification for unmonitored pid %d",
-		 cb->top_levels_pid);
-	  return;
-	}
-
-      /* We can't iterate over SERVICES as when we remove an element, we
-	 change the list.  */
-      do
-	service_free (service_monitor, services->data);
-      while ((services = services_lookup (cb->top_levels_pid)));
-
-      return;
-    }
-
-  GSList *services = services_lookup (cb->top_levels_pid);
-  if (! services)
+  struct wc_process *top_level = process_lookup (cb->top_levels_pid);
+  if (! top_level)
     {
       debug (0, "Warning: notification for unmonitored pid %d",
 	     cb->top_levels_pid);
       return;
     }
 
+  if (cb->cb == WC_PROCESS_EXIT_CB
+      || (cb->cb == WC_PROCESS_TRACING_CB && ! cb->tracing.added))
+    {
+      /* We can't check TOP_LEVEL->DBUS_NAMES as when we remove the last
+	 element, we free TOP_LEVEL.  */
+      bool last;
+      do
+	{
+	  last = top_level->dbus_names->next == NULL;
+	  service_free (service_monitor, top_level,
+			top_level->dbus_names->data);
+	}
+      while (! last);
+
+      return;
+    }
+
+  if (cb->cb == WC_PROCESS_TRACING_CB)
+    {
+      if (! top_level->attached)
+	{
+	  top_level->exe
+	    = cb->top_levels_exe ? g_strdup (cb->top_levels_exe) : NULL;
+	  top_level->arg0
+	    = cb->top_levels_arg0 ? g_strdup (cb->top_levels_arg0) : NULL;
+	  top_level->arg1
+	    = cb->top_levels_arg1 ? g_strdup (cb->top_levels_arg1) : NULL;
+
+	  GSList *l;
+	  for (l = top_level->dbus_names; l; l = l->next)
+	    g_signal_emit (service_monitor,
+			   WC_SERVICE_MONITOR_GET_CLASS (service_monitor)
+			   ->service_started_signal_id,
+			   0, (char *) l->data, top_level);
+
+	  top_level->attached = true;
+	}
+
+      return;
+    }
+
   g_signal_emit (service_monitor,
 		 WC_SERVICE_MONITOR_GET_CLASS (service_monitor)
 		   ->service_fs_access_signal_id,
-		 0, services, cb);
+		 0, top_level->dbus_names, cb);
 }
 
 static void wc_service_monitor_dispose (GObject *object);
@@ -497,22 +539,23 @@ wc_service_monitor_class_init (WCServiceMonitorClass *klass)
 		    G_TYPE_FROM_CLASS (klass),
 		    G_SIGNAL_RUN_FIRST,
 		    0, NULL, NULL,
-		    g_cclosure_marshal_VOID__POINTER,
-		    G_TYPE_NONE, 1, G_TYPE_POINTER);
+		    g_cclosure_user_marshal_VOID__STRING_POINTER,
+		    G_TYPE_NONE, 2, G_TYPE_STRING, G_TYPE_POINTER);
   pm_class->service_stopped_signal_id
     = g_signal_new ("service-stopped",
 		    G_TYPE_FROM_CLASS (klass),
 		    G_SIGNAL_RUN_FIRST,
 		    0, NULL, NULL,
-		    g_cclosure_marshal_VOID__POINTER,
-		    G_TYPE_NONE, 1, G_TYPE_POINTER);
+		    g_cclosure_user_marshal_VOID__STRING_POINTER,
+		    G_TYPE_NONE, 2, G_TYPE_STRING, G_TYPE_POINTER);
   pm_class->service_fs_access_signal_id
     = g_signal_new ("service-fs-access",
 		    G_TYPE_FROM_CLASS (klass),
 		    G_SIGNAL_RUN_FIRST,
 		    0, NULL, NULL,
 		    g_cclosure_user_marshal_VOID__POINTER_POINTER,
-		    G_TYPE_NONE, 2, G_TYPE_POINTER, G_TYPE_POINTER);
+		    G_TYPE_NONE, 2,
+		    G_TYPE_POINTER, G_TYPE_POINTER);
 }
 
 static void
@@ -540,8 +583,8 @@ wc_service_monitor_init (WCServiceMonitor *m)
 			       G_CALLBACK (name_owner_changed_signal_cb),
 			       m, NULL);
 
-  pid_to_services = g_hash_table_new (g_direct_hash, g_direct_equal);
-  dbus_name_to_service = g_hash_table_new (g_str_hash, g_str_equal);
+  pid_to_process = g_hash_table_new (g_direct_hash, g_direct_equal);
+  dbus_name_to_process = g_hash_table_new (g_str_hash, g_str_equal);
 
   /* Start the process monitor.  */
   wc_process_monitor_ptrace_init ();
@@ -566,27 +609,6 @@ wc_service_monitor_init (WCServiceMonitor *m)
 	}
 
       g_free (names);
-    }
-
-  do_debug (3)
-    {
-      void iter (gpointer key, gpointer value, gpointer user_data)
-      {
-	pid_t pid = (pid_t) (uintptr_t) key;
-
-	debug (0, "Pid %d:", pid);
-
-	GSList *l;
-	for (l = value; l; l = l->next)
-	  {
-	    struct wc_service *s = l->data;
-	    debug (0, DEBUG_BOLD (" %s;%s;%s;%s"),
-		   s->dbus_name, s->exe, s->arg0, s->arg1);
-	  }
-      }
-
-      debug (0, DEBUG_BOLD ("At start up:"));
-      g_hash_table_foreach (pid_to_services, iter, NULL);
     }
 }
 

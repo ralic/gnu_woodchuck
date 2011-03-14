@@ -2,10 +2,12 @@
 
 #include <stdio.h>
 #include <error.h>
+#include <unistd.h>
 #include <glib.h>
 #include <dbus/dbus-glib.h>
 #include <dbus/dbus-glib-bindings.h>
 #include <sqlite3.h>
+#include <sqlq.h>
 
 #include "debug.h"
 #include "util.h"
@@ -19,9 +21,18 @@
 #include "battery-monitor.h"
 #include "service-monitor.h"
 
-/* DB for logging network events.  */
-static sqlite3 *nm_db;
+/* DB for logging events.  */
+static char *db_filename;
+static sqlite3 *db;
 
+char sqlq_buffer[64 * 4096];
+struct sqlq *sqlq;
+
+#define SQL_TIME_COLS "year, yday, hour, min, sec"
+#define SQL_TIME_FMT "%d, %d, %d, %d, %d"
+#define SQL_TIME_PRINTF(tm) (tm).tm_year, (tm).tm_yday, (tm).tm_hour, \
+    (tm).tm_min, (tm).tm_sec
+
 static void
 nm_connection_dump (NCNetworkConnection *nc)
 {
@@ -271,19 +282,33 @@ bm_init (void)
 /* Service monitor.  */
 
 static void
+service_start_stopped (const char *dbus_name, struct wc_process *process,
+		       const char *status)
+{
+  sqlq_append_printf (sqlq, false,
+		      "insert into service_log"
+		      " ("SQL_TIME_COLS",pid,exe,arg0,arg1,dbus_name,status)"
+		      " values ("SQL_TIME_FMT", %d, '%q', '%q', '%q', '%q',"
+		      "  '%s');",
+		      SQL_TIME_PRINTF (now_tm ()),
+		      process->pid, process->exe, process->arg0, process->arg1,
+		      dbus_name, status);
+}
+
+static void
 service_started (WCServiceMonitor *m,
-		 struct wc_service *service,
+		 const char *dbus_name, struct wc_process *process,
 		 gpointer user_data)
 {
-  debug (0, "Service %s started", service->dbus_name);
+  service_start_stopped (dbus_name, process, "started");
 }
 
 static void
 service_stopped (WCServiceMonitor *m,
-		 struct wc_service *service,
+		 const char *dbus_name, struct wc_process *process,
 		 gpointer user_data)
 {
-  debug (0, "Service %s started", service->dbus_name);
+  service_start_stopped (dbus_name, process, "stopped");
 }
 
 static void
@@ -321,26 +346,94 @@ service_fs_access (WCServiceMonitor *m,
       return;
     }
 
-  debug (0, "%d(%d): %s;%s;%s: %s (%s%s%s, "BYTES_FMT")",
-	 cb->top_levels_pid, cb->tid,
-	 cb->exe, cb->arg0, cb->arg1,
+  bool dotfile = false;
+  char *prefix = "/home/user/.";
+  if (strncmp (prefix, src, strlen (prefix)) == 0)
+    dotfile = true;
+
+  debug (0, "%d(%d): %s;%s;%s: %s ("DEBUG_BOLD("%s")"%s%s%s, "BYTES_FMT")",
+	 cb->top_levels_pid, cb->actor_pid,
+	 cb->top_levels_exe, cb->top_levels_arg0, cb->top_levels_arg1,
 	 wc_process_monitor_cb_str (cb->cb),
-	 src, dest ? " -> " : "", dest ?: "",
+	 dotfile ? "" : src,
+	 dotfile ? src : "", dest ? " -> " : "", dest ?: "",
 	 BYTES_PRINTF (stat->st_size));
+
+  GString *s = g_string_new ("");
+  GSList *l = services;
+  for (l = services; l; l = l->next)
+    {
+      g_string_append (s, (char *) l->data);
+      if (l->next)
+	g_string_append (s, ";");
+    }
+
+  sqlq_append_printf (sqlq, false,
+		      "insert into file_access_log"
+		      " ("SQL_TIME_COLS","
+		      "  dbus_name, "
+		      "  service_pid, service_exe,"
+		      "  service_arg0, service_arg1,"
+		      "  actor_pid, actor_exe,"
+		      "  actor_arg0, actor_arg1,"
+		      "  action, src, dest, size)"
+		      " values ("SQL_TIME_FMT",%Q,%d,%Q,%Q,%Q,"
+		      "  %d,%Q,%Q,%Q,%Q,%Q,%Q,%"PRId64");",
+		      SQL_TIME_PRINTF (now_tm ()), s->str,
+		      cb->top_levels_pid, cb->top_levels_exe,
+		      cb->top_levels_arg0, cb->top_levels_arg1,
+		      cb->actor_pid, cb->actor_exe,
+		      cb->actor_arg0, cb->actor_arg1,
+		      wc_process_monitor_cb_str (cb->cb),
+		      src, dest, stat->st_size);
+
+  g_string_free (s, true);
 }
 
 static void
 sm_init (void)
 {
+  char *errmsg = NULL;
+  int err = sqlite3_exec (db,
+			  /* STATUS is either "acquired" or "released".  */
+			  "create table if not exists service_log"
+			  " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+			  "  "SQL_TIME_COLS", pid, exe, arg0, arg1, dbus_name,"
+			  "  status);"
+
+			  "create table if not exists file_access_log"
+			  " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+			  "  "SQL_TIME_COLS","
+			  "  dbus_name, "
+			  "  service_pid, service_exe,"
+			  "  service_arg0, service_arg1,"
+			  "  actor_pid, actor_exe,"
+			  "  actor_arg0, actor_arg1,"
+			  "  action, src, dest, size);",
+			  NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  logger_uploader_table_register (db_filename, "service_log", true);
+
   WCServiceMonitor *m = wc_service_monitor_new ();
 
-  GSList *services = wc_service_monitor_list (m);
-  while ((services))
+  GSList *processes = wc_service_monitor_list (m);
+  while ((processes))
     {
-      struct wc_service *s = services->data;
-      debug (0, "  %s is running...", s->dbus_name);
+      struct wc_process *p = processes->data;
+      processes = g_slist_delete_link (processes, processes);
 
-      services = g_slist_delete_link (services, services);
+      GSList *l;
+      for (l = p->dbus_names; l; l = l->next)
+	{
+	  const char *dbus_name = l->data;
+	  service_started (m, dbus_name, p, NULL);
+	}
     }
 
   g_signal_connect (G_OBJECT (m), "service-started",
@@ -363,6 +456,9 @@ unix_signal_handler (WCSignalHandler *sh, struct signalfd_siginfo *si,
       || si->ssi_signo == SIGQUIT || si->ssi_signo == SIGHUP)
     {
       debug (0, "Caught %s, quitting.", strsignal (si->ssi_signo));
+
+      sqlq_flush (sqlq);
+
       if (loop)
 	g_main_loop_quit (loop);
     }
@@ -390,6 +486,19 @@ main (int argc, char *argv[])
 {
   g_type_init ();
   g_thread_init (NULL);
+
+  /* Open the logging DB.  */
+  db_filename = files_logfile ("ssl.db");
+  int err = sqlite3_open (db_filename, &db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   db_filename, sqlite3_errmsg (db));
+
+  /* Sleep up to an hour if the database is busy...  */
+  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+
+  /* Set up an sql queue.  */
+  sqlq = sqlq_new_static (db, sqlq_buffer, sizeof (sqlq_buffer));
 
   /* Initialize the unix signal catcher.  */
   signal_handler_init ();

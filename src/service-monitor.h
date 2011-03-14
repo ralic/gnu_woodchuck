@@ -30,15 +30,22 @@
 
 /* Service interface.  */
 
-struct wc_service
+struct wc_process
 {
   pid_t pid;
+
+  /* Set to true when the process tracer backend confirms that we are
+     tracing the process.  Until then, no service-started signals are
+     sent.  */
+  bool attached;
+
+  /* The dbus names that this service owns.  List of char *.  This
+     list is sorted.  */
+  GSList *dbus_names;
+
   char *exe;
-  /* We track arg[0] and arg[1] as sometimes arg0 is the interpreter
-     (e.g., python).  */
   char *arg0;
   char *arg1;
-  char dbus_name[];
 };
 
 /* Service monitor's interface.  */
@@ -56,16 +63,19 @@ struct _WCServiceMonitorClass
 {
   GObjectClass parent;
 
-  /* "service-started" signal: Called when a service starts.  Takes 1
-     parameter: struct wc_service *.  */
+  /* "service-started" signal: Called when a service starts.  Takes 2
+     parameters: the dbus name (a const char *) and a process
+     descriptor (struct wc_process *).  */
   guint service_started_signal_id;
   /* "service-started" signal: Called when a service stops.  Takes the
      same arguments as the "service-started" signal.  */
   guint service_stopped_signal_id;
 
-  /* "service-open" signal: Called when a service (or a sub-process)
-     opens, closes, unlinks or renames a file.  Passed a GSList of
-     struct wc_service * and struct wc_process_monitor_cb *.  */
+  /* "service-fs-access" signal: Called when a service (or a
+     sub-process) opens, closes, unlinks or renames a file.  Passed a
+     list of service names registered by the top level process (a
+     sorted GSList * of const char *) and a struct
+     wc_process_monitor_cb * describing the action.  */
   guint service_fs_access_signal_id;
 };
 
@@ -77,7 +87,7 @@ extern GType wc_service_monitor_get_type (void);
 extern WCServiceMonitor *wc_service_monitor_new (void);
 
 /* List the currently running services.  Returns a list struct
-   wc_service's.  The caller must free the returned list (but, not the
+   wc_process's.  The caller must free the returned list (but, not the
    elements!):
 
      g_slist_free (list);

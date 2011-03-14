@@ -441,13 +441,16 @@ callback_enqueue (struct tcb *tcb, int op,
       assert (tl->parent);
       tl = tl->parent;
     }
+
   cb->top_levels_pid = tl->group_leader.tid;
+  cb->top_levels_exe = tl->exe;
+  cb->top_levels_arg0 = tl->arg0;
+  cb->top_levels_arg1 = tl->arg1;
 
-  cb->tid = tcb->tid;
-
-  cb->exe = tcb->pcb->exe;
-  cb->arg0 = tcb->pcb->arg0;
-  cb->arg1 = tcb->pcb->arg1;
+  cb->actor_pid = tcb->pcb->group_leader.tid;
+  cb->actor_exe = tcb->pcb->exe;
+  cb->actor_arg0 = tcb->pcb->arg0;
+  cb->actor_arg1 = tcb->pcb->arg1;
 
   if (! stat_buf)
     /* STAT_BUF may be NULL.  Don't seg fault.  */
@@ -478,6 +481,9 @@ callback_enqueue (struct tcb *tcb, int op,
       break;
     case WC_PROCESS_EXIT_CB:
       break;
+    case WC_PROCESS_TRACING_CB:
+      cb->tracing.added = flags;
+      break;
     }
 
   tcb->load.event_count[tcb->load.callback_count_bucket] ++;
@@ -485,8 +491,9 @@ callback_enqueue (struct tcb *tcb, int op,
   pthread_mutex_lock (&pending_callbacks_lock);
  enqueue_with_lock:
   /* Enqueue.  */
-  debug (4, "Enqueuing %p: %d: "DEBUG_BOLD("%s")"(%d) (%s)",
-	 cb, cb->tid, wc_process_monitor_cb_str (cb->cb), cb->cb, src_copy);
+  debug (4, "Enqueuing %p: %d: %s(%d) (%s)",
+	 cb, cb->top_levels_pid,
+	 wc_process_monitor_cb_str (cb->cb), cb->cb, src_copy);
 
   pending_callbacks = g_slist_prepend (pending_callbacks, cb);
 
@@ -549,8 +556,9 @@ pcb_free (struct pcb *pcb)
 	memfd_count --;
       }
 
-    callback_enqueue (&pcb->group_leader,
-		      WC_PROCESS_EXIT_CB, NULL, NULL, 0, NULL);
+    if (pcb->top_level)
+      callback_enqueue (&pcb->group_leader,
+			WC_PROCESS_EXIT_CB, NULL, NULL, 0, NULL);
 
     /* We may still have pending callbacks.  These callbacks reference
        PCB->EXE.  To ensure we do not free PCB->EXE too early, we only
@@ -841,123 +849,6 @@ pcb_patched (struct pcb *pcb)
     && library_patches[LIBRARY_LD].patch_count;
 }
 
-/* Start tracing thread TID.  PARENT is the process that stared the
-   thread (if not known, specify NULL).  ALREADY_PTRACING indicates
-   whether the thread is being ptraced.  If the thread is not already
-   being ptraced, we attach to it.  */
-static struct tcb *
-thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
-{
-  assert (pthread_equal (pthread_self (), process_monitor_tid));
-
-  debug (3, "thread_trace (tid: %d, parent: %d, %s ptracing)",
-	 (int) tid, parent ? parent->group_leader.tid : 0,
-	 already_ptracing ? "already" : "not yet");
-
-  struct tcb *tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) tid);
-  if (tcb)
-    /* It's already being traced.  This happens in two cases: when we
-       see the SIGSTOP before the PTRACE_EVENT_CLONE event; and, when
-       the user explicitly traces a process that is already being
-       traced.  */
-    {
-      assert (tid == tcb->tid);
-
-      if (tid == tcb->pcb->group_leader.tid)
-	/* TID is the process group leader.  PARENT is the process's
-	   (as opposed to the thread's) parent.  */
-	{
-	  assert (tcb == &tcb->pcb->group_leader);
-	  /* A process's parent can't be itself...  */
-	  assert (parent != tcb->pcb);
-	  if (parent)
-	    pcb_parent_set (tcb->pcb, parent);
-	}
-
-      return tcb;
-    }
-
-  pid_t pgl = tid_to_process_group_leader (tid);
-  if (! pgl)
-    /* Failed to get the process group leader.  The thread no longer
-       exists.  */
-    return NULL;
-
-  struct pcb *pcb = g_hash_table_lookup (pcbs, (gpointer) (uintptr_t) pgl);
-  if (! pcb)
-    /* This is the first thread in an as-yet unknown process.  */
-    {
-      pcb = g_malloc0 (sizeof (struct pcb));
-
-      pcb->group_leader.tid = pgl;
-
-      g_hash_table_insert (pcbs, (gpointer) (uintptr_t) pgl, pcb);
-      pcb_count ++;
-
-      pcb->memfd = -1;
-
-      pcb_read_exe (pcb);
-
-      int i;
-      for (i = 0; i < LIBRARY_COUNT; i ++)
-	pcb->lib_fd[i] = -1;
-
-      debug (4, "%d processes being traced (%d threads)",
-	     pcb_count, tcb_count);
-
-      if (tid != pgl)
-	/* We've added a thread before we've added the group leader.
-	   (It can happen depending on how thread creation events are
-	   ordered.)  Add the group leader now.  Then add TID.  */
-	thread_trace (pgl, NULL, false);
-
-      /* We'll figure out the process's parent when the group leader
-	 gets explicitly added.  */
-    }
-
-
-  /* NB: After tracing a process, we first receive two SIGSTOPs
-     (signal 0x13) for that process.  Subsequently, we receive
-     SIGTRAPs on system calls.  */
-  if (! already_ptracing)
-    {
-      if (ptrace (PTRACE_ATTACH, tid) == -1)
-	{
-	  debug (0, "Error attaching to %d: %m", tid);
-	  return NULL;
-	}
-    }
-
-
-  if (tid == pgl)
-    {
-      tcb = &pcb->group_leader;
-      /* TID is the process group leader.  PARENT is the process's (as
-	 opposed to the thread's) parent.  */
-      assert (pcb != parent);
-      if (parent)
-	pcb_parent_set (pcb, parent);
-    }
-  else
-    tcb = g_malloc0 (sizeof (*tcb));
-
-  tcb->tid = tid;
-  tcb->pcb = pcb;
-  tcb->current_syscall = -1;
-  g_hash_table_insert (tcbs, (gpointer) (uintptr_t) tid, tcb);
-  pcb->tcbs = g_slist_prepend (pcb->tcbs, tcb);
-
-  tcb_count ++;
-
-  debug (0, "Now tracing thread %d (%s;%s;%s).  Process: %d",
-	 tid, pcb->exe, pcb->arg0, pcb->arg1, pcb->group_leader.tid);
-
-  debug (4, "%d processes being traced (%d threads)",
-	 pcb_count, tcb_count);
-
-  return tcb;
-}
-
 /* Returns 0 if ADDR does not contain VALUE.  1 if it does.  -errno if
    an error occurs.  */
 static int
@@ -1904,7 +1795,8 @@ thread_detach (struct tcb *tcb)
 static void
 thread_untrace (struct tcb *tcb, bool need_detach)
 {
-  debug (3, "thread_untrace (%d)", tcb->tid);
+  debug (3, "thread_untrace (%d %s;%s;%s)",
+	 tcb->tid, tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
 
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
@@ -1966,6 +1858,123 @@ thread_untrace (struct tcb *tcb, bool need_detach)
   debug (4, "%d processes still being traced (%d threads)",
 	 pcb_count, tcb_count);
 }
+
+/* Start tracing thread TID.  PARENT is the process that stared the
+   thread (if not known, specify NULL).  ALREADY_PTRACING indicates
+   whether the thread is being ptraced.  If the thread is not already
+   being ptraced, we attach to it.  */
+static struct tcb *
+thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
+{
+  assert (pthread_equal (pthread_self (), process_monitor_tid));
+
+  debug (3, "thread_trace (tid: %d, parent: %d, %s ptracing)",
+	 (int) tid, parent ? parent->group_leader.tid : 0,
+	 already_ptracing ? "already" : "not yet");
+
+  struct tcb *tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) tid);
+  if (tcb)
+    /* It's already being traced.  This happens in two cases: when we
+       see the SIGSTOP before the PTRACE_EVENT_CLONE event; and, when
+       the user explicitly traces a process that is already being
+       traced.  */
+    {
+      assert (tid == tcb->tid);
+
+      if (tid == tcb->pcb->group_leader.tid)
+	/* TID is the process group leader.  PARENT is the process's
+	   (as opposed to the thread's) parent.  */
+	{
+	  assert (tcb == &tcb->pcb->group_leader);
+	  /* A process's parent can't be itself...  */
+	  assert (parent != tcb->pcb);
+	  if (parent)
+	    pcb_parent_set (tcb->pcb, parent);
+	}
+
+      return tcb;
+    }
+
+  pid_t pgl = tid_to_process_group_leader (tid);
+  if (! pgl)
+    /* Failed to get the process group leader.  The thread no longer
+       exists.  */
+    return NULL;
+
+  struct pcb *pcb = g_hash_table_lookup (pcbs, (gpointer) (uintptr_t) pgl);
+  if (! pcb)
+    /* This is the first thread in an as-yet unknown process.  */
+    {
+      pcb = g_malloc0 (sizeof (struct pcb));
+
+      pcb->group_leader.tid = pgl;
+
+      g_hash_table_insert (pcbs, (gpointer) (uintptr_t) pgl, pcb);
+      pcb_count ++;
+
+      pcb->memfd = -1;
+
+      pcb_read_exe (pcb);
+
+      int i;
+      for (i = 0; i < LIBRARY_COUNT; i ++)
+	pcb->lib_fd[i] = -1;
+
+      debug (4, "%d processes being traced (%d threads)",
+	     pcb_count, tcb_count);
+
+      if (tid != pgl)
+	/* We've added a thread before we've added the group leader.
+	   (It can happen depending on how thread creation events are
+	   ordered.)  Add the group leader now.  Then add TID.  */
+	thread_trace (pgl, NULL, false);
+
+      /* We'll figure out the process's parent when the group leader
+	 gets explicitly added.  */
+    }
+
+
+  if (tid == pgl)
+    {
+      tcb = &pcb->group_leader;
+      /* TID is the process group leader.  PARENT is the process's (as
+	 opposed to the thread's) parent.  */
+      assert (pcb != parent);
+      if (parent)
+	pcb_parent_set (pcb, parent);
+    }
+  else
+    tcb = g_malloc0 (sizeof (*tcb));
+
+  tcb->tid = tid;
+  tcb->pcb = pcb;
+  tcb->current_syscall = -1;
+  g_hash_table_insert (tcbs, (gpointer) (uintptr_t) tid, tcb);
+  pcb->tcbs = g_slist_prepend (pcb->tcbs, tcb);
+
+  tcb_count ++;
+
+  /* NB: After tracing a process, we first receive two SIGSTOPs
+     (signal 0x13) for that process.  Subsequently, we receive
+     SIGTRAPs on system calls.  */
+  if (! already_ptracing)
+    {
+      if (ptrace (PTRACE_ATTACH, tid) == -1)
+	{
+	  debug (0, "Error attaching to %d: %m", tid);
+	  thread_untrace (tcb, false);
+	  return NULL;
+	}
+    }
+
+  debug (0, "Now tracing thread %d (%s;%s;%s).  Process: %d",
+	 tid, pcb->exe, pcb->arg0, pcb->arg1, pcb->group_leader.tid);
+
+  debug (4, "%d processes being traced (%d threads)",
+	 pcb_count, tcb_count);
+
+  return tcb;
+}
 
 /* Start tracing a process.  Return the corresponding PCB for the
    thread group leader.  */
@@ -1976,11 +1985,17 @@ process_trace (pid_t pid)
 
   struct tcb *tcb = thread_trace (pid, NULL, false);
   if (! tcb)
-    return NULL;
+    {
+      callback_enqueue (tcb, WC_PROCESS_TRACING_CB, NULL, NULL, false, NULL);
+      return NULL;
+    }
 
   /* The user is explicitly adding this process.  Make it a top-level
      process.  */
   tcb->pcb->top_level = true;
+
+  callback_enqueue (tcb, WC_PROCESS_TRACING_CB, NULL, NULL, true, NULL);
+
   return tcb->pcb;
 }
 
@@ -2922,26 +2937,26 @@ process_monitor (void *arg)
 
 	    int fd = (int) ARG1;
 
-	    int i;
-	    for (i = 0; i < LIBRARY_COUNT; i ++)
-	      if (fd == tcb->pcb->lib_fd[i])
-		{
-		  debug (4, "lib %s closed",
-			 library_patches[i].filename);
-		  tcb->pcb->lib_fd[i] = -1;
-		}
-
 	    char buffer[1024];
 	    if (lookup_fd (tid, fd, buffer, sizeof (buffer)))
 	      /* There is little reason to believe that a close on a
 		 valid file descriptor will fail.  Don't save and wait
 		 for the exit.  Marshall now.  */
 	      {
-		debug (4, "%d: %s;%s;%s: close (%ld) -> %s",
+		debug (4, "%d: %s;%s;%s: close (%d) -> %s",
 		       (int) tid,
 		       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
 		       /* fd.  */
-		       (long) ARG1, buffer);
+		       fd, buffer);
+
+		int i;
+		for (i = 0; i < LIBRARY_COUNT; i ++)
+		  if (fd == tcb->pcb->lib_fd[i])
+		    {
+		      debug (4, "lib %s closed",
+			     library_patches[i].filename);
+		      tcb->pcb->lib_fd[i] = -1;
+		    }
 
 		if (process_monitor_filename_whitelisted (buffer))
 		  {
@@ -2956,11 +2971,10 @@ process_monitor (void *arg)
 		  }
 	      }
 	    else
-	      debug (4, "%d: %s;%s;%s: close (%ld)",
+	      debug (0, "%d: %s;%s;%s: close (%d)",
 		     (int) tid,
 		     tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
-		     /* fd.  */
-		     (long) ARG1);
+		     fd);
 	  }
 
 	  break;
@@ -3336,14 +3350,18 @@ process_monitor_callback (struct wc_process_monitor_cb *cb)
       stat = &cb->unlink.stat;
       break;
     case WC_PROCESS_EXIT_CB:
-      debug (0, "%d(%d): %s;%s;%s exited.",
-	     cb->top_levels_pid, cb->tid, cb->exe, cb->arg0, cb->arg1);
+    case WC_PROCESS_TRACING_CB:
+      debug (0, DEBUG_BOLD ("%d(%d): %s;%s;%s %s."),
+	     cb->top_levels_pid, cb->actor_pid,
+	     cb->top_levels_exe, cb->top_levels_arg0, cb->top_levels_arg1,
+	     cb->cb == WC_PROCESS_TRACING_CB && cb->tracing.added
+	     ? "tracing" : "exited");
       return;
     }
 
   debug (0, "%d(%d): %s;%s;%s: %s (%s%s%s, "BYTES_FMT")",
-	 cb->top_levels_pid, cb->tid,
-	 cb->exe, cb->arg0, cb->arg1,
+	 cb->top_levels_pid, cb->actor_pid,
+	 cb->top_levels_exe, cb->top_levels_arg0, cb->top_levels_arg1,
 	 wc_process_monitor_cb_str (cb->cb),
 	 src, dest ? " -> " : "", dest ?: "",
 	 BYTES_PRINTF (stat->st_size));
