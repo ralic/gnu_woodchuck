@@ -200,6 +200,10 @@ struct load
 
 /* Thread and process management.  */
 
+#define TID_FMT "%d %s;%s;%s"
+#define TID_PRINTF(tcb) \
+  (tcb)->tid, (tcb)->pcb->exe, (tcb)->pcb->arg0, (tcb)->pcb->arg1 
+
 /* A thread's control block.  One for each linux thread that we
    trace.  */
 struct tcb
@@ -1581,7 +1585,7 @@ thread_apply_patches (struct tcb *tcb)
 	      {
 		debug (0, "%d: Found library %s at 0x%"PRIxPTR"-0x%"PRIxPTR", "
 		       "but wrong size "
-		       "(expected 0x%"PRIxPTR", got 0x%"PRIxPTR").\n",
+		       "(expected 0x%"PRIxPTR", got 0x%"PRIxPTR").",
 		       tcb->tid, lib->filename, *map_start, *map_end,
 		       lib->size, *map_end - *map_start);
 		ret = -1;
@@ -2538,13 +2542,67 @@ process_monitor (void *arg)
 	  continue;
 	}
 
+      void open_fds_iterate (int op)
+      {
+	assert (op == WC_PROCESS_CLOSE_CB || op == WC_PROCESS_OPEN_CB);
+
+	char filename[32];
+	snprintf (filename, sizeof (filename),
+		  "/proc/%d/fd", tid);
+	GError *error = NULL;
+	GDir *d = g_dir_open (filename, 0, &error);
+	if (! d)
+	  {
+	    debug (0, "Unable to open %s: %s",
+		   filename, error->message);
+	    g_free (error);
+	    error = NULL;
+	    return;
+	  }
+
+	const char *e;
+	while ((e = g_dir_read_name (d)))
+	  {
+	    char buffer[1024];
+	    snprintf (buffer, sizeof (buffer), "/proc/%d/fd/%s",
+		      tid, e);
+	    int ret = readlink (buffer, buffer, sizeof (buffer) - 1);
+	    if (ret < 0)
+	      {
+		debug (0, "%d: Failed to read %s: %m", tid, buffer);
+		return;
+	      }
+
+	    buffer[ret] = 0;
+
+	    debug (4, TID_FMT": Open at %s: %s -> %s",
+		   TID_PRINTF (tcb),
+		   op == WC_PROCESS_CLOSE_CB ? "exit" : "attach", e, buffer);
+
+	    if (process_monitor_filename_whitelisted (buffer))
+	      {
+		struct stat s;
+		if (stat (buffer, &s) < 0)
+		  {
+		    debug (4, "Failed to stat %s: %m", buffer);
+		    memset (&s, 0, sizeof (s));
+		  }
+
+		callback_enqueue (tcb, op,
+				  buffer, NULL, 0, &s);
+	      }
+	  }
+	g_dir_close (d);
+      }
+
       if (tcb->trace_options == 0 && signo == SIGSTOP)
 	/* This is a running thread that we have manually attached to.
 	   The thread is now running.  */
 	{
 	  if (ptrace (PTRACE_SETOPTIONS, tid, 0,
 		      (PTRACE_O_TRACESYSGOOD|PTRACE_O_TRACECLONE
-		       |PTRACE_O_TRACEFORK|PTRACE_O_TRACEEXEC)) == -1)
+		       |PTRACE_O_TRACEFORK|PTRACE_O_TRACEEXEC
+		       |PTRACE_O_TRACEEXIT)) == -1)
 	    {
 	      debug (0, "Failed to set trace options on thread %d: %m", tid);
 	      thread_untrace (tcb, true);
@@ -2616,6 +2674,8 @@ process_monitor (void *arg)
 	    }
 
 	  thread_apply_patches (tcb);
+
+	  open_fds_iterate (WC_PROCESS_OPEN_CB);
 
 	  goto out;
 	}
@@ -2691,6 +2751,15 @@ process_monitor (void *arg)
 
 		goto out;
 	      }
+
+	    case PTRACE_EVENT_EXIT:
+	      assert (tcb->pcb->tcbs);
+	      if (! tcb->pcb->tcbs->next)
+		/* The process is about to exit.  For each open file
+		   descriptor, emit a close event.  */
+		open_fds_iterate (WC_PROCESS_CLOSE_CB);
+	      goto out;
+
 	    default:
 	      debug (0, "Unknown event %d, ignoring.", event);
 	      goto out;
