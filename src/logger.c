@@ -484,6 +484,47 @@ signal_handler_init (void)
 int
 main (int argc, char *argv[])
 {
+#if HAVE_MAEMO
+  if (! getenv ("DBUS_SESSION_BUS_ADDRESS"))
+    {
+      bool good = false;
+
+      const char *filename = "/tmp/session_bus_address.user";
+
+      char *contents = NULL;
+      gsize length = 0;
+      GError *error = NULL;
+      if (! g_file_get_contents (filename, &contents, &length, &error))
+	{
+	  debug (0, "Error reading %s: %s", filename, error->message);
+	  g_error_free (error);
+	  error = NULL;
+	}
+      else
+	{
+	  const char *prefix = "export DBUS_SESSION_BUS_ADDRESS='";
+	  if (length > strlen (prefix)
+	      && memcmp (contents, prefix, strlen (prefix)) == 0)
+	    {
+	      char *s = contents + strlen (prefix);
+	      char *end = strchr (s, '\'');
+	      if (end)
+		{
+		  *end = 0;
+		  debug (0, "Setting DBUS_SESSION_BUS_ADDRESS to %s", s);
+		  good = true;
+		  setenv ("DBUS_SESSION_BUS_ADDRESS", s, 1);
+		}
+	    }
+
+	  g_free (contents);
+	}
+
+      if (! good)
+	debug (0, "DBUS_SESSION_BUS_ADDRESS unset.  May crash soon.");
+    }
+#endif
+
   g_type_init ();
   g_thread_init (NULL);
 
