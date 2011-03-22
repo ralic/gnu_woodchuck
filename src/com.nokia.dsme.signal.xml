@@ -1,0 +1,16 @@
+<!-- This interface is incomplete as Nokia doesn't provide an XML
+     description for it.  The interface has been (partially) extracted
+     by way of dbus-monitor.
+ -->
+
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="com.nokia.dsme.signal">
+    <signal name="shutdown_ind">
+      <arg name="reason" direction="out" type="s"/>
+    </signal>
+    <signal name="save_unsaved_data_ind">
+    </signal>
+  </interface>
+</node>

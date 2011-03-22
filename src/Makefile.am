@@ -14,8 +14,9 @@ nm_interfaces_xml = $(foreach filename, \
 	org.freedesktop.NetworkManager.Connection.Active.xml \
 	com.nokia.icd2.xml \
 	org.freedesktop.ConsoleKit.xml \
-	com.nokia.mce.request.h \
-	com.nokia.mce.signal.h \
+	com.nokia.mce.request.xml \
+	com.nokia.mce.signal.xml \
+	com.nokia.dsme.signal.xml \
 	org.freedesktop.Hal.Manager.xml \
 	org.freedesktop.Hal.Device.xml \
 	org.freedesktop.DBus.xml \
@@ -56,7 +57,8 @@ common_sources = $(nm_interfaces_h) marshal.h marshal.c \
 	user-activity-monitor.h user-activity-monitor.c \
 	battery-monitor.h battery-monitor.c \
 	service-monitor.h service-monitor.c \
-	process-monitor-ptrace.h process-monitor-ptrace.c
+	process-monitor-ptrace.h process-monitor-ptrace.c \
+	shutdown-monitor.h shutdown-monitor.c
 
 netczar_SOURCES = $(common_sources) netczar.c \
 	org.walfield.NetCzar-server.h

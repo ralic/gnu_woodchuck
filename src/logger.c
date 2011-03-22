@@ -20,6 +20,7 @@
 #include "user-activity-monitor.h"
 #include "battery-monitor.h"
 #include "service-monitor.h"
+#include "shutdown-monitor.h"
 
 /* DB for logging events.  */
 static char *db_filename;
@@ -29,8 +30,8 @@ char sqlq_buffer[64 * 4096];
 struct sqlq *sqlq;
 
 #define SQL_TIME_COLS "year, yday, hour, min, sec"
-#define SQL_TIME_FMT "%d, %d, %d, %d, %d"
-#define SQL_TIME_PRINTF(tm) (tm).tm_year, (tm).tm_yday, (tm).tm_hour, \
+#define TM_FMT "%d, %d, %d, %d, %d"
+#define TM_PRINTF(tm) (tm).tm_year, (tm).tm_yday, (tm).tm_hour, \
     (tm).tm_min, (tm).tm_sec
 
 static void
@@ -288,9 +289,9 @@ service_start_stopped (const char *dbus_name, struct wc_process *process,
   sqlq_append_printf (sqlq, false,
 		      "insert into service_log"
 		      " ("SQL_TIME_COLS",pid,exe,arg0,arg1,dbus_name,status)"
-		      " values ("SQL_TIME_FMT", %d, '%q', '%q', '%q', '%q',"
+		      " values ("TM_FMT", %d, '%q', '%q', '%q', '%q',"
 		      "  '%s');",
-		      SQL_TIME_PRINTF (now_tm ()),
+		      TM_PRINTF (now_tm ()),
 		      process->pid, process->exe, process->arg0, process->arg1,
 		      dbus_name, status);
 }
@@ -377,9 +378,9 @@ service_fs_access (WCServiceMonitor *m,
 		      "  actor_pid, actor_exe,"
 		      "  actor_arg0, actor_arg1,"
 		      "  action, src, dest, size)"
-		      " values ("SQL_TIME_FMT",%Q,%d,%Q,%Q,%Q,"
+		      " values ("TM_FMT",%Q,%d,%Q,%Q,%Q,"
 		      "  %d,%Q,%Q,%Q,%Q,%Q,%Q,%"PRId64");",
-		      SQL_TIME_PRINTF (now_tm ()), s->str,
+		      TM_PRINTF (now_tm ()), s->str,
 		      cb->top_levels_pid, cb->top_levels_exe,
 		      cb->top_levels_arg0, cb->top_levels_arg1,
 		      cb->actor_pid, cb->actor_exe,
@@ -442,6 +443,92 @@ sm_init (void)
 		    G_CALLBACK (service_stopped), NULL);
   g_signal_connect (G_OBJECT (m), "service-fs-access",
 		    G_CALLBACK (service_fs_access), NULL);
+}
+
+/* The system uptime, in seconds.  */
+static int64_t
+uptime (void)
+{
+  const char *filename = "/proc/uptime";
+
+  char *contents = NULL;
+  gsize length = 0;
+  GError *error = NULL;
+  if (! g_file_get_contents (filename, &contents, &length, &error))
+    {
+      debug (0, "Error reading %s: %s", filename, error->message);
+      g_error_free (error);
+      error = NULL;
+      return -1;
+    }
+
+  int64_t t = -1;
+  if (length != 0)
+    {
+      /* Ensure that the string is NUL terminated.  This won't change
+	 our result as the file contains two floats and we are only
+	 interested in the first one.  */
+      contents[length - 1] = 0;
+      sscanf (contents, "%"PRId64, &t);
+      debug (0, "UPTIME: %s -> %"PRId64, contents, t);
+    }
+
+  g_free (contents);
+
+  return t;
+}
+
+static void
+shutdown_log (const char *description)
+{
+  struct tm tm = now_tm ();
+  sqlq_append_printf (sqlq, false,
+		      "insert into system ("SQL_TIME_COLS", status, uptime)"
+		      " values ("TM_FMT", '%s', %"PRId64");",
+		      TM_PRINTF (tm), description, uptime ());
+}
+
+static void
+shutdown (WCShutdownMonitor *m, const char *description, gpointer user_data)
+{
+  static bool stopped;
+  if (stopped)
+    {
+      debug (0, "shutdown signalled again.  This time: %s", description);
+      return;
+    }
+  stopped = true;
+
+  shutdown_log (description);
+}
+
+static void
+sdm_init (void)
+{
+  WCShutdownMonitor *m = wc_shutdown_monitor_new ();
+
+  char *errmsg = NULL;
+  int err = sqlite3_exec (db,
+			  /* STATUS is either "started," "stopped" or
+			     "shutdown".  UPTIME is the system's
+			     uptime (in seconds).  */
+			  "create table if not exists system"
+			  " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+			  "  "SQL_TIME_COLS", status, uptime);",
+			  NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  logger_uploader_table_register (db_filename, "system", true);
+
+  shutdown_log ("started");
+
+  g_signal_connect (G_OBJECT (m), "shutdown",
+		    G_CALLBACK (shutdown), NULL);
 }
 
 static GMainLoop *loop;
@@ -545,6 +632,7 @@ main (int argc, char *argv[])
   signal_handler_init ();
 
   /* Initialize each monitor.  */
+  sdm_init ();
   nm_init ();
   uam_init ();
   bm_init ();
