@@ -491,6 +491,10 @@ shutdown_log (const char *description)
 static void
 shutdown (WCShutdownMonitor *m, const char *description, gpointer user_data)
 {
+  /* Don't buffer anything.  Soon, we're going to be violently forced
+     to quit.  */
+  sqlq_flush_delay_set (sqlq, 0);
+
   static bool stopped;
   if (stopped)
     {
@@ -538,13 +542,14 @@ unix_signal_handler (WCSignalHandler *sh, struct signalfd_siginfo *si,
 		     gpointer user_data)
 {
   debug (0, "Got signal %s.", strsignal (si->ssi_signo));
+  fprintf (stderr, "Got signal %s.", strsignal (si->ssi_signo));
 
   if (si->ssi_signo == SIGTERM || si->ssi_signo == SIGINT
       || si->ssi_signo == SIGQUIT || si->ssi_signo == SIGHUP)
     {
       debug (0, "Caught %s, quitting.", strsignal (si->ssi_signo));
 
-      sqlq_flush (sqlq);
+      sqlq_flush_delay_set (sqlq, 0);
 
       if (loop)
 	g_main_loop_quit (loop);
@@ -625,8 +630,8 @@ main (int argc, char *argv[])
   /* Sleep up to an hour if the database is busy...  */
   sqlite3_busy_timeout (db, 60 * 60 * 1000);
 
-  /* Set up an sql queue.  */
-  sqlq = sqlq_new_static (db, sqlq_buffer, sizeof (sqlq_buffer));
+  /* Set up an sql queue.  Buffer data at most 20 seconds.  */
+  sqlq = sqlq_new_static (db, sqlq_buffer, sizeof (sqlq_buffer), 20);
 
   /* Initialize the unix signal catcher.  */
   signal_handler_init ();
@@ -640,6 +645,8 @@ main (int argc, char *argv[])
 
   loop = g_main_loop_new (NULL, FALSE);
   g_main_loop_run (loop);
+
+  sqlq_flush (sqlq);
 
   return 0;
 }

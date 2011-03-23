@@ -25,25 +25,28 @@
 #include "debug.h"
 
 struct sqlq *
-sqlq_new_static (sqlite3 *db, void *buffer, int size)
+sqlq_new_static (sqlite3 *db, void *buffer, int size, int flush_delay)
 {
+  assert (sizeof (struct sqlq) <= size);
+
   struct sqlq *q = buffer;
   q->malloced = false;
   q->db = db;
   q->used = 0;
   q->size = size - sizeof (*q);
+  q->flush_delay = flush_delay;
   q->flush_source = 0;
 
   return q;
 }
 
 struct sqlq *
-sqlq_new (sqlite3 *db, int size)
+sqlq_new (sqlite3 *db, int size, int flush_delay)
 {
   size += sizeof (struct sqlq);
 
   void *buffer = malloc (size);
-  struct sqlq *q = sqlq_new_static (db, buffer, size);
+  struct sqlq *q = sqlq_new_static (db, buffer, size, flush_delay);
   q->malloced = true;
   return q;
 }
@@ -136,6 +139,9 @@ do_delayed_flush (gpointer user_data)
 bool
 sqlq_append (struct sqlq *q, bool force_flush, const char *command)
 {
+  if (q->flush_delay == 0)
+    force_flush = true;
+
   /* Whether there is space for a string of length LEN (LEN does
      not include the NUL terminator).  */
   bool have_space (int len)
@@ -166,8 +172,9 @@ sqlq_append (struct sqlq *q, bool force_flush, const char *command)
       q->used += len;
 
       if (! q->flush_source)
-	/* Wait at most 20 seconds before flushing.  */
-	q->flush_source = g_timeout_add_seconds (20, do_delayed_flush, q);
+	/* Wait at most Q->FLUSH_DELAY seconds before flushing.  */
+	q->flush_source = g_timeout_add_seconds (q->flush_delay,
+						 do_delayed_flush, q);
     }
 
   return q->used != 0;
@@ -198,3 +205,14 @@ sqlq_flush (struct sqlq *q)
   sqlq_append (q, true, NULL);
 }
 
+void
+sqlq_flush_delay_set (struct sqlq *q, int flush_delay)
+{
+  if (q->flush_delay == flush_delay)
+    return;
+
+  sqlq_flush (q);
+  assert (! q->flush_source);
+
+  q->flush_delay = flush_delay;
+}
