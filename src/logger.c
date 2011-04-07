@@ -31,51 +31,363 @@ struct sqlq *sqlq;
 
 #define SQL_TIME_COLS "year, yday, hour, min, sec"
 #define TM_FMT "%d, %d, %d, %d, %d"
-#define TM_PRINTF(tm) (tm).tm_year, (tm).tm_yday, (tm).tm_hour, \
+#define TM_PRINTF(tm) (1900 + (tm).tm_year), (tm).tm_yday, (tm).tm_hour, \
     (tm).tm_min, (tm).tm_sec
 
+static uint64_t nm_stop_logging;
+
 static void
-nm_connection_dump (NCNetworkConnection *nc)
+nm_connection_dump (NCNetworkConnection *nc, const char *state)
 {
-  GList *n = nc_network_connection_info (nc, -1);
-  while (n)
+  /* We want to save NC's configuration and current statistics.
+
+     A connection consists of a series of configurated devices (but
+     typically just one).  The devices' configuration can change over
+     time.  For instance, the IP address may change.
+
+     To this end, we have three tables. 
+
+       - device_configuration stores a list of device configurations.
+
+       - connection_configuration stores a list of connection
+         configurations, which consist of up to 4 device
+         configurations.
+
+       - connection_stats stores a snapshot of connections, which
+         includes the current configuration and the number of bytes
+         transferred over each configured device.
+
+     We need to:
+
+       - insert each device's configuration into the device_configuration
+         table
+
+       - insert the connection's configuration into the
+         connection_configuration table
+
+       - snapshot the connection's state.
+
+     We do all three of these things in parallel to reduce the amount
+     of string processing required.  */
+
+  if (nm_stop_logging)
+    /* We are shutting down.  */
     {
-      GList *e = n;
-      n = e->next;
+      uint64_t t = now () - nm_stop_logging;
+      if (t > 2000)
+	/* We started shutting down more than 2 seconds ago.
+	   Complain.  */
+	debug (0, "Ignoring %s log request from "TIME_FMT" ago",
+	       state, TIME_PRINTF (t));
+      return;
+    }
 
-      struct nc_device_info *info = e->data;
 
-      printf ("Interface: %s\n", info->interface);
-      char *medium = nc_connection_medium_to_string (info->medium);
+  /* Add an item to a list of items.  Prefix it with SEP if it is not
+     the first item (as indicated by *HAVE_ONE).  */
+  void item (GString *s, bool *have_one, const char *sep, const char *fmt, ...)
+  {
+    va_list ap;
+    va_start (ap, fmt);
+
+    if (*have_one)
+      g_string_append_printf (s, sep);
+    *have_one = true;
+
+    g_string_append_vprintf (s, fmt, ap);
+
+    va_end (ap);
+  }
+
+  GList *devices = nc_network_connection_info (nc, -1);
+  if (! devices)
+    {
+      debug (0, "Connection %s has no associated devices.",
+	     nc_network_connection_id (nc));
+      return;
+    }
+
+  /* The SQL for the connection's configuration looks like:
+
+       insert or ignore into connection_configuration (DID1, DID2, DID3, DID4)
+         values (# From DIDS->STR
+                 (select OID from device_configuration where AP = '...' ...),
+	         ...
+		);
+   */
+  GString *dids = g_string_sized_new (1024);
+  bool dids_have_one = false;
+  /* The connection_configuration has space for at most 4 devices.  */
+#define DIDS 4
+  int did_count = 0;
+
+  /* As we process each element of the list, we deallocate it.  We
+     need the time when the stats were collected.  The time is the
+     same for all devices so just stash the first one's time
+     stamp.  */
+  uint64_t t_ms = ((struct nc_device_info *) devices->data)->stats.time;
+
+
+  /* The SQL for connection statistics looks like this:
+
+      insert into connection_stats
+        (SQL_TIME_COLS, CID, connection_configuration,
+	 tx1, rx1, ..., tx4, rx4, time, state, default_route)
+        values (TM_PRINTF(), connection_id,
+                (select OID from connection_configuration
+		 where
+		    # From CC->STR
+	                DID1 = (select OID from device_configuration
+		                  where IP = 'a.b.c.d' ...)
+		    and DID2 = (select OID from device_configuration
+		                  where IP = 'a.b.c.d' ...)),
+                STATS->STR, ...);
+  */
+  GString *cc = g_string_sized_new (1024);
+  bool cc_have_one = false;
+
+  GString *stats = g_string_sized_new (96);
+  bool stats_have_one = false;
+
+  struct nc_device_info *d = NULL;
+  while (1)
+    {
+      if (d)
+	{
+	  g_free (devices->data);
+	  GList *n = devices->next;
+	  g_list_free_1 (devices);
+	  devices = n;
+	}
+      if (! devices)
+	/* We're done.  */
+	break;
+      if (++ did_count > DIDS)
+	/* There are more devices then there is space in the table.
+	   Skip it.  */
+	continue;
+
+      d = devices->data;
+
+#if 0
+      printf ("Interface: %s\n", d->interface);
+      char *medium = nc_connection_medium_to_string (d->medium);
       printf ("  Medium: %s\n", medium);
       g_free (medium);
       printf ("  IP: %d.%d.%d.%d\n",
-	      info->ip4[0], info->ip4[1], info->ip4[2], info->ip4[3]);
+	      d->ip4[0], d->ip4[1], d->ip4[2], d->ip4[3]);
       printf ("  Gateway: %d.%d.%d.%d\n",
-	      info->gateway4[0], info->gateway4[1],
-	      info->gateway4[2], info->gateway4[3]);
+	      d->gateway4[0], d->gateway4[1],
+	      d->gateway4[2], d->gateway4[3]);
       printf ("  Gateway MAC: %x:%x:%x:%x:%x:%x\n",
-	      info->gateway_hwaddr[0],
-	      info->gateway_hwaddr[1],
-	      info->gateway_hwaddr[2],
-	      info->gateway_hwaddr[3],
-	      info->gateway_hwaddr[4],
-	      info->gateway_hwaddr[5]);
-      printf ("  Access point: %s\n", info->access_point);
+	      d->gateway_hwaddr[0],
+	      d->gateway_hwaddr[1],
+	      d->gateway_hwaddr[2],
+	      d->gateway_hwaddr[3],
+	      d->gateway_hwaddr[4],
+	      d->gateway_hwaddr[5]);
+      printf ("  Access point: %s\n", d->access_point);
       printf ("  Stats tx/rx: "BYTES_FMT"/"BYTES_FMT"\n",
-	      BYTES_PRINTF (info->stats.tx),
-	      BYTES_PRINTF (info->stats.rx));
+	      BYTES_PRINTF (d->stats.tx),
+	      BYTES_PRINTF (d->stats.rx));
+#endif
 
-      g_free (e->data);
-      g_list_free_1 (e);
+      item (dids, &dids_have_one, ",",
+	    "(select OID from device_configuration where ");
+
+      g_string_append_printf
+	(cc,
+	 "%sDID%d = (select OID from device_configuration where ",
+	 cc_have_one ? "and " : "", did_count);
+      cc_have_one = true;
+
+      /* The SQL for inserting the device configuration looks like:
+
+	   insert or ignore into device_configuration
+	     (IP, AP, ...) values ('1.2.3.4', 'foo', ...);
+
+	   We build the required columns and values in parallel and
+	   then paste them together.
+
+	   At the same time, we build up the select part for the
+	   connection configuration and connection stats sql.
+       */
+      GString *c = g_string_sized_new (1024);
+      GString *v = g_string_sized_new (1024);
+      int val_count = 0;
+
+      void col (const char *fmt, ...)
+      {
+	va_list ap;
+	va_start (ap, fmt);
+
+	if (val_count >= 1)
+	  {
+	    g_string_append_printf (c, ",");
+	    g_string_append_printf (dids, " and ");
+	    g_string_append_printf (cc, " and ");
+	  }
+
+	g_string_append_vprintf (c, fmt, ap);
+
+	g_string_append_vprintf (dids, fmt, ap);
+	g_string_append_printf (dids, "=");
+
+	g_string_append_vprintf (cc, fmt, ap);
+	g_string_append_printf (cc, "=");
+
+	va_end (ap);
+      }
+      void val (const char *fmt, ...)
+      {
+	va_list ap;
+	va_start (ap, fmt);
+
+	if (val_count >= 1)
+	  g_string_append_printf (v, ",");
+
+	char *t = sqlite3_vmprintf (fmt, ap);
+
+	g_string_append_printf (v, t);
+	g_string_append_printf (dids, t);
+	g_string_append_printf (cc, t);
+
+	sqlite3_free (t);
+
+	va_end (ap);
+
+	val_count ++;
+      }
+
+#define DEFAULT_VALUE "'NONE'"
+      col ("IFACE");
+      if ((d->mask & NC_DEVICE_INFO_INTERFACE))
+	val ("'%q'", d->interface);
+      else
+	val (DEFAULT_VALUE);
+
+      col ("MEDIUM");
+      if ((d->mask & NC_DEVICE_INFO_MEDIUM))
+	{
+	  char *medium = nc_connection_medium_to_string (d->medium);
+	  val ("'%q (%d)'", medium, d->medium);
+	  g_free (medium);
+	}
+      else
+	val (DEFAULT_VALUE);
+
+      col ("IP4");
+      if ((d->mask & NC_DEVICE_INFO_IP_IP4_ADDR))
+	{
+	  val ("'%d.%d.%d.%d'",
+		d->ip4[0], d->ip4[1], d->ip4[2], d->ip4[3]);
+	}
+      else
+	val (DEFAULT_VALUE);
+
+      col ("IP6");
+      if ((d->mask & NC_DEVICE_INFO_IP_IP6_ADDR))
+	val ("'%02x%02x:%02x%02x:"
+	     "%02x%02x:%02x%02x:"
+	     "%02x%02x:%02x%02x:"
+	     "%02x%02x:%02x%02x'",
+	     d->ip6[0], d->ip6[1], d->ip6[2], d->ip6[3],
+	     d->ip6[4], d->ip6[5], d->ip6[6], d->ip6[7],
+	     d->ip6[8], d->ip6[9], d->ip6[10], d->ip6[11],
+	     d->ip6[12], d->ip6[13], d->ip6[14], d->ip6[15]);
+      else
+	val (DEFAULT_VALUE);
+
+      col ("GW4");
+      if ((d->mask & NC_DEVICE_INFO_GATEWAY_IP4_ADDR))
+	val ("'%d.%d.%d.%d'",
+	     d->gateway4[0], d->gateway4[1], d->gateway4[2], d->gateway4[3]);
+      else
+	val (DEFAULT_VALUE);
+
+      col ("GW6");
+      if ((d->mask & NC_DEVICE_INFO_GATEWAY_IP6_ADDR))
+	val ("'%02x%02x:%02x%02x:"
+	     "%02x%02x:%02x%02x:"
+	     "%02x%02x:%02x%02x:"
+	     "%02x%02x:%02x%02x'",
+	     d->gateway6[0], d->gateway6[1],
+	     d->gateway6[2], d->gateway6[3],
+	     d->gateway6[4], d->gateway6[5],
+	     d->gateway6[6], d->gateway6[7],
+	     d->gateway6[8], d->gateway6[9],
+	     d->gateway6[10], d->gateway6[11],
+	     d->gateway6[12], d->gateway6[13],
+	     d->gateway6[14], d->gateway6[15]);
+      else
+	val (DEFAULT_VALUE);
+
+      col ("GWMAC");
+      if ((d->mask & NC_DEVICE_INFO_GATEWAY_MAC_ADDR))
+	val ("'%02x:%02x:%02x:%02x:%02x:%02x'",
+	     d->gateway_hwaddr[0], d->gateway_hwaddr[1],
+	     d->gateway_hwaddr[2], d->gateway_hwaddr[3],
+	     d->gateway_hwaddr[4], d->gateway_hwaddr[5]);
+      else
+	val (DEFAULT_VALUE);
+
+      col ("AP");
+      if ((d->mask & NC_DEVICE_INFO_ACCESS_POINT))
+	val ("'%q'", d->access_point);
+      else
+	val (DEFAULT_VALUE);
+
+      g_string_append_printf (dids, ")");
+      g_string_append_printf (cc, ")");
+
+      sqlq_append_printf (sqlq, false,
+			  "insert or ignore into device_configuration"
+			  " (%s) values (%s);",
+			  c->str, v->str);
+      g_string_free (c, true);
+      g_string_free (v, true);
+
+      item (stats, &stats_have_one, ",",
+	    "%"PRId64",%"PRId64, d->stats.tx, d->stats.rx);
     }
+  for (; did_count < DIDS; did_count ++)
+    /* Add default values for the rest of the device slots.  */
+    {
+      item (dids, &dids_have_one, ",", DEFAULT_VALUE);
+      item (cc, &cc_have_one, " and ", "DID%d = "DEFAULT_VALUE,
+	    did_count + 1);
+      item (stats, &stats_have_one, ",", "0, 0");
+    }
+
+  sqlq_append_printf (sqlq, false,
+		      "insert or ignore into connection_configuration"
+		      " (DID1, DID2, DID3, DID4) values (%s);",
+		      dids->str);
+  g_string_free (dids, true);
+
+  time_t t = t_ms / 1000;
+  struct tm tm;
+  localtime_r (&t, &tm);
+
+  sqlq_append_printf
+    (sqlq, false,
+     "insert into connection_stats"
+     " ("SQL_TIME_COLS", CID, connection_configuration,"
+     "  tx1, rx1, tx2, rx2, tx3, rx3, tx4, rx4, "
+     "  time, state, default_route)"
+     " values ("TM_FMT", '%q',"
+     "  (select OID from connection_configuration where %s),"
+     "  %s, %"PRId64", '%s', '%s');",
+     TM_PRINTF (tm), nc_network_connection_id (nc), cc->str, stats->str,
+     (uint64_t) (t_ms - nc_network_connection_time_established (nc)),
+     state, nc_network_connection_is_default (nc) ? "default" : "");
+  g_string_free (cc, true);
+  g_string_free (stats, true);
 }
 
-static gboolean
-nm_connections_dump (gpointer user_data)
+static void
+nm_connections_dump (NCNetworkMonitor *m, const char *state)
 {
-  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
-
   GList *e = nc_network_monitor_connections (m);
   while (e)
     {
@@ -84,9 +396,15 @@ nm_connections_dump (gpointer user_data)
       g_list_free_1 (e);
       e = n;
 
-      nm_connection_dump (c);
+      nm_connection_dump (c, state);
     }
+}
 
+static gboolean
+nm_connections_stat_cb (gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+  nm_connections_dump (m, "STATS");
   return true;
 }
 
@@ -95,10 +413,7 @@ static void
 nm_new_connection (NCNetworkMonitor *nm, NCNetworkConnection *nc,
 		   gpointer user_data)
 {
-  printf (DEBUG_BOLD ("New %sconnection!!!")"\n",
-	  nc_network_connection_is_default (nc) ? "DEFAULT " : "");
-
-  nm_connection_dump (nc);
+  nm_connection_dump (nc, "ESTABLISHED");
 }
 
 /* An existing connection has been brought down.  */
@@ -106,7 +421,7 @@ static void
 nm_disconnected (NCNetworkMonitor *nm, NCNetworkConnection *nc,
 		 gpointer user_data)
 {
-  printf ("\nDisconnected!!!\n\n");
+  nm_connection_dump (nc, "DISCONNECTED");
 }
 
 /* There is a new default connection.  */
@@ -116,30 +431,92 @@ nm_default_connection_changed (NCNetworkMonitor *nm,
 			       NCNetworkConnection *new_default,
 			       gpointer user_data)
 {
-  printf (DEBUG_BOLD ("Default connection changed!!!")"\n");
+  if (old_default)
+    nm_connection_dump (old_default, "STATS");
+  if (new_default)
+    nm_connection_dump (new_default, "STATS");
 }
+
+static NCNetworkMonitor *nm;
 
 static void
 nm_init (void)
 {
-  char *filename = files_logfile ("network.db");
+  char *errmsg = NULL;
+  int err;
+  err = sqlite3_exec (db,
+		      /* List of known connections.  A connection is a
+			 collection of device configurations.  The
+			 first device tunnels data into the second,
+			 etc.  For instance, a VPN may tunnel data
+			 over an ethernet connection.  DIDX is the
+			 device id of the device configuration in the
+			 DEVICE_CONFIGURATION table.  Most connections
+			 will only use a single device.  Any unused
+			 slots should be filled in with the string
+			 NONE, not NULL because we want (X, NULL, ...)
+			 to match (X, NULL, ...).  */
+		      "create table if not exists connection_configuration "
+		      "(OID INTEGER PRIMARY KEY AUTOINCREMENT, "
+		      " DID1 NOT NULL DEFAULT 'NONE',"
+		      " DID2 NOT NULL DEFAULT 'NONE',"
+		      " DID3 NOT NULL DEFAULT 'NONE',"
+		      " DID4 NOT NULL DEFAULT 'NONE',"
+		      " UNIQUE (DID1, DID2, DID3, DID4));"
 
-  sqlite3 *db;
-  int err = sqlite3_open (filename, &db);
-  if (err)
-    error (1, 0, "sqlite3_open (%s): %s",
-	   filename, sqlite3_errmsg (db));
+		      /* List of known device configurations.  AP is
+			 the access point for WiFi, the network
+			 operator for GSM.  If some information is not
+			 available, provide the string NONE.  */
+		      "create table if not exists device_configuration"
+		      "(OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      " IFACE NOT NULL DEFAULT 'NONE',"
+		      " MEDIUM NOT NULL DEFAULT 'NONE',"
+		      " IP4 NOT NULL DEFAULT 'NONE',"
+		      " IP6 NOT NULL DEFAULT 'NONE',"
+		      " GW4 NOT NULL DEFAULT 'NONE',"
+		      " GW6 NOT NULL DEFAULT 'NONE',"
+		      " GWMAC NOT NULL DEFAULT 'NONE',"
+		      " AP NOT NULL DEFAULT 'NONE',"
+		      " UNIQUE (IFACE, MEDIUM, IP4, IP6, GW4, GW6, GWMAC, AP)"
+                      ");"
 
-  /* Sleep up to an hour if the database is busy...  */
-  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+		      /* CID is the connection's stable identifier.
+			 CONNECTION_CONFIGURATION is the OID of the
+			 connection_configuration in the CONNECTION
+			 CONFIGURATION table.  rx and tx are in bytes.
+			 TIME is the amount of time the connection has
+			 been established in milliseconds.  STATE is
+			 the STATE of the connection: "ESTABLISHED",
+			 "STATS", "DISCONNECTED".  DEFAULT is whether
+			 the connection is the default route
+			 ("default" or "").  */
+		      "create table if not exists connection_stats "
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  "SQL_TIME_COLS", CID, connection_configuration, "
+		      "  rx1, tx1, rx2, tx2, rx3, tx3, rx4, tx4,"
+		      "  time, state, default_route);",
+		      NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
 
+  logger_uploader_table_register (db_filename, "connection_configuration",
+				  false);
+  logger_uploader_table_register (db_filename, "device_configuration", false);
+  logger_uploader_table_register (db_filename, "connection_stats", true);
+
+#if 0
   char *errmsg = NULL;
   err = sqlite3_exec (db,
 		      /* ID is the id of the connection.  It is
 			 corresponds to the ROWID in CONNECTIONS.  */
 		      "create table if not exists connection_log "
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
-		      "  year, yday, hour, min, sec,"
+		      "  "SQL_TIME_COLS","
 		      "  service_type, service_attributes, service_id,"
 		      "  network_type, network_attributes, network_id, status,"
 		      "  rx, tx);"
@@ -183,16 +560,15 @@ nm_init (void)
       errmsg = NULL;
     }
 
-  logger_uploader_table_register (filename, "connection_log", true);
-  logger_uploader_table_register (filename, "stats_log", true);
-  logger_uploader_table_register (filename, "scans", true);
-  logger_uploader_table_register (filename, "scan_log", true);
-  logger_uploader_table_register (filename, "cell", true);
-
-  free (filename);
+  logger_uploader_table_register (db_filename, "connection_log", true);
+  logger_uploader_table_register (db_filename, "stats_log", true);
+  logger_uploader_table_register (db_filename, "scans", true);
+  logger_uploader_table_register (db_filename, "scan_log", true);
+  logger_uploader_table_register (db_filename, "cell", true);
+#endif
 
   /* Initialize the network monitor.  */
-  NCNetworkMonitor *nm = nc_network_monitor_new ();
+  nm = nc_network_monitor_new ();
 
   g_signal_connect (G_OBJECT (nm), "new-connection",
 		    G_CALLBACK (nm_new_connection), NULL);
@@ -201,7 +577,15 @@ nm_init (void)
   g_signal_connect (G_OBJECT (nm), "default-connection-changed",
 		    G_CALLBACK (nm_default_connection_changed), NULL);
 
-  g_timeout_add_seconds (5 * 60, nm_connections_dump, nm);
+  g_timeout_add_seconds (5 * 60, nm_connections_stat_cb, nm);
+}
+
+static
+void nm_quit (void)
+{
+  if (nm)
+    nm_connections_dump (nm, "DISCONNECTED");
+  nm_stop_logging = now ();
 }
 
 /* User activity monitor.  */
@@ -396,7 +780,7 @@ sm_init (void)
 {
   char *errmsg = NULL;
   int err = sqlite3_exec (db,
-			  /* STATUS is either "acquired" or "released".  */
+			  /* STATUS is either "started" or "stopped".  */
 			  "create table if not exists service_log"
 			  " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
 			  "  "SQL_TIME_COLS", pid, exe, arg0, arg1, dbus_name,"
@@ -548,6 +932,8 @@ unix_signal_handler (WCSignalHandler *sh, struct signalfd_siginfo *si,
       || si->ssi_signo == SIGQUIT || si->ssi_signo == SIGHUP)
     {
       debug (0, "Caught %s, quitting.", strsignal (si->ssi_signo));
+
+      nm_quit ();
 
       sqlq_flush_delay_set (sqlq, 0);
 

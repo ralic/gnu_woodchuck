@@ -159,6 +159,7 @@ default_connection_scan_cb (gpointer user_data)
       ? connection_state_is_connected (default_connection->state)
       : true));
 
+  g_source_remove (m->default_connection_scan_source);
   m->default_connection_scan_source = 0;
 
   /* Don't run again.  */

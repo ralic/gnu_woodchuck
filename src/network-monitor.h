@@ -237,4 +237,9 @@ extern bool nc_network_connection_is_default (NCNetworkConnection *nc);
 extern uint64_t nc_network_connection_time_established
   (NCNetworkConnection *nc);
 
+/* A stable identifier for the life of the connection.  Connection
+   names may be reused, however, it is guaranteed that no concurrent
+   connections will have the same identifier.  */
+extern const char *nc_network_connection_id (NCNetworkConnection *nc);
+
 #endif

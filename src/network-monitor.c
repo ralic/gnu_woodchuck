@@ -375,7 +375,7 @@ connection_name_to_connection (NCNetworkMonitor *network_monitor,
   return NULL;
 }
 
-static void stats_update (NCNetworkMonitor *network_monitor);
+static void stats_update (NCNetworkMonitor *network_monitor, bool force);
 
 static NCNetworkDevice *
 per_connection_device_to_device (NCNetworkConnection *c,
@@ -390,7 +390,7 @@ per_connection_device_to_device (NCNetworkConnection *c,
 	{
 	  /* Get the "initial" statistics.  Let's hope they are not
 	     too out of date!  */
-	  stats_update (c->network_monitor);
+	  stats_update (c->network_monitor, true);
 	  cd->stats_connect = cd->device->stats;
 	}
     }
@@ -400,10 +400,10 @@ per_connection_device_to_device (NCNetworkConnection *c,
 
 /* Update the statistics for all known devices.  */
 static void
-stats_update (NCNetworkMonitor *network_monitor)
+stats_update (NCNetworkMonitor *network_monitor, bool force)
 {
   uint64_t n = now ();
-  if (n - network_monitor->stats_last_updated_at < 300)
+  if (! force && n - network_monitor->stats_last_updated_at < 300)
     /* Less than 300ms since last update.  Don't do anything.  */
     return;
 
@@ -604,7 +604,8 @@ connection_state_set (NCNetworkConnection *c, int state,
       && connection_state_is_connected (state))
     /* Now connected.  */
     {
-      c->connected_at = time (NULL);
+      c->connected_at = now ();
+      stats_update (m, true);
 
       g_signal_emit (m,
 		     NC_NETWORK_MONITOR_GET_CLASS
@@ -675,9 +676,12 @@ nc_network_connection_dispose (GObject *object)
   debug (0, DEBUG_BOLD ("Disposing %s"), c->name);
 
   if (c->connected_at)
-    printf ("%s connected %d seconds\n",
-	    c->name,
-	    (int) (time (NULL) - c->connected_at));
+    {
+      uint64_t n = now ();
+      printf ("%s connected "TIME_FMT"\n",
+	      c->name,
+	      TIME_PRINTF (n - c->connected_at));
+    }
 
   /* Definately not the default connection any more.  Do this first so
      that all methods still work.  */
@@ -738,7 +742,7 @@ nc_network_connection_info (NCNetworkConnection *c, uint32_t mask)
 {
   if ((mask & NC_DEVICE_INFO_STATS))
     /* We only need to do this once for all devices.  */
-    stats_update (c->network_monitor);
+    stats_update (c->network_monitor, false);
 
   GList *ret = NULL;
 
@@ -1021,6 +1025,18 @@ nc_network_connection_is_default (NCNetworkConnection *c)
 #endif
 
   return c == c->network_monitor->default_connection;
+}
+
+uint64_t
+nc_network_connection_time_established (NCNetworkConnection *c)
+{
+  return c->connected_at;
+}
+
+const char *
+nc_network_connection_id (NCNetworkConnection *nc)
+{
+  return nc->name;
 }
 
 /* The implementation of the network device object.  */
