@@ -593,8 +593,17 @@ static void
 uam_idle_active (WCUserActivityMonitor *m, gboolean idle, int64_t t,
 		 gpointer user_data)
 {
-  debug (0, DEBUG_BOLD ("The user is %s.  Previous state: "TIME_FMT),
+  debug (5, DEBUG_BOLD ("The user is %s.  Previous state: "TIME_FMT),
 	 idle == WC_USER_IDLE ? "idle" : "active", TIME_PRINTF (t));
+
+  sqlq_append_printf (sqlq, false,
+		      "insert into user_activity"
+		      " ("SQL_TIME_COLS", previous_state, duration, new_state)"
+		      " values ("TM_FMT", '%s', %"PRId64", '%s');",
+		      TM_PRINTF (now_tm ()),
+		      idle == WC_USER_IDLE ? "active" : "idle",
+		      t,
+		      idle == WC_USER_IDLE ? "idle" : "active");
 }
 
 static void
@@ -602,6 +611,22 @@ uam_init (void)
 {
   /* Initialize the user activity monitor.  */
   WCUserActivityMonitor *m = wc_user_activity_monitor_new ();
+
+  char *errmsg = NULL;
+  int err;
+  err = sqlite3_exec (db,
+		      "create table if not exists user_activity"
+		      "(OID INTEGER PRIMARY KEY AUTOINCREMENT, "
+		      " "SQL_TIME_COLS", previous_state, duration, new_state);",
+		      NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  logger_uploader_table_register (db_filename, "user_activity", true);
 
   g_signal_connect (G_OBJECT (m), "user-idle-active",
 		    G_CALLBACK (uam_idle_active), NULL);
