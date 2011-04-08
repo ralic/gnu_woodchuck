@@ -732,6 +732,17 @@ battery_status (WCBatteryMonitor *m,
 	 old_mv, mv, old_mah, mah,
 	 wc_battery_charger_to_string (old_charger),
 	 wc_battery_charger_to_string (charger));
+
+  sqlq_append_printf (sqlq, false,
+		      "insert into battery_log"
+		      " ("SQL_TIME_COLS", id,"
+		      "  is_charging, charger, is_discharging, voltage, mah)"
+		      " values ("TM_FMT","
+		      "  (select id from batteries where device = '%q'),"
+		      "  '%d', '%q', %d, %d, %d);",
+		      TM_PRINTF (now_tm ()), wc_battery_id (b),
+		      is_charging, wc_battery_charger_to_string (charger),
+		      is_discharging, mv, mah);
 }
 
 static void
@@ -740,10 +751,44 @@ bm_init (void)
   /* Initialize the battery monitor.  */
   WCBatteryMonitor *m = wc_battery_monitor_new ();
 
+  char *errmsg = NULL;
+  int err;
+  err = sqlite3_exec (db,
+		      /* A list of batteries.  */
+		      "create table if not exists batteries"
+		      " (id INTEGER PRIMARY KEY,"
+		      "  device, voltage_design, mah_design,"
+		      "  UNIQUE (device));"
+
+		      /* ID is the ID of the battery in the BATTERIES
+			 table.  */
+		      "create table if not exists battery_log"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  "SQL_TIME_COLS", id, is_charging, charger, "
+		      "  is_discharging, voltage, mah);",
+		      NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  logger_uploader_table_register (db_filename, "batteries", true);
+  logger_uploader_table_register (db_filename, "battery_log", true);
+
   GSList *batteries = wc_battery_monitor_list (m);
   while (batteries)
     {
       WCBattery *b = WC_BATTERY (batteries->data);
+
+      sqlq_append_printf (sqlq, false,
+			  "insert or ignore into batteries"
+			  " (device, voltage_design, mah_design)"
+			  " values ('%q', %d, %d);",
+			  wc_battery_id (b),
+			  wc_battery_mv_design (b),
+			  wc_battery_mah_design (b));
 
       debug (0, DEBUG_BOLD ("Initial battery status")" %s: "
 	     "charging: %d; discharging: %d; "
