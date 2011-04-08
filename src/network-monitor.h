@@ -139,6 +139,10 @@ extern GList *nc_network_monitor_connections (NCNetworkMonitor *m);
    to the connection.  */
 extern NCNetworkConnection *
   nc_network_monitor_default_connection (NCNetworkMonitor *m);
+
+/* Initiate a network scan.  Any results will be provided via the
+   "scan-results" signal.  */
+extern void nm_scan (NCNetworkMonitor *m);
 
 /* The type of medium.  The values were choosen so that a bitmask can
    be made.  */

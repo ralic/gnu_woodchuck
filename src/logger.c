@@ -34,7 +34,28 @@ struct sqlq *sqlq;
 #define TM_PRINTF(tm) (1900 + (tm).tm_year), (tm).tm_yday, (tm).tm_hour, \
     (tm).tm_min, (tm).tm_sec
 
+static NCNetworkMonitor *nm;
+
 static uint64_t nm_stop_logging;
+
+/* The time, as returned by now, of the last network scan.  */
+static uint64_t last_scan;
+
+/* How often to scan for networks, in ms.  */
+#define SCAN_INTERVAL_MAX (3 * 60 * 60 * 1000)
+/* We must wait at least this long before performing a scan.  */
+#define SCAN_INTERVAL_MIN (60 * 60 * 1000)
+
+static void
+nm_scan_queue (void)
+{
+  uint64_t n = now ();
+  if (now () - last_scan >= SCAN_INTERVAL_MIN)
+    {
+      last_scan = n;
+      nm_scan (nm);
+    }
+}
 
 static void
 nm_connection_dump (NCNetworkConnection *nc, const char *state)
@@ -405,6 +426,10 @@ nm_connections_stat_cb (gpointer user_data)
 {
   NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
   nm_connections_dump (m, "STATS");
+
+  if (now () - last_scan >= SCAN_INTERVAL_MAX)
+    nm_scan_queue ();
+
   return true;
 }
 
@@ -455,7 +480,7 @@ nm_scan_results (NCNetworkMonitor *nm, GSList *aps, gpointer user_data)
     {
       struct nm_ap *ap = aps->data;
 
-      debug (0, DEBUG_BOLD ("Station")": "
+      debug (4, DEBUG_BOLD ("Station")": "
 	     "%s;%s;%s: %s, signal %d (%d dB), flags: %"PRIx32,
 	     ap->user_id, ap->station_id, ap->network_id,
 	     ap->network_type, ap->signal_strength_normalized,
@@ -482,8 +507,6 @@ nm_scan_results (NCNetworkMonitor *nm, GSList *aps, gpointer user_data)
 	 ap->signal_strength_db);
     }
 }
-
-static NCNetworkMonitor *nm;
 
 static void
 nm_init (void)
@@ -686,6 +709,8 @@ uam_idle_active (WCUserActivityMonitor *m, gboolean idle, int64_t t,
 		      idle == WC_USER_IDLE ? "active" : "idle",
 		      t,
 		      idle == WC_USER_IDLE ? "idle" : "active");
+
+  nm_scan_queue ();
 }
 
 static void

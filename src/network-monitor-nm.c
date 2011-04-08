@@ -500,6 +500,12 @@ device_removed_cb (DBusGProxy *proxy, const char *device, gpointer user_data)
     debug (0, "not known.");
 }
 
+void
+nm_scan (NCNetworkMonitor *m)
+{
+#warning Implement nm_scan.
+}
+
 /* Enumerate all network devices, create corresponding local objects
    and start listening for state changes.  */
 static gboolean

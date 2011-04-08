@@ -288,6 +288,7 @@ struct _NCNetworkMonitor
      GSList is a string containing the key.  The remaining elements
      are struct nm_aps.  */
   GHashTable *network_type_to_scan_results_hash;
+  int am_scanning;
 #endif
 };
 

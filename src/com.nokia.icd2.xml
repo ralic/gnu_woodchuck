@@ -1,5 +1,6 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
 "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<!-- See http://maemo.org/api_refs/5.0/5.0-final/icd2/group__dbus__api.html -->
 <node>
   <interface name="com.nokia.icd2">
     <method name="addrinfo_req">
@@ -16,6 +17,20 @@
     </signal>
     <method name="state_req">
       <arg name="signals" type="u" direction="out"/>
+    </method>
+    <method name="scan_req">
+      <!-- ICD_SCAN_REQUEST_ACTIVE = 0
+	   ICD_SCAN_REQUEST_ACTIVE_SAVED = 1
+	   ICD_SCAN_REQUEST_PASSIVE = 2 -->
+      <arg name="flags" type="u" direction="in"/>
+      <!-- network types to scan; no array or empty array means scan
+           all known network types.  -->
+      <!-- Optional: 
+	   <arg name="networks_to_scan_filter" type="as" direction="in"/> -->
+      <!-- Network types that will be scanned.  -->
+      <arg name="networks_to_scan" type="as" direction="out"/>
+    </method>
+    <method name="scan_cancel_req">
     </method>
   </interface>
 </node>

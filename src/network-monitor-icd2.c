@@ -616,6 +616,22 @@ icd2_scan_sig_cb (DBusGProxy *proxy,
 	}
 
       results_set (network_type, NULL);
+
+      if (m->am_scanning)
+	{
+	  m->am_scanning --;
+	  if (m->am_scanning == 0)
+	    {
+	      GError *error = NULL;
+	      if (! com_nokia_icd2_scan_cancel_req (m->icd2_proxy, &error))
+		{
+		  debug (0, "Error invoking scan_cancel_req: %s",
+			 error->message);
+		  g_error_free (error);
+		}
+	    }
+	}
+
       return;
     }
 
@@ -645,6 +661,32 @@ icd2_scan_sig_cb (DBusGProxy *proxy,
   results_set (network_type, results);
 }
 
+void
+nm_scan (NCNetworkMonitor *m)
+{
+  GError *error = NULL;
+  char **networks_to_scan = NULL;
+  if (! com_nokia_icd2_scan_req (m->icd2_proxy,
+				 ICD_SCAN_REQUEST_ACTIVE, &networks_to_scan,
+				 &error))
+    {
+      debug (0, "Error invoking scan_req: %s", error->message);
+      g_error_free (error);
+    }
+  else
+    {
+      int i;
+      for (i = 0; networks_to_scan[i]; i ++)
+	{
+	  debug (4, "Scanning %s", networks_to_scan[i]);
+	  g_free (networks_to_scan[i]);
+	}
+      g_free (networks_to_scan);
+
+      m->am_scanning = i;
+    }
+}
+
 /* Enumerate all network devices, create corresponding local objects
    and start listening for state changes.  */
 static gboolean
@@ -652,14 +694,12 @@ start (gpointer user_data)
 {
   NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
 
-  printf ("Listing devices.\n");
-
   /* ADDRINFO_REQ causes ICD2 to enumerate all of the connection's and
      their status.  */
   unsigned int count = 0;
   GError *error = NULL;
   if (com_nokia_icd2_addrinfo_req (m->icd2_proxy, &count, &error))
-    debug (0, DEBUG_BOLD ("%d active connections"), count);
+    debug (4, DEBUG_BOLD ("%d active connections"), count);
   else
     {
       debug (0, "Error invoking addrinfo_req: %s", error->message);
