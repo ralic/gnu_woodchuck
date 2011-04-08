@@ -437,6 +437,52 @@ nm_default_connection_changed (NCNetworkMonitor *nm,
     nm_connection_dump (new_default, "STATS");
 }
 
+/* Network scan results are available.  */
+static void
+nm_scan_results (NCNetworkMonitor *nm, GSList *aps, gpointer user_data)
+{
+  struct tm tm = now_tm ();
+
+  sqlq_append_printf (sqlq, false,
+		      "insert into access_point_scan"
+		      " ("SQL_TIME_COLS", network_type)"
+		      " values ("TM_FMT", %Q);",
+		      TM_PRINTF (tm),
+		      (aps ? ((struct nm_ap *) aps->data)->network_type
+		       : "UNKNOWN"));
+
+  for (; aps; aps = aps->next)
+    {
+      struct nm_ap *ap = aps->data;
+
+      debug (0, DEBUG_BOLD ("Station")": "
+	     "%s;%s;%s: %s, signal %d (%d dB), flags: %"PRIx32,
+	     ap->user_id, ap->station_id, ap->network_id,
+	     ap->network_type, ap->signal_strength_normalized,
+	     ap->signal_strength_db, ap->network_flags);
+
+      sqlq_append_printf
+	(sqlq, true,
+	 "insert or ignore into access_point"
+	 " (user_id, station_id, network_id, network_type)"
+	 " values (%Q, %Q, %Q, %Q);"
+	 "insert into access_point_log"
+	 " (APSID, APID, flags,"
+	 "  signal_strength_normalized, signal_strength_db)"
+	 " values ((select MAX (OID) from access_point_scan),"
+	 "  (select OID from access_point where"
+	 "    user_id=%Q and station_id=%Q and network_id=%Q"
+	 "    and network_type=%Q),"
+	 "  '%"PRIx32"', %d, %d);",
+	 ap->user_id ?: DEFAULT_VALUE, ap->station_id ?: DEFAULT_VALUE,
+	 ap->network_id ?: DEFAULT_VALUE, ap->network_type ?: DEFAULT_VALUE,
+	 ap->user_id ?: DEFAULT_VALUE, ap->station_id ?: DEFAULT_VALUE,
+	 ap->network_id ?: DEFAULT_VALUE, ap->network_type ?: DEFAULT_VALUE,
+	 ap->network_flags, ap->signal_strength_normalized,
+	 ap->signal_strength_db);
+    }
+}
+
 static NCNetworkMonitor *nm;
 
 static void
@@ -495,7 +541,37 @@ nm_init (void)
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
 		      "  "SQL_TIME_COLS", CID, connection_configuration, "
 		      "  rx1, tx1, rx2, tx2, rx3, tx3, rx4, tx4,"
-		      "  time, state, default_route);",
+		      "  time, state, default_route);"
+
+		      /* List of access points that we have seen.  */
+		      "create table if not exists access_point"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  user_id NOT NULL DEFAULT 'NONE',"
+		      "  station_id NOT NULL DEFAULT 'NONE',"
+		      "  network_id NOT NULL DEFAULT 'NONE',"
+		      "  network_type NOT NULL DEFAULT 'NONE',"
+		      "  UNIQUE (user_id, station_id, network_id,"
+		      "   network_type));"
+
+		      "create table if not exists access_point_scan"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  "SQL_TIME_COLS", network_type);"
+
+		      /* When we saw an access point and some
+			 attributes.  APSID is the OID of the access
+			 point scan in the ACCESS_POINT_SCAN_LOG.
+			 APID is the OID of the access point if the
+			 ACCESS_POINT table.  */
+		      "create table if not exists access_point_log"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  APSID, APID, flags, "
+		      "  signal_strength_normalized, signal_strength_db);"
+
+		      "create view if not exists access_point_scan_combined as"
+		      " select * from"
+		      "  access_point_scan, access_point, access_point_log"
+		      "  where access_point_log.APSID = access_point_scan.OID"
+		      "    and access_point_log.APID = access_point.OID;",
 		      NULL, NULL, &errmsg);
   if (errmsg)
     {
@@ -508,6 +584,10 @@ nm_init (void)
 				  false);
   logger_uploader_table_register (db_filename, "device_configuration", false);
   logger_uploader_table_register (db_filename, "connection_stats", true);
+
+  logger_uploader_table_register (db_filename, "access_point", false);
+  logger_uploader_table_register (db_filename, "access_point_scan", true);
+  logger_uploader_table_register (db_filename, "access_point_log", true);
 
 #if 0
   char *errmsg = NULL;
@@ -576,6 +656,8 @@ nm_init (void)
 		    G_CALLBACK (nm_disconnected), NULL);
   g_signal_connect (G_OBJECT (nm), "default-connection-changed",
 		    G_CALLBACK (nm_default_connection_changed), NULL);
+  g_signal_connect (G_OBJECT (nm), "scan-results",
+		    G_CALLBACK (nm_scan_results), NULL);
 
   g_timeout_add_seconds (5 * 60, nm_connections_stat_cb, nm);
 }

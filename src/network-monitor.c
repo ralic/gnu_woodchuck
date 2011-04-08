@@ -282,6 +282,13 @@ struct _NCNetworkMonitor
   guint addrinfo_req_source;
   guint state_req_source;
 #endif
+
+#if HAVE_ICD2
+  /* A hash from NETWORK_TYPE to GSList's.  The first element of the
+     GSList is a string containing the key.  The remaining elements
+     are struct nm_aps.  */
+  GHashTable *network_type_to_scan_results_hash;
+#endif
 };
 
 static void nc_network_monitor_state_dump (NCNetworkMonitor *m);
@@ -1266,6 +1273,14 @@ nc_network_monitor_class_init (NCNetworkMonitorClass *klass)
 		    0, NULL, NULL,
 		    g_cclosure_user_marshal_VOID__POINTER_POINTER,
 		    G_TYPE_NONE, 2, G_TYPE_POINTER, G_TYPE_POINTER);
+
+  nm_class->scan_results_signal_id
+    = g_signal_new ("scan-results",
+		    G_TYPE_FROM_CLASS (klass),
+		    G_SIGNAL_RUN_FIRST,
+		    0, NULL, NULL,
+		    g_cclosure_user_marshal_VOID__POINTER,
+		    G_TYPE_NONE, 1, G_TYPE_POINTER);
 }
 
 static void nc_network_monitor_backend_init (NCNetworkMonitor *m);

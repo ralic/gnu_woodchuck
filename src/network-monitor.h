@@ -39,6 +39,28 @@
    provides the caller an opportunity to attach to the "connected" and
    "disconnected" signals.  */
 
+
+/* Description of an access point.  Used by the scan-results
+   signal.  */
+struct nm_ap
+{
+  /* User visible name.  */
+  char *user_id;
+  /* The station's identifier, e.g., it's MAC address.  */
+  char *station_id;
+  /* Network identifier.  */
+  char *network_id;
+
+  char *network_type;
+
+  uint32_t network_flags;
+
+  int signal_strength_db;
+  /* From 0 (none) to 10 (good).  */
+  int signal_strength_normalized;
+};
+
+
 /* Network Monitor's interface.  */
 typedef struct _NCNetworkMonitor NCNetworkMonitor;
 typedef struct _NCNetworkMonitorClass NCNetworkMonitorClass;
@@ -75,6 +97,12 @@ struct _NCNetworkMonitorClass
      default connection, as of the last default-connection-changed
      signal (if any), and the new default connection. */
   guint default_connection_changed_signal_id;
+
+  /* "scan-results" signal: A network scan completed.  Passed a GSList
+     of struct nm_aps describing the available access points.  This is
+     invoked once with all visible access points for each type of
+     infrastructure, e.g., WLAN_INFRA, WLAN_ADHOC and GPRS.  */
+  guint scan_results_signal_id;
 };
 
 extern GType nc_network_monitor_get_type (void);

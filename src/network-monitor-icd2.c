@@ -412,6 +412,239 @@ icd2_state_sig_cb (DBusGProxy *proxy,
     m->addrinfo_req_source = g_idle_add (addrinfo_req, m);
 }
 
+/* Process network scan results.
+
+   According to
+   http://maemo.org/api_refs/5.0/5.0-final/icd2/group__dbus__api.html
+
+   DBUS_TYPE_UINT32              status, see icd_scan_status
+   DBUS_TYPE_UINT32              timestamp when last seen
+   DBUS_TYPE_STRING              service type
+   DBUS_TYPE_STRING              service name
+   DBUS_TYPE_UINT32              service attributes, see Service Provider API
+   DBUS_TYPE_STRING              service id
+   DBUS_TYPE_INT32               service priority within a service type
+   DBUS_TYPE_STRING              network type
+   DBUS_TYPE_STRING              network name
+   DBUS_TYPE_UINT32              network attributes, see Network module API
+   DBUS_TYPE_ARRAY (BYTE)        network id
+   DBUS_TYPE_INT32               network priority for different network types
+   DBUS_TYPE_INT32               signal strength/quality, 0 (none) - 10 (good)
+   DBUS_TYPE_STRING              station id, e.g. MAC address or similar id
+                                 you can safely ignore this argument
+   DBUS_TYPE_INT32               signal value in dB; use signal strength above
+                                 unless you know what you are doing
+
+   stats, according to
+   http://maemo.org/api_refs/5.0/5.0-final/icd2/group__dbus__api.html:
+
+   ICD_SCAN_NEW 	the returned network was found
+
+   ICD_SCAN_UPDATE      an existing network with better signal
+                        strength is found, applications may
+                        want to update any saved data
+                        concerning signal strength
+
+   ICD_SCAN_NOTIFY      other network details have been updated but
+                        will not be stored by ICd2; normally
+                        networks with this status are best
+                        ignored
+
+   ICD_SCAN_EXPIRE 	the returned network has expired
+
+   ICD_SCAN_COMPLETE    this round of scanning is complete and a
+                        new scan will be started after the
+                        module scan timeout
+
+   Network attributes:
+
+   From
+   http://maemo.org/api_refs/5.0/5.0-final/icd2/group__network__module__api.html
+
+   ICD_NW_ATTR_ALWAYS_ONLINE   0x20000000
+
+     Whether the connection attempt is done because of always online
+     policy, manual connection attempts do not set this
+
+   ICD_NW_ATTR_AUTOCONNECT   0x04000000
+
+     Whether we have all required credentials to authenticate
+     ourselves to the network automatically without any user
+     interaction
+
+   ICD_NW_ATTR_IAPNAME   0x01000000
+
+     Type of network id; set for IAP name, unset for local id,
+     e.g. WLAN SSID
+
+   ICD_NW_ATTR_LOCALMASK   0x00FFFFFF
+
+     Mask for network attribute local values, e.g. security
+     settings, WLAN mode, etc. These values might be evaluated by
+     relevant UI components
+
+   ICD_NW_ATTR_SILENT   0x02000000
+
+     UI and user interaction forbidden if set, allowed if unset 
+
+  ICD_NW_ATTR_SRV_PROVIDER   0x10000000
+
+    Whether this network always needs service provider support in
+    order to get connected
+ */
+static void
+icd2_scan_sig_cb (DBusGProxy *proxy,
+		  uint32_t status,
+		  uint32_t last_seen,
+		  char *service_type,
+		  char *service_name,
+		  uint32_t service_attributes,
+		  char *service_id,
+		  int32_t service_priority,
+		  char *network_type,
+		  char *network_name,
+		  uint32_t network_attributes,
+		  GArray *network_id_array,
+		  int32_t network_priority,
+		  int32_t signal_strength,
+		  char *station_id,
+		  int32_t signal_strength_db,
+		  gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+
+  char network_id[network_id_array->len + 1];
+  memcpy (network_id, network_id_array->data, network_id_array->len);
+  network_id[network_id_array->len] = 0;
+
+  const char *scan_status_to_str (int scan_status)
+  {
+    switch (scan_status)
+      {
+      case ICD_SCAN_NEW: return "new";
+      case ICD_SCAN_UPDATE: return "update";
+      case ICD_SCAN_NOTIFY: return "notify";
+      case ICD_SCAN_EXPIRE: return "expire";
+      case ICD_SCAN_COMPLETE: return "complete";
+      default: return "unknown status";
+      }
+  }
+
+  uint64_t last_seen_delta = now () - 1000 * (uint64_t) last_seen;
+  debug (4, DEBUG_BOLD ("Status: %s")"; last seen: "TIME_FMT"; "
+	 "Service: %s; %s; %x; %s; %d; "
+	 "Network: %s; %s; %x; %s; %d; "
+	 "signal: %d (%d dB); station: %s",
+	 scan_status_to_str (status), TIME_PRINTF (last_seen_delta),
+	 service_type, service_name, service_attributes,
+	 service_id, service_priority,
+	 network_type, network_name, network_attributes,
+	 network_id, network_priority,
+	 signal_strength, signal_strength_db, station_id);
+
+  if (! m->network_type_to_scan_results_hash)
+    m->network_type_to_scan_results_hash
+      = g_hash_table_new (g_str_hash, g_str_equal);
+
+  GSList *results = g_hash_table_lookup (m->network_type_to_scan_results_hash,
+					 network_type);
+  int orig_len = 0;
+  if (results)
+    /* Skip the key.  */
+    {
+      assert (strcmp (results->data, network_type) == 0);
+      results = results->next;
+      assert (results);
+      orig_len = g_slist_length (results);
+    }
+  
+  void results_set (const char *network_type, GSList *results)
+  {
+    /* Only the first element of the list (the key) is guaranteed to
+       be valid; it's next pointer may now be invalid.  */
+    GSList *orig = g_hash_table_lookup (m->network_type_to_scan_results_hash,
+					network_type);
+    debug (5, "Updating %s: %d -> %d results (%p; %p)",
+	   network_type, orig_len,
+	   results ? g_slist_length (results) : 0,
+	   orig, results);
+
+    if (orig && results)
+      orig->next = results;
+    else if (orig)
+      /* Results is now empty.  */
+      {
+	g_hash_table_remove (m->network_type_to_scan_results_hash,
+			     network_type);
+	gpointer t = g_hash_table_lookup (m->network_type_to_scan_results_hash,
+					  network_type);
+	if (t)
+	  debug (0, "orig: %p; after remove: %p", orig, t);
+	assert (! t);
+
+	g_free (orig->data);
+	g_slist_free_1 (orig);
+      }
+    else if (results)
+      /* Now have something.  */
+      {
+	char *key = g_strdup (network_type);
+	results = g_slist_prepend (results, key);
+	g_hash_table_insert (m->network_type_to_scan_results_hash,
+			     key, results);
+      }
+  }
+  
+  if (status == ICD_SCAN_COMPLETE)
+    /* Scan complete.  Send the results to the user.  */
+    {
+      debug (4, "Scan for %s completed.", network_type);
+      g_signal_emit (m,
+		     NC_NETWORK_MONITOR_GET_CLASS
+		     (m)->scan_results_signal_id, 0, results);
+
+      debug (5, "Freeing %d results for %s",
+	     g_slist_length (results), network_type);
+
+      GSList *n = results;
+      while (n)
+	{
+	  results = n;
+	  n = results->next;
+	  g_free (results->data);
+	  g_slist_free_1 (results);
+	}
+
+      results_set (network_type, NULL);
+      return;
+    }
+
+  struct nm_ap *ap = g_malloc (sizeof *ap + strlen (network_id) + 1
+			       + strlen (network_name) + 1
+			       + strlen (station_id) + 1
+			       + strlen (network_type) + 1);
+
+  char *p = (char *) &ap[1];
+  ap->network_id = p;
+  p = mempcpy (p, network_id, strlen (network_id) + 1);
+
+  ap->user_id = p;
+  p = mempcpy (p, network_name, strlen (network_name) + 1);
+
+  ap->station_id = p;
+  p = mempcpy (p, station_id, strlen (station_id) + 1);
+
+  ap->network_type = p;
+  p = mempcpy (p, network_type, strlen (network_type) + 1);
+
+  ap->network_flags = network_attributes;
+  ap->signal_strength_db = signal_strength_db;
+  ap->signal_strength_normalized = signal_strength;
+
+  results = g_slist_prepend (results, ap);
+  results_set (network_type, results);
+}
+
 /* Enumerate all network devices, create corresponding local objects
    and start listening for state changes.  */
 static gboolean
@@ -486,6 +719,31 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
 			   G_TYPE_INVALID);
   dbus_g_proxy_connect_signal (m->icd2_proxy, ICD_DBUS_API_STATE_SIG,
 			       G_CALLBACK (icd2_state_sig_cb),
+			       m, NULL);
+
+  /* scan_sig.  */
+  dbus_g_object_register_marshaller
+    (g_cclosure_user_marshal_VOID__UINT_UINT_STRING_STRING_UINT_STRING_INT_STRING_STRING_UINT_BOXED_INT_INT_STRING_INT,
+     G_TYPE_NONE,
+     G_TYPE_UINT, G_TYPE_UINT, G_TYPE_STRING, G_TYPE_STRING,
+     G_TYPE_UINT, G_TYPE_STRING, G_TYPE_INT, G_TYPE_STRING,
+     G_TYPE_STRING, G_TYPE_UINT, DBUS_TYPE_G_UCHAR_ARRAY,
+     G_TYPE_INT, G_TYPE_INT, G_TYPE_STRING, G_TYPE_INT,
+     G_TYPE_INVALID);
+
+  dbus_g_proxy_add_signal (m->icd2_proxy, ICD_DBUS_API_SCAN_SIG,
+			   G_TYPE_UINT, G_TYPE_UINT,
+			   G_TYPE_STRING, G_TYPE_STRING,
+			   G_TYPE_UINT, G_TYPE_STRING,
+			   G_TYPE_INT, G_TYPE_STRING,
+			   G_TYPE_STRING, G_TYPE_UINT,
+			   DBUS_TYPE_G_UCHAR_ARRAY,
+			   G_TYPE_INT, G_TYPE_INT,
+			   G_TYPE_STRING, G_TYPE_INT,
+			   G_TYPE_INVALID);
+
+  dbus_g_proxy_connect_signal (m->icd2_proxy, ICD_DBUS_API_SCAN_SIG,
+			       G_CALLBACK (icd2_scan_sig_cb),
 			       m, NULL);
 
   /* Query devices and extant connections the next time things are
