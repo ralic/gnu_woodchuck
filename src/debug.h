@@ -7,7 +7,9 @@
 #include <time.h>
 
 /* Convenient debugging macros.  */
-#define DEBUG_BOLD(text) "\033[01;31m" text "\033[00m"
+#define DEBUG_BOLD_BEGIN "\033[01;31m"
+#define DEBUG_BOLD_END "\033[00m"
+#define DEBUG_BOLD(text) DEBUG_BOLD_BEGIN text DEBUG_BOLD_END
 
 #if defined(DEBUG_ELIDE)
 # if DEBUG_ELIDE + 0 == 0

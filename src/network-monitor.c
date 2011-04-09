@@ -1,5 +1,5 @@
 /* network-monitor.c - Network monitor.
-   Copyright 2010 Neal H. Walfield <neal@walfield.org>
+   Copyright 2010, 2011 Neal H. Walfield <neal@walfield.org>
 
    This file is part of Netczar.
 
@@ -248,6 +248,10 @@ struct _NCNetworkMonitor
      Object: ICD_DBUS_API_PATH
      Interface: ICD_DBUS_API_INTERFACE  */
   DBusGProxy *icd2_proxy;
+  /* Proxy object for the phone net.
+     Object: /com/nokia/phone/net
+     Interface: "Phone.Net"  */
+  DBusGProxy *phone_net_proxy;
 #endif
 
   /* List of currently attached devices (NCNetworkDevice).  Recall: a
@@ -289,6 +293,11 @@ struct _NCNetworkMonitor
      are struct nm_aps.  */
   GHashTable *network_type_to_scan_results_hash;
   int am_scanning;
+#endif
+
+#if HAVE_ICD2
+  /* Cell info for the currently connected tower.  */
+  struct nm_cell cell_info;
 #endif
 };
 
@@ -1277,6 +1286,14 @@ nc_network_monitor_class_init (NCNetworkMonitorClass *klass)
 
   nm_class->scan_results_signal_id
     = g_signal_new ("scan-results",
+		    G_TYPE_FROM_CLASS (klass),
+		    G_SIGNAL_RUN_FIRST,
+		    0, NULL, NULL,
+		    g_cclosure_user_marshal_VOID__POINTER,
+		    G_TYPE_NONE, 1, G_TYPE_POINTER);
+
+  nm_class->cell_info_changed_signal_id
+    = g_signal_new ("cell-info-changed",
 		    G_TYPE_FROM_CLASS (klass),
 		    G_SIGNAL_RUN_FIRST,
 		    0, NULL, NULL,

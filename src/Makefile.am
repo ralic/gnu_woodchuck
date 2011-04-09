@@ -20,6 +20,7 @@ nm_interfaces_xml = $(foreach filename, \
 	org.freedesktop.Hal.Manager.xml \
 	org.freedesktop.Hal.Device.xml \
 	org.freedesktop.DBus.xml \
+	Phone.Net.xml \
 	org.walfield.NetCzar.xml \
 	org.walfield.NetCzar.client.xml \
 	, $(srcdir)/$(filename))

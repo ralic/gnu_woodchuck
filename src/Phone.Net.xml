@@ -1,0 +1,84 @@
+<!-- Path: /com/nokia/phone/net -->
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN"
+"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <interface name="Phone.Net">
+    <method name="get_registration_status">
+      <!-- byte -->
+      <arg name="status" type="y" direction="out"/>
+      <!-- uint16 -->
+      <arg name="lac" type="q" direction="out"/>
+      <!-- uint32 -->
+      <arg name="cell_id" type="u" direction="out"/>
+      <arg name="network_mnc" type="u" direction="out"/>
+      <arg name="country_mcc" type="u" direction="out"/>
+      <arg name="network_type" type="y" direction="out"/>
+      <arg name="services" type="y" direction="out"/>
+      <arg name="unknown" type="i" direction="out"/>
+    </method>
+      
+    <method name="get_signal_strength">
+      <!-- byte -->
+      <arg name="signal_strength_normalized" type="y" direction="out"/>
+      <arg name="signal_strength_negative_dbm" type="y" direction="out"/>
+      <arg name="unknown" type="i" direction="out"/>
+    </method>
+
+    <method name="get_operator_name">
+      <!-- This doesn't look like operator_name_change at
+           all... http://www.gossamer-threads.com/lists/maemo/developers/60889
+           -->
+      <arg name="network_mnc" type="u"/>
+      <arg name="country_mcc" type="u"/>
+
+      <arg name="operator" type="s" direction="out"/>
+      <arg name="status" type="i" direction="out"/>
+    </method>
+
+    <signal name="registration_status_change">
+      <!-- byte -->
+      <arg name="status" type="y"/>
+      <!-- uint16 -->
+      <arg name="lac" type="q"/>
+      <!-- uint32 -->
+      <arg name="cell_id" type="u"/>
+      <arg name="network_mnc" type="u"/>
+      <arg name="country_mcc" type="u"/>
+      <arg name="network_type" type="y"/>
+      <arg name="services" type="y"/>
+    </signal>
+    <signal name="cell_info_change">
+      <!-- byte -->
+      <arg name="status" type="y"/>
+      <!-- uint16 -->
+      <arg name="lac" type="q"/>
+      <!-- uint32 -->
+      <arg name="cell_id" type="u"/>
+      <arg name="network_mnc" type="u"/>
+      <arg name="country_mcc" type="u"/>
+      <arg name="services" type="y"/>
+      <arg name="user_data" type="y"/>
+    </signal>
+    <signal name="signal_strength_change">
+      <arg name="signal_strength_normalized" type="y"/>
+      <arg name="signal_strength_negative_dbm" type="y"/>
+    </signal>
+    <signal name="operator_name_change">
+      <arg name="status" type="y"/>
+      <arg name="operator" type="s"/>
+      <arg name="unknown" type="s"/>
+      <arg name="network_mnc" type="u"/>
+      <arg name="country_mcc" type="u"/>
+    </signal>
+<!--
+    <signal name="network_time_info_change">
+    </signal>
+    <signal name="cellular_system_state_change">
+    </signal>
+    <signal name="radio_access_technology_change">
+    </signal>
+    <signal name="radio_info_change">
+    </signal>
+-->
+  </interface>
+</node>

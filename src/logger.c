@@ -509,6 +509,68 @@ nm_scan_results (NCNetworkMonitor *nm, GSList *aps, gpointer user_data)
 }
 
 static void
+nm_cell_info_changed (NCNetworkMonitor *nm, GSList *cells, gpointer user_data)
+{
+  struct tm tm = now_tm ();
+
+  GSList *l;
+  for (l = cells; l; l = l->next)
+    {
+      struct nm_cell *c = l->data;
+#define X_(a, b) a ## b
+#define X(flag, field)							\
+      (X_(NM_CELL_,flag) & c->changes) ? DEBUG_BOLD_BEGIN : "",		\
+	c->field,							\
+	(X_(NM_CELL_,flag) & c->changes) ? DEBUG_BOLD_END : ""
+      
+      debug (4, "cell info: %sconnected: %d%s;"
+	     " %sLAC: %"PRId16"%s;"
+	     " %scell id: %"PRId32"%s;"
+	     " %snetwork: %"PRId32"%s;"
+	     " %scountry: %"PRId32"%s;"
+	     " %snetwork type: %d%s;"
+	     " %ssignal strength normalized: %d%s;"
+	     " %ssignal strength dbm: %d%s;"
+	     " %soperator: %s%s",
+	     X(CONNECTED, connected),
+	     X(LAC, lac),
+	     X(CELL_ID, cell_id),
+	     X(NETWORK, network),
+	     X(COUNTRY, country),
+	     X(NETWORK_TYPE, network_type),
+	     X(SIGNAL_STRENGTH_NORMALIZED, signal_strength_normalized),
+	     X(SIGNAL_STRENGTH_DBM, signal_strength_dbm),
+	     X(OPERATOR, operator));
+#undef X_
+#undef X
+
+      sqlq_append_printf
+	(sqlq, false,
+	 "insert or ignore into cells"
+	 " (lac, cell_id, network, country, network_type, operator)"
+	 " values (%"PRId16", %"PRId32", %"PRId32","
+	 "  %"PRId32", %d, '%q');"
+
+	 "insert into cell_info"
+	 " ("SQL_TIME_COLS", cell_id, connected, signal_strength_normalized, "
+	 "  signal_strength_dbm)"
+	 " values"
+	 " ("TM_FMT","
+	 "  (select OID from cells"
+	 "    where lac = %"PRId16" and cell_id = %"PRId32
+	 "     and network = %"PRId32" and country = %"PRId32
+	 "     and network_type = %d and operator = '%q'),"
+	 "  '%s', %d, %d);",
+	 c->lac, c->cell_id, c->network, c->country, c->network_type,
+	 c->operator,
+
+	 TM_PRINTF (tm), c->lac, c->cell_id, c->network, c->country,
+	 c->network_type, c->operator, c->connected ? "connected" : "neighbor",
+	 c->signal_strength_normalized, c->signal_strength_dbm);
+    }
+}
+
+static void
 nm_init (void)
 {
   char *errmsg = NULL;
@@ -594,7 +656,20 @@ nm_init (void)
 		      " select * from"
 		      "  access_point_scan, access_point, access_point_log"
 		      "  where access_point_log.APSID = access_point_scan.OID"
-		      "    and access_point_log.APID = access_point.OID;",
+		      "    and access_point_log.APID = access_point.OID;"
+
+		      "create table if not exists cells"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  lac, cell_id, network, country, network_type,"
+		      "  operator,"
+		      "  UNIQUE (lac, cell_id, network, country, network_type,"
+		      "    operator));"
+
+		      "create table if not exists cell_info"
+		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
+		      "  "SQL_TIME_COLS", cell_id, connected,"
+		      "  network_type, signal_strength_normalized,"
+		      "  signal_strength_dbm);",
 		      NULL, NULL, &errmsg);
   if (errmsg)
     {
@@ -681,6 +756,8 @@ nm_init (void)
 		    G_CALLBACK (nm_default_connection_changed), NULL);
   g_signal_connect (G_OBJECT (nm), "scan-results",
 		    G_CALLBACK (nm_scan_results), NULL);
+  g_signal_connect (G_OBJECT (nm), "cell-info-changed",
+		    G_CALLBACK (nm_cell_info_changed), NULL);
 
   g_timeout_add_seconds (5 * 60, nm_connections_stat_cb, nm);
 }

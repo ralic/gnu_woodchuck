@@ -17,6 +17,8 @@
    along with this program.  If not, see
    <http://www.gnu.org/licenses/>.  */
 
+#include "Phone.Net.h"
+
 /* Implementation notes:
 
    We do not garbage collect devices.  This means if devices are
@@ -687,6 +689,189 @@ nm_scan (NCNetworkMonitor *m)
     }
 }
 
+static void
+cell_info_changed (NCNetworkMonitor *m, struct nm_cell *proposed)
+{
+  uint32_t changes = 0;
+
+  if (m->cell_info.lac != proposed->lac)
+    changes |= NM_CELL_LAC;
+  if (m->cell_info.cell_id != proposed->cell_id)
+    changes |= NM_CELL_CELL_ID;
+  if (m->cell_info.network != proposed->network)
+    changes |= NM_CELL_NETWORK;
+  if (m->cell_info.country != proposed->country)
+    changes |= NM_CELL_COUNTRY;
+  if (m->cell_info.network_type != proposed->network_type)
+    changes |= NM_CELL_NETWORK_TYPE;
+  if (m->cell_info.signal_strength_normalized
+      != proposed->signal_strength_normalized)
+    changes |= NM_CELL_SIGNAL_STRENGTH_NORMALIZED;
+  if (m->cell_info.signal_strength_dbm != proposed->signal_strength_dbm)
+    changes |= NM_CELL_SIGNAL_STRENGTH_DBM;
+  if (strcmp (m->cell_info.operator, proposed->operator) != 0)
+    changes |= NM_CELL_OPERATOR;
+
+  if (! changes)
+    return;
+
+  m->cell_info = *proposed;
+  m->cell_info.connected = true;
+  m->cell_info.changes = changes;
+
+  GSList *l = g_slist_prepend (NULL, &m->cell_info);
+  g_signal_emit (m,
+		 NC_NETWORK_MONITOR_GET_CLASS
+		 (m)->cell_info_changed_signal_id, 0, l);
+  g_slist_free (l);
+}
+
+static void
+phone_net_registration_status_change (DBusGProxy *proxy,
+				      uint8_t status,
+				      uint16_t lac,
+				      uint32_t cell_id,
+				      uint32_t network,
+				      uint32_t country,
+				      uint8_t network_type,
+				      uint8_t services,
+				      gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+
+  debug (4, DEBUG_BOLD ("Registration info: ")
+	 "status: %d; lac: %d, cell_id: %d, network: %d, "
+	 "country: %d; network_type: %d, services: %x",
+	 status, lac, cell_id, network, country, network_type,
+	 services);
+
+  struct nm_cell proposed = m->cell_info;
+  proposed.lac = lac;
+  proposed.cell_id = cell_id;
+  proposed.network = network;
+  proposed.country = country;
+  proposed.network_type = network_type;
+
+  cell_info_changed (m, &proposed);
+}
+
+static void
+phone_net_cell_info_change (DBusGProxy *proxy,
+			    uint8_t status,
+			    uint16_t lac,
+			    uint32_t cell_id,
+			    uint32_t network,
+			    uint32_t country,
+			    uint8_t network_type,
+			    uint8_t services,
+			    gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+
+  debug (4, DEBUG_BOLD ("Cell info: ")
+	 "status: %d; lac: %d, cell_id: %d, network: %d, "
+	 "country: %d; network_type: %d, services: %x",
+	 status, lac, cell_id, network, country, network_type,
+	 services);
+
+  struct nm_cell proposed = m->cell_info;
+  proposed.lac = lac;
+  proposed.cell_id = cell_id;
+  proposed.network = network;
+  proposed.country = country;
+  proposed.network_type = network_type;
+
+  cell_info_changed (m, &proposed);
+}
+
+static void
+phone_net_signal_strength_change (DBusGProxy *proxy,
+				  uint8_t signal_strength_normalized,
+				  uint8_t signal_strength_negative_dbm,
+				  gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+
+  debug (4, DEBUG_BOLD ("signal strength: ")"%d %d",
+	 signal_strength_normalized, signal_strength_negative_dbm);
+
+  struct nm_cell proposed = m->cell_info;
+  proposed.signal_strength_normalized = signal_strength_normalized;
+  proposed.signal_strength_dbm = -signal_strength_negative_dbm;
+
+  cell_info_changed (m, &proposed);
+}
+
+static void
+phone_net_operator_name_change (DBusGProxy *proxy,
+				uint8_t status,
+				char *operator,
+				char *unknown,
+				uint32_t network_mnc,
+				uint32_t country_mcc,
+				gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+
+  debug (4, DEBUG_BOLD ("operator name: ")"%d %s %s %d %d",
+	 status, operator, unknown, network_mnc, country_mcc);
+
+  struct nm_cell proposed = m->cell_info;
+  proposed.network = network_mnc;
+  proposed.country = country_mcc;
+  strncpy (proposed.operator, operator, sizeof (proposed.operator));
+  proposed.operator[sizeof (proposed.operator) - 1] = 0;
+
+  cell_info_changed (m, &proposed);
+}
+
+gboolean
+nm_cell_info (NCNetworkMonitor *m, struct nm_cell *cellp)
+{
+  GError *error = NULL;
+
+  struct nm_cell cell = m->cell_info;
+
+  guchar status;
+  guchar services;
+  guint lac;
+  gint unknown;
+  if (! Phone_Net_get_registration_status
+      (m->phone_net_proxy, &status, &lac, &cell.cell_id,
+       &cell.network, &cell.country, &cell.network_type, &services,
+       &unknown, &error))
+    {
+      debug (0, "Error invoking get_registration_status: %s", error->message);
+      g_error_free (error);
+      error = NULL;
+    }
+  else
+    cell.lac = lac;
+
+  guchar norm;
+  guchar neg_dbm;
+  gint unknown2;
+  if (! Phone_Net_get_signal_strength
+      (m->phone_net_proxy, &norm, &neg_dbm, &unknown2, &error))
+    {
+      debug (0, "Error invoking get_signal_strength: %s", error->message);
+      g_error_free (error);
+      error = NULL;
+    }
+  else
+    {
+      cell.signal_strength_normalized = norm;
+      cell.signal_strength_dbm = -neg_dbm;
+    }
+
+  cell_info_changed (m, &cell);
+
+  if (cellp)
+    *cellp = m->cell_info;
+
+  return true;
+}
+
 /* Enumerate all network devices, create corresponding local objects
    and start listening for state changes.  */
 static gboolean
@@ -718,6 +903,12 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
      ICD_DBUS_API_INTERFACE,
      ICD_DBUS_API_PATH,
      ICD_DBUS_API_INTERFACE);
+
+  m->phone_net_proxy = dbus_g_proxy_new_for_name
+    (m->system_bus,
+     "com.nokia.phone.net",
+     "/com/nokia/phone/net",
+     "Phone.Net");
 
   /* addrinfo_sig.  */
   assssss = dbus_g_type_get_collection
@@ -785,6 +976,92 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
   dbus_g_proxy_connect_signal (m->icd2_proxy, ICD_DBUS_API_SCAN_SIG,
 			       G_CALLBACK (icd2_scan_sig_cb),
 			       m, NULL);
+
+  /* registration_status_change.  */
+  dbus_g_object_register_marshaller
+    (g_cclosure_user_marshal_VOID__UCHAR_UINT_UINT_UINT_UINT_UCHAR_UCHAR,
+     G_TYPE_NONE,
+     G_TYPE_UCHAR /* status */,
+     G_TYPE_UINT /* lac */,
+     G_TYPE_UINT /* cell_id */,
+     G_TYPE_UINT /* network */,
+     G_TYPE_UINT /* country */,
+     G_TYPE_UCHAR /* network_type */,
+     G_TYPE_UCHAR /* services */,
+     G_TYPE_INVALID);
+
+  dbus_g_proxy_add_signal
+    (m->phone_net_proxy, "registration_status_change",
+     G_TYPE_UCHAR, G_TYPE_UINT, G_TYPE_UINT, G_TYPE_UINT,
+     G_TYPE_UINT, G_TYPE_UCHAR, G_TYPE_UCHAR, G_TYPE_INVALID);
+
+  dbus_g_proxy_connect_signal
+    (m->phone_net_proxy, "registration_status_change",
+     G_CALLBACK (phone_net_registration_status_change),
+     m, NULL);
+
+  /* cell_info_change.  */
+  dbus_g_object_register_marshaller
+    (g_cclosure_user_marshal_VOID__UCHAR_UINT_UINT_UINT_UINT_UCHAR_UCHAR,
+     G_TYPE_NONE,
+     G_TYPE_UCHAR,
+     G_TYPE_UINT,
+     G_TYPE_UINT,
+     G_TYPE_UINT,
+     G_TYPE_UINT,
+     G_TYPE_UCHAR,
+     G_TYPE_UCHAR,
+     G_TYPE_INVALID);
+
+  dbus_g_proxy_add_signal
+    (m->phone_net_proxy, "cell_info_change",
+     G_TYPE_UCHAR, G_TYPE_UINT, G_TYPE_UINT, G_TYPE_UINT,
+     G_TYPE_UINT, G_TYPE_UCHAR, G_TYPE_UCHAR, G_TYPE_INVALID);
+
+  dbus_g_proxy_connect_signal
+    (m->phone_net_proxy, "cell_info_change",
+     G_CALLBACK (phone_net_cell_info_change),
+     m, NULL);
+
+  /* signal_strength_change.  */
+  dbus_g_object_register_marshaller
+    (g_cclosure_user_marshal_VOID__UCHAR_UCHAR,
+     G_TYPE_NONE,
+     G_TYPE_UCHAR,
+     G_TYPE_UCHAR,
+     G_TYPE_INVALID);
+
+  dbus_g_proxy_add_signal
+    (m->phone_net_proxy, "signal_strength_change",
+     G_TYPE_UCHAR, G_TYPE_UCHAR, G_TYPE_INVALID);
+
+  dbus_g_proxy_connect_signal
+    (m->phone_net_proxy, "signal_strength_change",
+     G_CALLBACK (phone_net_signal_strength_change),
+     m, NULL);
+
+  /* operator_name_change.  */
+  dbus_g_object_register_marshaller
+    (g_cclosure_user_marshal_VOID__UCHAR_STRING_STRING_UINT_UINT,
+     G_TYPE_NONE,
+     G_TYPE_UCHAR,
+     G_TYPE_STRING,
+     G_TYPE_STRING,
+     G_TYPE_UINT,
+     G_TYPE_UINT,
+     G_TYPE_INVALID);
+
+  dbus_g_proxy_add_signal
+    (m->phone_net_proxy, "operator_name_change",
+     G_TYPE_UCHAR, G_TYPE_STRING, G_TYPE_STRING, G_TYPE_UINT, G_TYPE_UINT,
+     G_TYPE_INVALID);
+
+  dbus_g_proxy_connect_signal
+    (m->phone_net_proxy, "operator_name_change",
+     G_CALLBACK (phone_net_operator_name_change),
+     m, NULL);
+
+  nm_cell_info (m, NULL);
 
   /* Query devices and extant connections the next time things are
      idle.  */

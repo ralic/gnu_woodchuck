@@ -7,3 +7,4 @@ autom4te.cache
 aclocal.m4
 # Generated files.
 *.*.*.h
+*.*.h

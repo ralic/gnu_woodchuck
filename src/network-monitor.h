@@ -60,6 +60,41 @@ struct nm_ap
   int signal_strength_normalized;
 };
 
+enum
+  {
+    NM_CELL_CONNECTED = 1 << 0,
+    NM_CELL_LAC = 1 << 1,
+    NM_CELL_CELL_ID = 1 << 2,
+    NM_CELL_NETWORK = 1 << 3,
+    NM_CELL_COUNTRY = 1 << 4,
+    NM_CELL_NETWORK_TYPE = 1 << 5,
+    NM_CELL_SIGNAL_STRENGTH_NORMALIZED = 1 << 6,
+    NM_CELL_SIGNAL_STRENGTH_DBM = 1 << 7,
+    NM_CELL_OPERATOR = 1 << 8,
+  };
+
+struct nm_cell
+{
+  /* A bit-wise OR of the fields that changed.  */
+  uint32_t changes;
+
+  /* Whether we are connected to this tower.  If not, the tower is
+     just visible.  */
+  bool connected;
+  uint16_t lac;
+  uint32_t cell_id;
+  uint32_t network;
+  uint32_t country;
+  uint8_t network_type;
+  uint8_t services;
+
+  /* Normalized signal strength (0 to 100).  -1 if not available.  */
+  int signal_strength_normalized;
+  /* The absolute signal strength, in dbm.  */
+  int signal_strength_dbm;
+
+  char operator[64];
+};
 
 /* Network Monitor's interface.  */
 typedef struct _NCNetworkMonitor NCNetworkMonitor;
@@ -103,6 +138,10 @@ struct _NCNetworkMonitorClass
      invoked once with all visible access points for each type of
      infrastructure, e.g., WLAN_INFRA, WLAN_ADHOC and GPRS.  */
   guint scan_results_signal_id;
+
+  /* "cell-info-changed" signal: The cellular information changed.
+     Passed a GSList of struct nm_cell_infos.  */
+  guint cell_info_changed_signal_id;
 };
 
 extern GType nc_network_monitor_get_type (void);
