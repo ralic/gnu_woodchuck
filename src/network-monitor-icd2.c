@@ -283,16 +283,8 @@ addrinfo_sig_cb (DBusGProxy *proxy,
 	    }
 	}
 
-      GList *e;
-      NCNetworkDevice *d = NULL;
-      for (e = m->devices; e; e = e->next)
-	{
-	  d = NC_NETWORK_DEVICE (e->data);
-	  if (strcmp (d->interface, interface) == 0)
-	    /* Already have device.  */
-	    break;
-	}
-      if (! e)
+      NCNetworkDevice *d = device_interface_to_device (m, interface);
+      if (! d)
 	/* New device.  */
 	{
 	  /* ICD2 tells us the type of network connection but if a
@@ -331,6 +323,16 @@ addrinfo_sig_cb (DBusGProxy *proxy,
 	}
 
       g_free (interface);
+    }
+
+  if (new_connection && strcmp (network_type, "GPRS") == 0)
+    {
+      connection_add_device (c, "modem");
+      NCNetworkDevice *d = device_name_to_device (m, "modem");
+      if (d)
+	device_state_changed (d, DEVICE_STATE_CONNECTED);
+      else
+	debug (0, "modem device does not exist?");
     }
 
   if (new_connection && c->per_connection_device_state)
@@ -412,6 +414,109 @@ icd2_state_sig_cb (DBusGProxy *proxy,
 
   if (schedule_addrinfo && ! m->addrinfo_req_source)
     m->addrinfo_req_source = g_idle_add (addrinfo_req, m);
+}
+
+static void
+gprs_detached (DBusGProxy *proxy, gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+
+  NCNetworkConnection *tether = connection_name_to_connection (m, "modem");
+  if (tether)
+    {
+      debug (1, DEBUG_BOLD ("GPRS DETACHED: %s"),
+	     connection_state_to_str (tether->state));
+
+      connection_state_set (tether, CONNECTION_STATE_DISCONNECTED, false);
+    }
+  else
+    debug (1, DEBUG_BOLD ("GPRS DETACHED: no tether connection"));
+}
+
+/* This is emitted periodically when there is a GPRS connection.  */
+static void
+gprs_status (DBusGProxy *proxy, GHashTable *conns, gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+
+  uint64_t n = now ();
+
+  bool have_one = false;
+  void gprs_status_hash_cb (gpointer key_v, gpointer value_v,
+			    gpointer user_data2)
+  {
+    bool *have_onep = user_data2;
+    *have_onep = true;
+
+    const char *key = key_v;
+    GValueArray *value = value_v;
+
+    if (value->n_values != 7)
+      {
+	debug (0, "gprs_status: %s: got %d elements, not 7!",
+	       key, value->n_values);
+	return;
+      }
+
+    const char *apn = g_value_get_string (g_value_array_get_nth (value, 0));
+    const char *proto = g_value_get_string (g_value_array_get_nth (value, 1));
+    const char *iface = g_value_get_string (g_value_array_get_nth (value, 2));
+    const char *addr = g_value_get_string (g_value_array_get_nth (value, 3));
+    bool unknown = g_value_get_boolean (g_value_array_get_nth (value, 4));
+    uint64_t rx = g_value_get_uint64 (g_value_array_get_nth (value, 5));
+    uint64_t tx = g_value_get_uint64 (g_value_array_get_nth (value, 6));
+
+    debug (0, "apn: %s; protocol: %s; iface: %s; address: %s; unknown: %d; "
+	   "rx/tx: %"PRId64"/%"PRId64,
+	   apn, proto, iface, addr, unknown, rx, tx);
+  }
+  g_hash_table_foreach (conns, gprs_status_hash_cb, &have_one);
+
+  NCNetworkConnection *tether = connection_name_to_connection (m, "modem");
+
+  if (have_one)
+    /* We are attached to an APN.  There is no tethered
+       connection.  */
+    {
+      m->gprs_direct_connection = n;
+      if (tether)
+	{
+	  debug (0, "Device has a GPRS connection.  "
+		 "Destroying tethered connection.");
+	  connection_state_set (tether, CONNECTION_STATE_DISCONNECTED, false);
+	}
+      else
+	debug (0, "Device has a GPRS connection.  Assuming not tethered.");
+      return;
+    }
+
+  if (n - m->gprs_direct_connection < 4000)
+    /* We observed a direct GPRS connection a few seconds ago.  Wait a
+       bit before we create a tether connection.  */
+    {
+      debug (0, "Last direct gprs connection just "TIME_FMT" ago.  "
+	     "Ignoring gprs.status.",
+	     TIME_PRINTF (n - m->gprs_direct_connection));
+      return;
+    }
+
+  /* Looks like a tethered connection exists.  */
+  if (! tether)
+    /* We have not created the tether connection yet.  */
+    {
+      debug (0, "Device has a GPRS connection, which appears to be a tether.");
+      tether = nc_network_connection_new (m, "modem");
+      connection_add_device (tether, "modem");
+      connection_state_set (tether, CONNECTION_STATE_CONNECTED, true);
+    }
+  else if (tether->state != CONNECTION_STATE_CONNECTED)
+    {
+      debug (0, "Device has a GPRS connection, which appears to be a tether.  "
+	     "Tether connection exists, but not connected (%s), forcing.",
+	     connection_state_to_str (tether->state));
+
+      connection_state_set (tether, CONNECTION_STATE_CONNECTED, false);
+    }
 }
 
 /* Process network scan results.
@@ -891,6 +996,11 @@ start (gpointer user_data)
       g_error_free (error);
     }
 
+  /* Create the modem device.  */
+  NCNetworkDevice *d = nc_network_device_new
+    (m, "modem", "phonet0", NC_CONNECTION_MEDIUM_CELLULAR);
+  device_state_changed (d, DEVICE_STATE_DISCONNECTED);
+
   /* Don't run this idle handler again.  */
   return false;
 }
@@ -909,6 +1019,12 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
      "com.nokia.phone.net",
      "/com/nokia/phone/net",
      "Phone.Net");
+
+  m->gprs_proxy = dbus_g_proxy_new_for_name
+    (m->system_bus,
+     "com.nokia.csd.GPRS",
+     "/com/nokia/csd/gprs",
+     "com.nokia.csd.GPRS");
 
   /* addrinfo_sig.  */
   assssss = dbus_g_type_get_collection
@@ -951,6 +1067,35 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
   dbus_g_proxy_connect_signal (m->icd2_proxy, ICD_DBUS_API_STATE_SIG,
 			       G_CALLBACK (icd2_state_sig_cb),
 			       m, NULL);
+
+  /* com.nokia.csd.GPRS.Detached */
+  dbus_g_object_register_marshaller
+    (g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, G_TYPE_INVALID);
+
+  dbus_g_proxy_add_signal
+    (m->gprs_proxy, "Detached", G_TYPE_INVALID);
+  dbus_g_proxy_connect_signal (m->gprs_proxy, "Detached",
+			       G_CALLBACK (gprs_detached), m, NULL);
+
+  /* com.nokia.csd.GPRS.Status.  */
+  GType Sssssbtt = dbus_g_type_get_struct ("GValueArray",
+					   G_TYPE_STRING, G_TYPE_STRING,
+					   G_TYPE_STRING, G_TYPE_STRING,
+					   G_TYPE_BOOLEAN,
+					   G_TYPE_UINT64, G_TYPE_UINT64,
+					   G_TYPE_INVALID);
+  GType DoSSssssbtt = dbus_g_type_get_map ("GHashTable",
+					   DBUS_TYPE_G_OBJECT_PATH, Sssssbtt);
+
+  dbus_g_object_register_marshaller
+    (g_cclosure_user_marshal_VOID__BOXED,
+     G_TYPE_NONE, DoSSssssbtt, G_TYPE_INVALID);
+
+  dbus_g_proxy_add_signal
+    (m->gprs_proxy, "Status", DoSSssssbtt, G_TYPE_INVALID);
+
+  dbus_g_proxy_connect_signal (m->gprs_proxy, "Status",
+			       G_CALLBACK (gprs_status), m, NULL);
 
   /* scan_sig.  */
   dbus_g_object_register_marshaller
@@ -1060,6 +1205,7 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
     (m->phone_net_proxy, "operator_name_change",
      G_CALLBACK (phone_net_operator_name_change),
      m, NULL);
+
 
   nm_cell_info (m, NULL);
 

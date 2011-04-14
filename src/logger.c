@@ -190,8 +190,9 @@ nm_connection_dump (NCNetworkConnection *nc, const char *state)
 
       d = devices->data;
 
-#if 0
-      printf ("Interface: %s\n", d->interface);
+#if 1
+      printf ("%s: Interface: %s\n",
+	      nc_network_connection_id (nc), d->interface);
       char *medium = nc_connection_medium_to_string (d->medium);
       printf ("  Medium: %s\n", medium);
       g_free (medium);

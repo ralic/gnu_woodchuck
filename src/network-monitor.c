@@ -63,8 +63,8 @@
 
    The system is represented by the network monitor.  There is exactly
    one instance of the network monitor.  This object is needed to
-   detected new devices and to let the user know about new
-   connections (some object is need to get gobject signals).
+   detect new devices and to let the user know about new connections
+   (some object is need to get gobject signals).
 
    A network device represents network devices: ethernet cards, WiFi
    cards, etc.  Network devices may be added or removed while the
@@ -248,10 +248,14 @@ struct _NCNetworkMonitor
      Object: ICD_DBUS_API_PATH
      Interface: ICD_DBUS_API_INTERFACE  */
   DBusGProxy *icd2_proxy;
-  /* Proxy object for the phone net.
+  /* Proxy object for the phone net service.
      Object: /com/nokia/phone/net
      Interface: "Phone.Net"  */
   DBusGProxy *phone_net_proxy;
+  /* Proxy object for the GRPS services.
+     Object: /com/nokia/csd/GPRS
+     Interface: "com.nokia.csd.GPRS"  */
+  DBusGProxy *gprs_proxy;
 #endif
 
   /* List of currently attached devices (NCNetworkDevice).  Recall: a
@@ -299,6 +303,15 @@ struct _NCNetworkMonitor
   /* Cell info for the currently connected tower.  */
   struct nm_cell cell_info;
 #endif
+
+#if HAVE_ICD2
+  /* After ICD2 indicates that a direct GPRS connection (i.e.,
+     non-tethered connection) goes down, we still get some empty
+     gprs.Status signals.  This suggests We don't want to build up a
+     new tethered connection.  To prevent this, we ignore such
+     messages if they occur shortly after a detached message.  */
+  uint64_t gprs_direct_connection;
+#endif
 };
 
 static void nc_network_monitor_state_dump (NCNetworkMonitor *m);
@@ -343,7 +356,17 @@ device_name_to_device (NCNetworkMonitor *network_monitor,
 	return d;
     }
 
-  debug (0, "Device %s unknown.", device);
+  GString *s = g_string_new ("");
+  g_string_append_printf (s, "Device %s unknown. %d known devices:",
+			  device, g_list_length (network_monitor->devices));
+  for (e = network_monitor->devices; e; e = e->next)
+    {
+      NCNetworkDevice *d = NC_NETWORK_DEVICE (e->data);
+      g_string_append_printf (s, " %s", d->name);
+    }
+  debug (0, "%s", s->str);
+  g_string_free (s, true);
+
   return NULL;
 }
 
@@ -763,6 +786,14 @@ nc_network_connection_info (NCNetworkConnection *c, uint32_t mask)
 
   GList *ret = NULL;
 
+  if (! c->per_connection_device_state)
+    /* This connection has not been published yet.  */
+    {
+      debug (0, "Connection %s has no device state",
+	     c->name);
+      return NULL;
+    }
+
   GList *e;
   for (e = c->per_connection_device_state; e; e = e->next)
     {
@@ -922,7 +953,7 @@ nc_network_connection_info (NCNetworkConnection *c, uint32_t mask)
 	    if (strcmp (interface, d->interface) != 0)
 	      /* Interface does not match.  */
 	      {
-		debug (0, "Got interface '%s', want '%s'",
+		debug (5, "Got interface '%s', want '%s'",
 		       interface, d->interface);
 		return true;
 	      }
@@ -943,8 +974,8 @@ nc_network_connection_info (NCNetworkConnection *c, uint32_t mask)
 		 interface.  */
 	      {
 		uint32_t ip = strtol (fields[1], NULL, 16);
-		debug (0, "Got gateway: %s",
-		       inet_ntoa ((struct in_addr) { ip }));
+		debug (1, "gateway: %s via %s",
+		       inet_ntoa ((struct in_addr) { ip }), d->interface);
 		
 		info->gateway4[0] = (ip >> 0) & 0xFF;
 		info->gateway4[1] = (ip >> 8) & 0xFF;
