@@ -688,64 +688,6 @@ nm_init (void)
   logger_uploader_table_register (db_filename, "access_point_scan", true);
   logger_uploader_table_register (db_filename, "access_point_log", true);
 
-#if 0
-  char *errmsg = NULL;
-  err = sqlite3_exec (db,
-		      /* ID is the id of the connection.  It is
-			 corresponds to the ROWID in CONNECTIONS.  */
-		      "create table if not exists connection_log "
-		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
-		      "  "SQL_TIME_COLS","
-		      "  service_type, service_attributes, service_id,"
-		      "  network_type, network_attributes, network_id, status,"
-		      "  rx, tx);"
-
-		      /* ID is the id of the connection.  It is
-			 corresponds to the ROWID in CONNECTIONS.  */
-		      "create table if not exists stats_log"
-		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
-		      "  year, yday, hour, min, sec,"
-		      "  service_type, service_attributes, service_id,"
-		      "  network_type, network_attributes, network_id,"
-		      "  time_active, signal_strength, sent, received);"
-
-		      /* Time that a scan was initiated.  ROWID
-			 corresponds to ID in scan_log.  */
-		      "create table if not exists scans"
-		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
-		      "  year, yday, hour, min, sec);"
-
-		      /* ID corresponds to the ROWID of the scans table.  */
-		      "create table if not exists scan_log"
-		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT, id,"
-		      "  status, last_seen,"
-		      "  service_type, service_name, service_attributes,"
-		      "	 service_id, service_priority,"
-		      "	 network_type, network_name, network_attributes,"
-		      "	 network_id, network_priority,"
-		      "	 signal_strength, signal_strength_db,"
-		      "  station_id);"
-
-		      "create table if not exists cell"
-		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT, "
-		      "  year, yday, hour, min, sec,"
-		      "  status, lac, cell_id, network, country, "
-		      "  network_type, services);",
-		      NULL, NULL, &errmsg);
-  if (errmsg)
-    {
-      debug (0, "%d: %s", err, errmsg);
-      sqlite3_free (errmsg);
-      errmsg = NULL;
-    }
-
-  logger_uploader_table_register (db_filename, "connection_log", true);
-  logger_uploader_table_register (db_filename, "stats_log", true);
-  logger_uploader_table_register (db_filename, "scans", true);
-  logger_uploader_table_register (db_filename, "scan_log", true);
-  logger_uploader_table_register (db_filename, "cell", true);
-#endif
-
   /* Initialize the network monitor.  */
   nm = nc_network_monitor_new ();
 
