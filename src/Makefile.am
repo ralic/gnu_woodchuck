@@ -1,4 +1,4 @@
-bin_PROGRAMS = netczar logger process-tracer
+bin_PROGRAMS = netczar smart-storage-logger process-tracer
 
 AM_CFLAGS = -Wall -g -O2 -std=gnu99 $(BASE_CFLAGS)
 AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -DPKGDATADIR=\"$(pkgdatadir)\"
@@ -65,8 +65,11 @@ netczar_SOURCES = $(common_sources) netczar.c \
 	org.walfield.NetCzar-server.h
 netczar_LDADD = $(BASE_LIBS)
 
-logger_SOURCES = $(common_sources) logger.c logger-uploader.h logger-uploader.c
-logger_LDADD = $(BASE_LIBS)
+smart_storage_logger_SOURCES = $(common_sources) \
+	smart-storage-logger.c \
+	smart-storage-logger-uploader.h smart-storage-logger-uploader.c
+smart_storage_logger_CPPFLAGS = $(AM_CPPFLAGS)
+smart_storage_logger_LDADD = $(BASE_LIBS)
 
 process_tracer_CPPFLAGS = $(AM_CPPFLAGS) -DPROCESS_TRACER_STANDALONE
 process_tracer_LDADD = $(BASE_LIBS)

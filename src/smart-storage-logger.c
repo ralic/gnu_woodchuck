@@ -12,7 +12,7 @@
 #include "debug.h"
 #include "util.h"
 #include "files.h"
-#include "logger-uploader.h"
+#include "smart-storage-logger-uploader.h"
 
 #include "signal-handler.h"
 
