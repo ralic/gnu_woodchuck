@@ -12,6 +12,7 @@
 #include "files.h"
 #include <sqlite3.h>
 static __thread sqlite3 *debug_output_file;
+static char *debug_output_filename;
 #endif
 
 #if !defined(DEBUG_ELIDE)
@@ -79,20 +80,21 @@ debug_ (const char *file, const char *function, int line,
   va_end (ap);
 }
 
-void
+const char *
 debug_init_ (void)
 {
 #ifdef LOG_TO_DB
   if (debug_output_file)
-    return;
+    return debug_output_filename;
 
-  char *filename = log_file ("log.db");
+  if (! debug_output_filename)
+    debug_output_filename = files_logfile (DEBUG_OUTPUT_FILENAME);
 
   sqlite3 *db;
-  int err = sqlite3_open (filename, &db);
+  int err = sqlite3_open (debug_output_filename, &db);
   if (err)
     error (1, 0, "sqlite3_open (%s): %s",
-	   filename, sqlite3_errmsg (db));
+	   debug_output_filename, sqlite3_errmsg (db));
 
   debug_output_file = db;
 
@@ -117,7 +119,9 @@ debug_init_ (void)
       errmsg = NULL;
     }
 
-  uploader_table_register (filename, "log", true);
+  return debug_output_filename;
+#else
+  return NULL;
 #endif
 }
 

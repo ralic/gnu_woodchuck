@@ -20,6 +20,7 @@
 #include <stdio.h>
 #include <error.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <glib.h>
 #include <dbus/dbus-glib.h>
 #include <dbus/dbus-glib-bindings.h>
@@ -29,6 +30,7 @@
 #include "debug.h"
 #include "util.h"
 #include "files.h"
+#include "pidfile.h"
 #include "smart-storage-logger-uploader.h"
 
 #include "signal-handler.h"
@@ -207,7 +209,7 @@ nm_connection_dump (NCNetworkConnection *nc, const char *state)
 
       d = devices->data;
 
-#if 1
+#if 0
       printf ("%s: Interface: %s\n",
 	      nc_network_connection_id (nc), d->interface);
       char *medium = nc_connection_medium_to_string (d->medium);
@@ -1235,6 +1237,55 @@ main (int argc, char *argv[])
 
   g_type_init ();
   g_thread_init (NULL);
+
+  debug (0, "smart-storage-logger compiled on %s %s", __DATE__, __TIME__);
+
+  /* Check if the pid file is locked before forking.  If it is locked
+     bail.  Otherwise, fork and then acquire it definitively.  */
+  char *pidfilename = files_logfile ("pid");
+  const char *ssl = "smart-storage-logger";
+  pid_t owner = pidfile_check (pidfilename, ssl);
+  if (owner)
+    error (1, 0, "%s already running (pid: %d)", ssl, owner);
+
+  char *log = files_logfile ("output");
+  debug (0, "Daemonizing.  Further output will be sent to %s", log);
+
+  /* See if we should fork.  */
+  bool do_fork = true;
+  {
+    int i;
+    for (i = 0; i < argc; i ++)
+      if (strcmp (argv[i], "--no-fork") == 0)
+	do_fork = false;
+  }
+  if (do_fork)
+    {
+      int err = daemon (0, 0);
+      if (err)
+	error (0, err, "Failed to daemonize");
+    }
+
+  /* Redirect stdout and stderr to the log file.  */
+  {
+    int log_fd = open (log, O_WRONLY | O_CREAT | O_APPEND, 0660);
+    dup2 (log_fd, STDOUT_FILENO);
+    dup2 (log_fd, STDERR_FILENO);
+    if (! (log_fd == STDOUT_FILENO || log_fd == STDERR_FILENO))
+      close (log_fd);
+  }
+  free (log);
+
+  /* Acquire the lock file.  */
+  if ((owner = pidfile_acquire (pidfilename, ssl)))
+    error (1, 0, "%s already running (pid: %d)", ssl, owner);
+  free (pidfilename);
+
+
+  /* Register the debug table for upload.  */
+  const char *debug_output = debug_init_ ();
+  logger_uploader_table_register (debug_output, "log", true);
+
 
   /* Open the logging DB.  */
   db_filename = files_logfile ("ssl.db");

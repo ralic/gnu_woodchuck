@@ -6,6 +6,10 @@
 #include <stdlib.h>
 #include <time.h>
 
+/* The file to send output to (only used if logging to a file, see
+   e.g. LOG_TO_DB).  */
+#define DEBUG_OUTPUT_FILENAME "debug-output.db"
+
 /* Convenient debugging macros.  */
 #define DEBUG_BOLD_BEGIN "\033[01;31m"
 #define DEBUG_BOLD_END "\033[00m"
@@ -45,7 +49,8 @@ extern void debug_(const char *file, const char *function, int line,
     {									\
       do_debug (level)							\
         {								\
-	  debug_ (strrchr (__FILE__, '/') ?: __FILE__,			\
+	  const char *__d_fn = __builtin_strrchr (__FILE__, '/');	\
+	  debug_ (__d_fn ? __d_fn + 1 : __FILE__,			\
 		  __func__, __LINE__,					\
 		  __builtin_return_address (0),				\
 		  level, fmt, ##__VA_ARGS__);				\
@@ -53,11 +58,13 @@ extern void debug_(const char *file, const char *function, int line,
     }									\
   while (0)
 
-extern void debug_init_ ();
+/* Returns the absolute filename of the file used for debugging
+   output, or NULL if not sending output to a file.  */
+extern const char *debug_init_ ();
 
 #define debug_init()							\
   do_debug (0)								\
-  debug_init_ ();							\
+    debug_init_ ();							\
   else									\
     {									\
       extern int output_debug __attribute__ ((weak));			\
