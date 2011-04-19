@@ -1,5 +1,5 @@
 AC_PREREQ([2.59])
-AC_INIT(netczar, 0.0, neal@walfield.org)
+AC_INIT(woodchuck, 0.2, neal@walfield.org)
 AC_CONFIG_AUX_DIR([build-aux])
 AM_INIT_AUTOMAKE()
 AC_CONFIG_SRCDIR([src/netczar.c])

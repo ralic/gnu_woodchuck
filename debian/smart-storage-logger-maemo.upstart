@@ -1,0 +1,27 @@
+author "Neal H. Walfield <neal@cs.jhu.edu>"
+description "Smart storage logger.  See http://hssl.cs.jhu.edu/~neal/smart-storage"
+
+start on started hildon-desktop
+stop on ACT_DEAD
+stop on starting shutdown
+
+console none
+
+# Make sure the user's dbus session bus is accessible.
+script
+	USER=`whoami`
+	if [ x"$USER" = xroot ]; 
+	then
+	  USER=user
+	fi
+	source /tmp/session_bus_address.$USER
+
+	/usr/sbin/waitdbus system
+	/usr/sbin/waitdbus session
+
+	exec /usr/bin/smart-storage-logger --no-fork
+end script
+
+respawn
+nice 5
+
