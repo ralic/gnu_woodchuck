@@ -612,6 +612,10 @@ nm_init (void)
 		      " DID3 NOT NULL DEFAULT 'NONE',"
 		      " DID4 NOT NULL DEFAULT 'NONE',"
 		      " UNIQUE (DID1, DID2, DID3, DID4));"
+		      "create index if not exists"
+		      " connection_configuration_index"
+		      " on connection_configuration"
+		      " (DID1, DID2);"
 
 		      /* List of known device configurations.  AP is
 			 the access point for WiFi, the network
@@ -629,6 +633,9 @@ nm_init (void)
 		      " AP NOT NULL DEFAULT 'NONE',"
 		      " UNIQUE (IFACE, MEDIUM, IP4, IP6, GW4, GW6, GWMAC, AP)"
                       ");"
+		      "create index if not exists device_configuration_index"
+		      " on device_configuration"
+		      " (IFACE, MEDIUM, IP4, IP6, GW4, GW6, GWMAC, AP);"
 
 		      /* CID is the connection's stable identifier.
 			 CONNECTION_CONFIGURATION is the OID of the
@@ -655,6 +662,9 @@ nm_init (void)
 		      "  network_type NOT NULL DEFAULT 'NONE',"
 		      "  UNIQUE (user_id, station_id, network_id,"
 		      "   network_type));"
+		      "create index if not exists access_point_index"
+		      " on access_point"
+		      " (user_id, station_id, network_id, network_type);"
 
 		      "create table if not exists access_point_scan"
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -682,6 +692,10 @@ nm_init (void)
 		      "  operator,"
 		      "  UNIQUE (lac, cell_id, network, country, network_type,"
 		      "    operator));"
+		      "create index if not exists cells_index"
+		      " on cells"
+		      " (lac, cell_id, network, country, network_type,"
+		      "  operator);"
 
 		      "create table if not exists cell_info"
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
@@ -821,6 +835,8 @@ bm_init (void)
 		      " (id INTEGER PRIMARY KEY,"
 		      "  device, voltage_design, mah_design,"
 		      "  UNIQUE (device));"
+		      "create index if not exists batteries_device_index"
+		      " on batteries (device);"
 
 		      /* ID is the ID of the battery in the BATTERIES
 			 table.  */
