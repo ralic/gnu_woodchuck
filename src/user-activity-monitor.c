@@ -240,7 +240,7 @@ wc_user_activity_monitor_status (WCUserActivityMonitor *m)
 }
 
 int64_t
-wc_user_activity_monitor_status_time (WCUserActivityMonitor *m)
+wc_user_activity_monitor_idle_time (WCUserActivityMonitor *m)
 {
   uint64_t n = now ();
 
