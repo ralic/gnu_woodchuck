@@ -64,5 +64,6 @@ AC_SUBST(GLIB_GENMARSHAL)
 AC_CONFIG_FILES([Makefile
 		src/Makefile
 		include/Makefile
-		include/netczar/Makefile])
+		include/netczar/Makefile
+		data/Makefile])
 AC_OUTPUT

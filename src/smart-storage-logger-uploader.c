@@ -1,5 +1,5 @@
-/* logger-uploader.c - Uploader.
-   Copyright (C) 2010 Neal H. Walfield <neal@walfield.org>
+/* smart-storage-logger-uploader.c - Uploader.
+   Copyright (C) 2010, 2011 Neal H. Walfield <neal@walfield.org>
 
    Woodchuck is free software; you can redistribute it and/or
    modify it under the terms of the GNU General Public License as
@@ -27,13 +27,16 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <sqlite3.h>
-#include <dbus/dbus.h>
+#include <glib.h>
 
 #include "debug.h"
 #include "sqlq.h"
 #include "util.h"
 #include "sqlq.h"
 #include "files.h"
+
+#include "network-monitor.h"
+#include "user-activity-monitor.h"
 
 #define obstack_chunk_alloc malloc
 #define obstack_chunk_free free
@@ -212,6 +215,172 @@ sanitize_strings (char *s1, char *s2)
   return s;
 }
 
+static const char *
+uuid (void)
+{
+  static char *my_uuid = NULL;
+  if (my_uuid)
+    return my_uuid;
+
+  /* First, open the database.  */
+
+  char *filename = files_logfile ("uuid.db");
+
+  sqlite3 *db;
+  int err = sqlite3_open (filename, &db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   filename, sqlite3_errmsg (db));
+
+  /* Sleep up to an hour if the database is busy...  */
+  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+
+  char *errmsg = NULL;
+  err = sqlite3_exec (db,
+		      "create table if not exists uuid (uuid PRIMARY KEY);",
+		      NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  logger_uploader_table_register (filename, "uuid", false);
+
+  /* Find the computer's UUID.  */
+  int got = 0;
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    assert (argc == 1);
+    assert (! got);
+    my_uuid = strdup (argv[0]);
+    got ++;
+
+    return 0;
+  }
+  sqlite3_exec (db, "select uuid from uuid;", callback, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%s: %s", filename, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  if (my_uuid)
+    /* Got it!  */
+    {
+      debug (0, "UUID is %s", my_uuid);
+
+      sqlite3_close (db);
+      free (filename);
+      return my_uuid;
+    }
+
+  /* We need to generate a UUID.  */
+
+  union
+  {
+    char str[33];
+    uint32_t num[8];
+  } uuid;
+  memset (uuid.str, '0', 32);
+  uuid.str[32] = 0;
+  FILE *input
+    = popen ("( ps aux; date; date +%N; echo $RANDOM; echo $RANDOM; echo $$;"
+	     " uptime ) | md5sum", "r");
+  if (input)
+    {
+      fread (uuid.str, 1, sizeof (uuid.str) - 1, input);
+      pclose (input);
+    }
+  else
+    debug (0, "Running (...) | md5sum: %m");
+
+  debug (0, "uuid first phase: %s", uuid.str);
+
+  void inplode (char in[32], char out[16])
+  {
+    int c2i (char c)
+    {
+      if ('0' <= c && c <= '9')
+	return c - '0';
+      if ('a' <= c && c <= 'f')
+	return c - 'a' + 10;
+      if ('A' <= c && c <= 'F')
+	return c - 'a' + 10;
+      return 0;
+    }
+
+    int i;
+    for (i = 0; i < 32; i += 2)
+      out[i/2] = c2i (in[i]) | (c2i (in[i + 1]) << 4);
+  }
+  inplode (uuid.str, uuid.str);
+
+  uuid.num[0] ^= time (NULL);
+  uuid.num[1] ^= getpid ();
+
+  struct timeval tv;
+  gettimeofday (&tv, NULL);
+  uuid.num[2] ^= tv.tv_usec;
+
+  union
+  {
+    double db[3];
+    int num[0];
+  } loadavg;
+  getloadavg (loadavg.db, sizeof (loadavg.db) / sizeof (loadavg.db[0]));
+  int x = 0;
+  int i;
+  for (i = 0; i < sizeof (loadavg) / sizeof (loadavg.num[0]); i ++)
+    x += loadavg.num[i];
+  uuid.num[3] ^= x;
+
+  void explode (char in[16], char out[32])
+  {
+    char i2c (int i)
+    {
+      if (i < 10)
+	return '0' + i;
+      else if (i < 16)
+	return 'a' + i - 10;
+      assert (! "Bad i");
+    }
+
+    for (i = 0; i < 16; i ++)
+      {
+	out[i * 2] = i2c (((unsigned char) in[i]) & 0xF);
+	out[i * 2 + 1] = i2c ((((unsigned char) in[i]) >> 4) & 0xF);
+      }
+  }
+
+  char result[33];
+  result[32] = 0;
+  explode (uuid.str, result);
+  my_uuid = strdup (result);
+
+  debug (0, "uuid final: %s", my_uuid);
+
+  /* Save the UUID.  */
+  sqlite3_exec_printf (db,
+		       "insert into uuid values (%Q);",
+		       NULL, NULL, &errmsg, my_uuid);
+  if (errmsg)
+    {
+      debug (0, "%s", errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  sqlite3_close (db);
+  free (filename);
+
+  debug (0, "Generated UUID %s", my_uuid);
+
+  return my_uuid;
+}
+
 static bool
 upload (void)
 {
@@ -245,6 +414,10 @@ upload (void)
   char *upload_db = files_logfile ("upload.db");
   obstack_printf (&flush, "attach '%s' as uploader; begin transaction;",
 		  upload_db);
+
+  /* Get the UUID and thereby ensure that the UUID table is
+     registered.  This requires the dbs_lock.  */
+  const char *my_uuid = uuid ();
 
   pthread_mutex_lock (&dbs_lock);
 
@@ -339,7 +512,6 @@ upload (void)
 	 TIME_PRINTF (mid - start),
 	 TIME_PRINTF (end - mid));
 
-  extern const char *uuid (void);
   char *cmd = NULL;
   asprintf (&cmd,
 	    "wget --tries=1 --post-file='%s'"
@@ -347,7 +519,7 @@ upload (void)
 	    " -O /dev/stdout -o /dev/stdout"
 	    " --ca-certificate="PKGDATADIR"/ssl-receiver.cert"
 	    " https://hssl.cs.jhu.edu:9321/%s 2>&1",
-	    filename, uuid ());
+	    filename, my_uuid);
   debug (0, "Executing %s", cmd);
   FILE *wget = popen (cmd, "r");
   free (cmd);
@@ -373,12 +545,19 @@ upload (void)
   obstack_1grow (&wget_output_obstack, 0);
   wget_output = obstack_finish (&wget_output_obstack);
 
+  /* Note: wget_status is as waitpid's status.  Because we do an open
+     waitpid, pclose might not actually return the child's status but
+     -1.  Instead, we grok the output.  */
   wget_status = pclose (wget);
-  debug (0, "wget returned %d (%s, %d)",
-	 wget_status, wget_output, (int) strlen (wget_output));
+  debug (0, "wget returned %d (exit code: %d) (%s, %d)",
+	 wget_status, WEXITSTATUS (wget_status),
+	 wget_output, (int) strlen (wget_output));
 
-  if (wget_status != 0)
-    /* An error occured.  Try again later.  */
+  if (strstr (wget_output, "\nDanke\n"))
+    /* We got the expected server response.  */
+    debug (1, "got expected server response.");
+  else
+    /* Assume an error occured.  */
     goto out;
 
   char *wget_output_quoted = sqlite3_mprintf ("%Q", wget_output);
@@ -437,424 +616,177 @@ upload (void)
   free (filename);
   return ret;
 }
-
-void
-logger_uploader_init (void)
-{
-#if 0
-  /* First, open the database.  */
-  sqlite3 *db = uploader_db ();
-
-  /* We connect to the system bus to monitor when a network connection
-     is available.  */
-  DBusError error;
-  dbus_error_init (&error);
-
-  DBusConnection *connection = dbus_bus_get_private (DBUS_BUS_SYSTEM, &error);
-  if (connection == NULL)
-    {
-      debug (0, "Failed to open connection to bus: %s", error.message);
-      dbus_error_free (&error);
-      return NULL;
-    }
-
-  /* Set up signal watchers.  */
-  {
-    char *matches[] =
-      { /* For network state changes. */
-	"type='signal',"
-	"interface='"ICD_DBUS_API_INTERFACE"',"
-	"member='"ICD_DBUS_API_STATE_SIG"',"
-	"path='"ICD_DBUS_API_PATH"'",
-
-	/* For activity/inactivity state changes. */
-	"type='signal',"
-	"interface='com.nokia.mce.signal',"
-	"member='system_inactivity_ind',"
-	"path='/com/nokia/mce/signal'",
-      };
-
-    int i;
-    for (i = 0; i < sizeof (matches) / sizeof (matches[0]); i ++)
-      {
-	char *match = matches[i];
-
-	debug (2, "Adding match %s", match);
-	dbus_bus_add_match (connection, match, &error);
-	if (dbus_error_is_set (&error))
-	  {
-	    debug (0, "Error adding match %s: %s", match, error.message);
-	    dbus_error_free (&error);
-	  }
-      }
-  }
-
-  int64_t connected = 0;
-  int64_t inactive = 0;
-
-  char buffer[16 * 4096];
-  struct sqlq *sqlq = sqlq_new_static (db, buffer, sizeof (buffer));
-
-  DBusHandlerResult uploader_callback (DBusConnection *connection,
-				       DBusMessage *message, void *user_data)
-  {
-    do_debug (5)
-      {
-	debug (0, "Got message (%p): %s->%s (%d args)",
-	       message, dbus_message_get_path (message),
-	       dbus_message_get_member (message),
-	       dbus_message_args_count (message));
-	// print_message (message, false);
-      }
-
-    if (dbus_message_has_path (message, ICD_DBUS_API_PATH)
-	&& dbus_message_is_signal (message,
-				   ICD_DBUS_API_INTERFACE,
-				   ICD_DBUS_API_STATE_SIG))
-      {
-	const char *status_to_str (uint32_t status)
-	{
-	  switch (status)
-	    {
-	    case ICD_STATE_DISCONNECTED: return "disconnected";
-	    case ICD_STATE_CONNECTING: return "connecting";
-	    case ICD_STATE_CONNECTED: return "connected";
-	    case ICD_STATE_DISCONNECTING: return "disconnecting";
-	    case ICD_STATE_LIMITED_CONN_ENABLED: return "limited enabled";
-	    case ICD_STATE_LIMITED_CONN_DISABLED: return "limited disabled";
-	    case ICD_STATE_SEARCH_START: return "search start";
-	    case ICD_STATE_SEARCH_STOP: return "search stop";
-	    case ICD_STATE_INTERNAL_ADDRESS_ACQUIRED:
-	      return "internal address acquired";
-	    default:
-	      debug (0, "Unknown network status code %d", status);
-	      return "unknown";
-	    }
-	}
-	char *service_type = NULL;
-	uint32_t service_attributes = 0;
-	char *service_id = NULL;
-	char *network_type = NULL;
-	uint32_t network_attributes = 0;
-	char *network_id = NULL;
-	int network_id_len = 0;
-	char *conn_error = NULL;
-	int32_t status = 0;
-
-	DBusError error;
-	dbus_error_init (&error);
-
-	int args = dbus_message_args_count (message);
-	switch (args)
-	  {
-	  case 8:
-	    /* State of connection.  */
-	    if (! dbus_message_get_args (message, &error,
-					 DBUS_TYPE_STRING, &service_type,
-					 DBUS_TYPE_UINT32, &service_attributes,
-					 DBUS_TYPE_STRING, &service_id,
-					 DBUS_TYPE_STRING, &network_type,
-					 DBUS_TYPE_UINT32, &network_attributes,
-					 DBUS_TYPE_ARRAY, DBUS_TYPE_BYTE,
-					 &network_id, &network_id_len,
-					 DBUS_TYPE_STRING, &conn_error,
-					 DBUS_TYPE_UINT32, &status,
-					 DBUS_TYPE_INVALID))
-	      {
-		debug (0, "Failed to grok "ICD_DBUS_API_STATE_SIG" reply: %s",
-		       error.message);
-		dbus_error_free (&error);
-	      }
-	    else
-	      {
-		debug (1, "Service: %s; %x; %s; "
-		       "Network: %s; %x; %s; status: %s",
-		       service_type, service_attributes, service_id,
-		       network_type, network_attributes, network_id,
-		       status_to_str (status));
-
-		if (status == ICD_STATE_CONNECTING)
-		  {
-		    debug (0, "Connecting to %s.", network_type);
-		    if (strncmp (network_type, "WLAN_", 5) == 0)
-		      {
-			debug (0, "Setting connected timer (was: "TIME_FMT").",
-			       TIME_PRINTF (connected == 0
-					    ? -1 : now () - connected));
-			connected = now ();
-		      }
-		  }
-		if (status == ICD_STATE_CONNECTED)
-		  {
-		    debug (0, "Connected to %s.", network_type);
-		    if (strncmp (network_type, "WLAN_", 5) == 0
-			&& ! connected)
-		      {
-			debug (0, "Setting connected timer (was: "TIME_FMT").",
-			       TIME_PRINTF (connected == 0
-					    ? -1 : now () - connected));
-			connected = now ();
-		      }
-		  }
-
-		if (status == ICD_STATE_DISCONNECTED)
-		  /* It is possible that there is another connection
-		     that is active.  This happens when changing
-		     connections: the old connection is only
-		     disconnected after the new connection has been
-		     connected.  To determine the current real state,
-		     we reset the connected timer to 0 (= not
-		     connected) and then send a state request.  If we
-		     are connected, we'll get an ICD_STATE_CONNECTED
-		     signal and if appropriate, this will set
-		     CONNECTED.  */
-		  {
-		    debug (0, "Disconnected from %s", network_type);
-		    debug (0, "Reseting connected timer (was: "TIME_FMT").",
-			   TIME_PRINTF (connected == 0
-					? -1 : now () - connected));
-		    connected = 0;
-
-		    DBusMessage *message = dbus_message_new_method_call
-		      (/* Service.  */ ICD_DBUS_API_INTERFACE,
-		       /* Object.  */ ICD_DBUS_API_PATH,
-		       /* Interface.  */ ICD_DBUS_API_INTERFACE,
-		       /* Method.  */ ICD_DBUS_API_STATE_REQ);
-
-		    dbus_connection_send (connection, message, NULL);
-		    dbus_message_unref (message);
-		  }
-	      }
-	  case 2:
-	    /* Broadcast when a network search begins or ends.  */
-	  case 1:
-	    /* Broadcast at startup if there are no connections.  */
-	  default:
-	    ;
-	  }
-      }
-    else if (dbus_message_has_path (message, "/com/nokia/mce/signal")
-	     && dbus_message_is_signal (message,
-					"com.nokia.mce.signal",
-					"system_inactivity_ind"))
-      {
-	bool inactive_p = false;
-	if (! dbus_message_get_args (message, &error,
-				     DBUS_TYPE_BOOLEAN, &inactive_p,
-				     DBUS_TYPE_INVALID))
-	  {
-	    debug (0, "Failed to grok system_inactivity_ind: %s",
-		   error.message);
-	    dbus_error_free (&error);
-	  }
-	else
-	  {
-	    debug (1, "Inactive: %s", inactive_p ? "yes" : "no");
-	    if (inactive_p)
-	      inactive = now ();
-	    else
-	      inactive = 0;
-	  }
-      }
-    else
-      {
-	debug (5, "Ignoring irrelevant method: %s",
-	       dbus_message_get_member (message));
-	return DBUS_HANDLER_RESULT_NOT_YET_HANDLED;
-      }
-
-    return DBUS_HANDLER_RESULT_HANDLED;
-  }
-  if (! dbus_connection_add_filter (connection, uploader_callback, NULL, NULL))
-    debug (0, "Failed to add filter: out of memory");
-
-
-  /* Discover the state of any ongoing network connections.  */
-  {
-    DBusMessage *message = dbus_message_new_method_call
-      (/* Service.  */ ICD_DBUS_API_INTERFACE,
-       /* Object.  */ ICD_DBUS_API_PATH,
-       /* Interface.  */ ICD_DBUS_API_INTERFACE,
-       /* Method.  */ ICD_DBUS_API_STATE_REQ);
-
-    dbus_connection_send (connection, message, NULL);
-    dbus_message_unref (message);
-  }
-
-
-  /* Discover the device's activity state.  */
-  {
-    DBusMessage *message = dbus_message_new_method_call
-      (/* Service.  */  "com.nokia.mce",
-       /* Object.  */ "/com/nokia/mce/request",
-       /* Interface.  */ "com.nokia.mce.request",
-       /* Method.  */ "get_inactivity_status");
-
-    DBusMessage *reply = dbus_connection_send_with_reply_and_block
-      (connection, message, 60 * 1000, &error);
-    dbus_message_unref (message);
-    if (reply)
-      {
-	bool inactive_p = false;
-	if (! dbus_message_get_args (reply, &error,
-				     DBUS_TYPE_BOOLEAN, &inactive_p,
-				     DBUS_TYPE_INVALID))
-	  {
-	    debug (0, "Failed to grok system_inactivity_ind: %s",
-		   error.message);
-	    dbus_error_free (&error);
-	  }
-	else
-	  {
-	    debug (1, "Inactive: %s", inactive_p ? "yes" : "no");
-	    if (inactive_p)
-	      inactive = now ();
-	    else
-	      inactive = 0;
-	  }
-	dbus_message_unref (reply);
-      }
-    else
-      {
-	debug (0, "Failed to grok system_inactivity_ind: %s",
-	       error.message);
-	dbus_error_free (&error);
-      }
-  }
-
-
-  void cleanup (void *arg)
-  {
-    sqlq_flush (sqlq);
-  }
-  pthread_cleanup_push (cleanup, NULL);
-
-#if 0
-#define MIN_CONNECT_TIME (5 * 1000)
-#define SYNC_AGE (10 * 1000)
-#define INACTIVITY (5 * 1000)
+
+#if 1
+/* Don't start uploading unless we've been connected this long.  */
+# define MIN_CONNECT_TIME (5 * 60 * 1000)
+/* Upload data when it is this old.  */
+# define SYNC_AGE (24 * 60 * 60 * 1000)
+/* The amount of time that the system must be idle.  */
+# define MIN_INACTIVITY (2 * 60 * 1000)
 #else
-  /* Don't start uploading unless we've been connected this long.  */
-#define MIN_CONNECT_TIME (5 * 60 * 1000)
-  /* Upload data when it is this old.  */
-#define SYNC_AGE (24 * 60 * 60 * 1000)
-  /* The amount of time that the system must be idle.  */
-#define INACTIVITY (2 * 60 * 1000)
+/* Short values for debugging.  */
+# define MIN_CONNECT_TIME (5 * 1000)
+# define SYNC_AGE (10 * 1000)
+# define MIN_INACTIVITY (5 * 1000)
 #endif
   /* If we fail to upload wait about 5% of SYNC_AGE before trying
      again.  */
 #define UPLOAD_RETRY_INTERVAL (SYNC_AGE / 20)
 
-  int64_t last_upload = 0;
-  int64_t last_upload_try = 0;
-  {
-    /* Try to recover LAST_UPLOAD and LAST_UPLAOD_TRY.  If we fail, it
-       is okay: the defaults are reasonable.  */
-    int callback (void *cookie, int argc, char **argv, char **names)
+/* The time at which we got an acceptable default route.  */
+static uint64_t connected;
+/* The time the user went inactive (0 if the user is active).  */
+static uint64_t inactive;
+
+/* The time of the last (successful) upload.  */
+static uint64_t last_upload = 0;
+/* The last time we tried to upload.  */
+static uint64_t last_upload_try = 0;
+
+static guint upload_maybe_source_id;
+
+/* Check if all predicates have been met for a synchronization.  */
+static gboolean
+upload_maybe (gpointer user_data)
+{
+  uint64_t n = now ();
+
+  debug (1, "Acceptable connection for "TIME_FMT"; inactive for "TIME_FMT"; "
+	 "last upload "TIME_FMT" ago; last upload try "TIME_FMT" ago",
+	 TIME_PRINTF (n - connected),
+	 TIME_PRINTF (inactive == 0 ? 0 : (n - inactive)),
+	 TIME_PRINTF (n - last_upload),
+	 TIME_PRINTF (n - last_upload_try));
+
+  if (connected && n - connected >= MIN_CONNECT_TIME
+      && inactive && n - inactive >= MIN_INACTIVITY
+      && n - last_upload >= SYNC_AGE
+      && n - last_upload_try >= UPLOAD_RETRY_INTERVAL)
+    /* Time to do an update!  */
     {
-      debug (0, "last_upload: %s; last_upload_try: %s", argv[0], argv[1]);
-      if (argv[0])
-	last_upload = atoll (argv[0]) * 1000;
-      if (argv[1])
-	last_upload_try = atoll (argv[1]) * 1000;
-      return 0;
+      debug (1, "Starting upload.");
+
+      if (upload ())
+	last_upload = n;
+      else
+	/* Upload failed.  */
+	last_upload_try = n;
     }
 
-    char *errmsg = NULL;
-    sqlite3_exec (db,
-		  "select (select max (at) from updates where ret = 0),"
-		  "  (select max (at) from updates where ret != 0);",
-		  callback, NULL, &errmsg);
-    if (errmsg)
-      {
-	debug (0, "Getting upload status: %s", errmsg);
-	sqlite3_free (errmsg);
-	errmsg = NULL;
-      }
+  if (upload_maybe_source_id)
+    {
+      g_source_remove (upload_maybe_source_id);
+      upload_maybe_source_id = 0;
+    }
 
-    if (! last_upload)
-      {
-	if (last_upload_try)
-	  /* We've tried to upload but never done so successfully.
-	     Try soon.  */
-	  last_upload = 0;
-	else
-	  /* We've never done an upload nor have we have tried.  Wait
-	     the standard amount of time.  */
-	  last_upload = now ();
-      }
+  if (connected == 0 || inactive == 0)
+    {
+      debug (1, "Upload predicates not satisfied "
+	     "(connected: %"PRId64"; inactive: %"PRId64").",
+	     connected, inactive);
+      return FALSE;
+    }
+
+  int64_t connect_timeout
+    = MAX (MIN_CONNECT_TIME - (int64_t) (n - connected), 0);
+  int64_t inactivity_timeout
+    = MAX (MIN_INACTIVITY - (int64_t) (n - inactive), 0);
+  int64_t age_timeout = MAX (SYNC_AGE - (int64_t) (n - last_upload), 0);
+  int64_t retry_timeout
+    = MAX (UPLOAD_RETRY_INTERVAL - (int64_t) (n - last_upload_try), 0);
+
+  int64_t timeout = MAX5 (connect_timeout, inactivity_timeout,
+			  age_timeout, retry_timeout, 1000);
+
+  debug (1, "Timeout: "TIME_FMT" (connection: "TIME_FMT";"
+	 " inactivity: "TIME_FMT"; next upload: "TIME_FMT";"
+	 " next try: "TIME_FMT")",
+	 TIME_PRINTF (timeout),
+	 TIME_PRINTF (connect_timeout), TIME_PRINTF (inactivity_timeout),
+	 TIME_PRINTF (age_timeout), TIME_PRINTF (retry_timeout));
+
+  upload_maybe_source_id
+    = g_timeout_add_seconds ((999 + timeout) / 1000, upload_maybe, NULL);
+
+  return FALSE;
+}
+
+static void
+default_connection_changed (NCNetworkMonitor *nm,
+			    NCNetworkConnection *old_default,
+			    NCNetworkConnection *new_default,
+			    gpointer user_data)
+{
+  connected = 0;
+  if (new_default)
+    {
+      uint32_t m = nc_network_connection_mediums (new_default);
+      if (m & (NC_CONNECTION_MEDIUM_ETHERNET | NC_CONNECTION_MEDIUM_WIFI))
+	{
+	  debug (1, "Connected");
+	  connected = now ();
+	  upload_maybe (NULL);
+	}
+    }
+}
+
+static void
+idle_active (WCUserActivityMonitor *m, gboolean idle, int64_t t,
+	     gpointer user_data)
+{
+  inactive = 0;
+  if (idle == WC_USER_IDLE)
+    {
+      inactive = now ();
+      upload_maybe (NULL);
+    }
+}
+
+void
+logger_uploader_init (void)
+{
+  /* First, open the upload database.  */
+  sqlite3 *db = uploader_db ();
+
+  /* Try to recover LAST_UPLOAD and LAST_UPLOAD_TRY.  If we fail, it
+     is okay: the defaults are reasonable.  */
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    debug (0, "last_upload: %s; last_upload_try: %s", argv[0], argv[1]);
+    if (argv[0])
+      last_upload = atoll (argv[0]) * 1000;
+    if (argv[1])
+      last_upload_try = atoll (argv[1]) * 1000;
+    return 0;
   }
 
-  int64_t timeout;
-  do
+  char *errmsg = NULL;
+  sqlite3_exec (db,
+		"select (select max (at) from updates where ret = 0),"
+		"  (select max (at) from updates where ret != 0);",
+		callback, NULL, &errmsg);
+  if (errmsg)
     {
-      if (dbus_connection_get_dispatch_status (connection)
-	  == DBUS_DISPATCH_DATA_REMAINS)
-	/* There is more data to process, try to bulk up any
-	   updates.  */
-	{
-	  while (dbus_connection_dispatch (connection)
-		 == DBUS_DISPATCH_DATA_REMAINS)
-	    ;
-	}
-
-      int64_t upload_timeout = INT64_MAX;
-      if (connected)
-	{
-	  int64_t n = now ();
-
-	  debug (1, "Connected "TIME_FMT"; inactive: "TIME_FMT"; "
-		 "data's age "TIME_FMT"; last try: "TIME_FMT,
-		 TIME_PRINTF (n - connected),
-		 TIME_PRINTF (inactive == 0 ? 0 : (n - inactive)),
-		 TIME_PRINTF (n - last_upload),
-		 TIME_PRINTF (n - last_upload_try));
-
-	  if (n - connected >= MIN_CONNECT_TIME
-	      && inactive && n - inactive >= INACTIVITY
-	      && n - last_upload >= SYNC_AGE
-	      && n - last_upload_try >= UPLOAD_RETRY_INTERVAL)
-	    /* Time to do an update!  */
-	    {
-	      debug (0, "Starting update.");
-
-	      if (upload ())
-		last_upload = n;
-	      else
-		/* Upload failed.  */
-		last_upload_try = n;
-	    }
-
-	  int64_t connect_timeout = MIN_CONNECT_TIME - (n - connected);
-	  int64_t inactivity_timeout
-	    = inactive == 0 ? INT64_MAX : (INACTIVITY - (n - inactive));
-	  int64_t age_timeout = SYNC_AGE - (n - last_upload);
-	  int64_t retry_timeout
-	    = UPLOAD_RETRY_INTERVAL - (n - last_upload_try);
-
-	  upload_timeout = MAX4 (connect_timeout, inactivity_timeout,
-				 age_timeout, retry_timeout);
-	  debug (1, "Timeouts: connected "TIME_FMT"; "
-		 "inactivity "TIME_FMT"; "
-		 "data's age "TIME_FMT"; "
-		 "last try: "TIME_FMT" => "TIME_FMT,
-		 TIME_PRINTF (connect_timeout),
-		 TIME_PRINTF (inactivity_timeout == INT64_MAX
-			      ? -1 : inactivity_timeout),
-		 TIME_PRINTF (age_timeout), TIME_PRINTF (retry_timeout),
-		 TIME_PRINTF (upload_timeout));
-	}
-
-      timeout = upload_timeout;
-
-      debug (1, "Timeout: "TIME_FMT,
-	     TIME_PRINTF (timeout == INT64_MAX ? -1 : timeout));
+      debug (0, "Getting upload status: %s", errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
     }
-  while (dbus_connection_read_write_dispatch
-	 (connection, timeout == INT64_MAX ? -1: MAX (2000, timeout)));
 
-  pthread_cleanup_pop (true);
 
-  debug (0, "Uploader disconnected.");
-#endif
+  /* Listen for events relevant to our predicate.  */
+  NCNetworkMonitor *nm = nc_network_monitor_new ();
+  g_signal_connect (G_OBJECT (nm), "default-connection-changed",
+		    G_CALLBACK (default_connection_changed), NULL);
+  default_connection_changed
+    (nm, NULL, nc_network_monitor_default_connection (nm), NULL);
+
+  WCUserActivityMonitor *m = wc_user_activity_monitor_new ();
+  int64_t i = wc_user_activity_monitor_idle_time (m);
+  if (i > 0)
+    inactive = i;
+  g_signal_connect (G_OBJECT (m), "user-idle-active",
+		    G_CALLBACK (idle_active), NULL);
+
+  upload_maybe (NULL);
 }

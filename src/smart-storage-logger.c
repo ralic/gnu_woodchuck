@@ -1310,6 +1310,8 @@ main (int argc, char *argv[])
   bm_init ();
   sm_init ();
 
+  logger_uploader_init ();
+
   loop = g_main_loop_new (NULL, FALSE);
   g_main_loop_run (loop);
 
