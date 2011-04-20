@@ -20,7 +20,10 @@
 # define MAX3(x, y, z) MAX (x, MAX (y, z))
 #endif
 #ifndef MAX4
-# define MAX4(x, y, z, a) MAX (MAX (x, a), MAX (y, z))
+# define MAX4(x, y, z, a) MAX (MAX3 (x, y, z), a)
+#endif
+#ifndef MAX5
+# define MAX5(x, y, z, a, b) MAX (MAX4 (x, y, z, a), b)
 #endif
 
 #ifndef MIN

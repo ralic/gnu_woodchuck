@@ -1,0 +1,48 @@
+Compiling and Uploading the Package
+-----------------------------------
+
+Compile:
+
+  VERSION=0.1
+  cd ~/src/smart-storage/build
+  make dist
+  cd ~/src
+  rm -rf smart-storage-${VERSION}
+  tar xfvz smart-storage/build/smart-storage-${VERSION}.tar.gz
+  /scratchbox/login -d src/smart-storage-${VERSION} dpkg-buildpackage -us -uc -rfakeroot
+
+On machine with the signing key:
+
+  debsign -r theo.lan src/smart-storage_${VERSION}_armel.changes
+
+Create directory on server:
+
+  ssh hssl.cs.jhu.edu
+  mkdir -p ~/public_html/smart-storage/dists/fremantle/maemo/binary-armel
+  ln -s fremantle ~/public_html/smart-storage/dists/fremantle-1.2
+
+Copy binaries to:
+
+  scp ~/src/smart-storage*_${VERSION}* \
+    hssl.cs.jhu.edu:public_html/smart-storage/dists/fremantle/maemo/binary-armel
+
+
+In the <SOMEPLACE> directory, run:
+
+  cd ~/public_html/smart-storage
+  apt-ftparchive packages dists | gzip > dists/fremantle-1.2/maemo/binary-armel/Packages.gz
+
+Or to only include the packages in a particular distribution:
+
+  cd ~/public_html/smart-storage
+  apt-ftparchive packages dists/fremantle-1.2/maemo/binary-armel | gzip > dists/fremantle-1.2/maemo/binary-armel/Packages.gz
+
+
+
+Distributing the Package
+------------------------
+
+To get downloading of the install file correct, one has to add the
+following to an .htaccess file:
+
+  AddType application/x-install-instructions .install
