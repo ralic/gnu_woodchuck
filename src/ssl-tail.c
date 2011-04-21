@@ -54,57 +54,78 @@ main (int argc, char *argv[])
 
   void usage (int status)
   {
-    fprintf (stderr,
-	     "%s [--all] [FILTER]\nFilter on level, timestamp (MS in UTC), function, file or line.\n",
-	     argv[0]);
+    fprintf
+      (stderr,
+       "%s [--all] [--follow] [FILTER]\n"
+       "Dumps entries in %s.\n\n"
+       "Filter is an SQL expression on level, timestamp (MS in UTC),\n"
+       "function, file or line.\n\n"
+       "To see all entries in the last 24 hours, run:\n"
+       "  %s --all 'timestamp > strftime (\"now\") - 24 * 60 * 60'\n",
+       argv[0], filename, argv[0]);
     exit (status);
   }
 
   bool first = true;
   char *filter = NULL;
+  bool follow = false;
+  last = strdup ("(select max (ROWID) - 10 from log)");
 
   int i;
   for (i = 1; i < argc; i ++)
     if (strcmp (argv[i], "--all") == 0)
       {
-	first = false;
+	free (last);
 	last = strdup ("0");
       }
+    else if (strcmp (argv[i], "-f") == 0
+	     || strcmp (argv[i], "--follow") == 0)
+      follow = true;
+    else if (strcmp (argv[i], "--help") == 0
+	     || strcmp (argv[i], "--usage") == 0)
+      usage (0);
+    else if (argv[i][0] == '-')
+      {
+	fprintf (stderr, "Unknown option: '%s'\n", argv[i]);
+	usage (1);
+      }
     else if (filter)
+      /* Only one filter is supported.  */
       usage (1);
     else
       filter = argv[i];
 
-  for (;;)
+  do
     {
-      char *errmsg = NULL;
-      sqlite3_exec_printf
-	(db,
-	 "select ROWID, timestamp, tz, function, file, line, "
-	 "  return_address, message from log"
-	 " where (%s%s) %s %s %s"
+      if (! first)
+	/* We could use inotify, but this is far from performance
+	   critical.  */
+	sleep (1);
+
+      char *sql = sqlite3_mprintf
+	("select ROWID, timestamp, tz, function, file, line,"
+	 " return_address, message from log"
+	 " where (ROWID > %s) %s %s %s"
 	 " order by ROWID;",
-	 callback, NULL, &errmsg,
-	 first
-	   ? "timestamp > (select max (timestamp) - 10000 from log)"
-	   : "ROWID > ",
-	 first ? "" : last,
+	 last,
 	 filter ? "and (" : "",
 	 filter ?: "",
 	 filter ? ")" : "");
+
+      char *errmsg = NULL;
+      sqlite3_exec (db, sql, callback, NULL, &errmsg);
       if (errmsg)
 	{
-	  fprintf (stderr, "%s\n", errmsg);
+	  fprintf (stderr, "%s\nSQL: %s\n", errmsg, sql);
 	  sqlite3_free (errmsg);
 	  errmsg = NULL;
 	  return 1;
 	}
+      sqlite3_free (sql);
+      
       first = false;
-
-      /* We could use inotify, but this is far from performance
-	 critical.  */
-      sleep (1);
     }
+  while (follow);
 
   return 0;
 }
