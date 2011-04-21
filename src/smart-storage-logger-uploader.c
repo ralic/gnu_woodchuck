@@ -19,7 +19,6 @@
 
 #include <stdbool.h>
 #include <stdint.h>
-#include <pthread.h>
 #include <stdlib.h>
 #include <string.h>
 #include <assert.h>
@@ -27,6 +26,7 @@
 #include <unistd.h>
 #include <stdio.h>
 #include <sqlite3.h>
+#include <errno.h>
 #include <glib.h>
 
 #include "debug.h"
@@ -42,6 +42,10 @@
 #define obstack_chunk_free free
 #include <obstack.h>
 
+/* Smart storage logger registers tables (using
+   logger_uploader_table_register) that should be uploaded.  This is
+   one instance of this data structure for each such table.  This is
+   saved persistently in upload.db. */
 struct table
 {
   struct table *next;
@@ -61,7 +65,6 @@ struct db
   struct table *tables;
 };
 struct db *dbs;
-static pthread_mutex_t dbs_lock = PTHREAD_MUTEX_INITIALIZER;
 
 static sqlite3 *
 uploader_db ()
@@ -79,10 +82,17 @@ uploader_db ()
   sqlite3_busy_timeout (db, 60 * 60 * 1000);
 
   char *errmsg = NULL;
-  err = sqlite3_exec (db,
-		      "create table if not exists status (db, tbl, through);"
-		      "create table if not exists updates (at, ret, output);",
-		      NULL, NULL, &errmsg);
+  err = sqlite3_exec
+    (db,
+     /* DB is the filename of the database.  TBL is the name of the
+	table.  THROUGH is the LAST ROWID that has ben successfully
+	uploaded.  */
+     "create table if not exists status (db, tbl, through);"
+     /* AT is the time the try occured.  SUCCESS is whether the update
+	was successful (1) or failed (0).  OUTPUT is wget's
+	output.  */
+     "create table if not exists updates (at, success, output);",
+     NULL, NULL, &errmsg);
   if (errmsg)
     {
       debug (0, "%d: %s", err, errmsg);
@@ -107,8 +117,6 @@ logger_uploader_table_register (const char *filename, const char *table_name,
   struct table *table = calloc (sizeof (*table), 1);
   table->table = strdup (table_name);
   table->delete = delete;
-
-  pthread_mutex_lock (&dbs_lock);
 
   /* See if the DB has already been added.  */
   struct db *d;
@@ -153,8 +161,6 @@ logger_uploader_table_register (const char *filename, const char *table_name,
   table = NULL;
 
  out:
-  pthread_mutex_unlock (&dbs_lock);
-
   if (table)
     {
       free (table->table);
@@ -381,45 +387,253 @@ uuid (void)
   return my_uuid;
 }
 
-static bool
-upload (void)
+struct upload_state
 {
-  bool ret = false;
-
-  char *filename = files_logfile ("upload-temp.db");
-  unlink (filename);
-
+  char *upload_temp_filename;
+  char *upload_filename;
   sqlite3 *db;
-  int err = sqlite3_open (filename, &db);
-  if (err)
-    error (1, 0, "sqlite3_open (%s): %s",
-	   filename, sqlite3_errmsg (db));
-
-  sqlite3_busy_timeout (db, 60 * 60 * 1000);
 
   struct obstack gather;
-  obstack_init (&gather);
   struct obstack flush;
-  obstack_init (&flush);
 
-  struct obstack wget_output_obstack;
-  obstack_init (&wget_output_obstack);
-  char *wget_output = NULL;
-  int wget_status = -1;
+  /* The pipe.  */
+  FILE *wget;
+  /* The corresponding channel.  */
+  GIOChannel *wget_channel;
+  /* The gathered output.  */
+  struct obstack wget_output;
+  char *wget_output_str;
+};
+
+/* Whether an upload is in progress.  */
+static bool uploading;
+
+/* The time of the last (successful) upload.  */
+static uint64_t last_upload;
+/* The last time we tried to upload.  */
+static uint64_t last_upload_try;
+
+static gboolean upload_schedule (gpointer user_data);
+
+static void
+upload_state_free (struct upload_state *s, bool success)
+{
+  if (! s->wget_output_str)
+    {
+      /* NUL terminate the output.  */
+      obstack_1grow (&s->wget_output, 0);
+      s->wget_output_str = obstack_finish (&s->wget_output);
+    }
+
+  if (! success && s->db)
+    {
+      char *errmsg = NULL;
+      int err = sqlite3_exec_printf
+	(s->db, 
+	 "attach '%s' as uploader;"
+	 "insert into uploader.updates values (strftime('%%s','now'), %d, %Q);",
+	 NULL, NULL, &errmsg, s->upload_filename, success, s->wget_output_str);
+      if (errmsg)
+	{
+	  debug (0, "%d: %s", err, errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+	}
+    }
+
+  free (s->upload_filename);
+
+  if (s->db)
+    sqlite3_close (s->db);
+
+  obstack_free (&s->gather, NULL);
+  obstack_free (&s->flush, NULL);
+  obstack_free (&s->wget_output, NULL);
+
+  if (s->wget_channel)
+    g_io_channel_unref (s->wget_channel);
+
+  if (s->upload_temp_filename)
+    {
+      unlink (s->upload_temp_filename);
+      free (s->upload_temp_filename);
+    }
+
+  if (s->wget)
+    pclose (s->wget);
+
+  g_free (s);
+
+  uploading = false;
+
+  if (success)
+    last_upload = now ();
+  else
+    last_upload_try = now ();
+
+  upload_schedule (NULL);
+}
+
+static gboolean
+wget_output_cb (GIOChannel *source, GIOCondition condition, gpointer user_data)
+{
+  struct upload_state *s = user_data;
+
+  gboolean success = FALSE;
+
+  int room = obstack_room (&s->wget_output);
+  char *p = obstack_next_free (&s->wget_output);
+  bool copy = false;
+
+  debug (0, "Space for %d bytes.", room);
+
+  if (room == 0)
+    /* We cannot write directly to the obstack.  We need to copy the
+       data.  */
+    {
+      room = 1024;
+      p = alloca (room);
+      copy = true;
+    }
+
+  ssize_t r;
+  if (condition == G_IO_IN)
+    {
+      r = read (fileno (s->wget), p, room);
+      debug (0, "Read %d bytes.", (int) r);
+      if (r > 0)
+	/* Read data.  */
+	{
+	  if (copy)
+	    obstack_grow (&s->wget_output, p, r);
+	  else
+	    obstack_blank_fast (&s->wget_output, r);
+
+	  /* Call again.  */
+	  return TRUE;
+	}
+    }
+  else if (condition == G_IO_HUP)
+    r = 0;
+  else
+    {
+      r = -1;
+      errno = 0;
+    }
+
+  /* EOF or error.  Either way, we need to clean up.  */
+
+  if (r == -1)
+    /* Error.  */
+    {
+      debug (0, "Reading from wget process: %m");
+
+      upload_state_free (s, FALSE);
+
+      /* Don't call again.  We're done.  */
+      return FALSE;
+    }
+
+
+  /* EOF.  */
+
+  /* NUL terminate the output.  */
+  obstack_1grow (&s->wget_output, 0);
+  s->wget_output_str = obstack_finish (&s->wget_output);
+
+  /* Note: wget_status is as waitpid's status.  Because we do an open
+     waitpid, pclose might not actually return the child's status but
+     -1.  Instead, we grok the output.  */
+  int wget_status = pclose (s->wget);
+  s->wget = NULL;
+  debug (1, "wget returned %d (exit code: %d) (%s, %d)",
+	 wget_status, WEXITSTATUS (wget_status),
+	 s->wget_output_str, (int) strlen (s->wget_output_str));
+
+  if (strstr (s->wget_output_str, "\nDanke\n"))
+    /* We got the expected server response.  */
+    debug (1, "got expected server response.");
+  else
+    /* Assume an error occured.  */
+    goto out;
+
+  char *wget_output_quoted = sqlite3_mprintf ("%Q", s->wget_output_str);
+  obstack_printf (&s->flush,
+		  "insert into uploader.updates"
+		  " values (strftime('%%s','now'), %d, %s);"
+		  "end transaction;",
+		  1, wget_output_quoted);
+  sqlite3_free (wget_output_quoted);
+  /* NUL terminate the SQL string.  */
+  obstack_1grow (&s->flush, 0);
+  char *sql = obstack_finish (&s->flush);
+
+  char *errmsg = NULL;
+  int err = sqlite3_exec (s->db, sql, NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+      /* We don't fail as the actual upload was correct.  Later, we'll
+	 send some redundant data, but that's okay.  */
+    }
+
+  /* Move T->THROUGH to T->STAKE.  */
+  struct db *d;
+  for (d = dbs; d; d = d->next)
+    {
+      struct table *t;
+      for (t = d->tables; t; t = t->next)
+	t->through = t->stake;
+    }
+
+  success = TRUE;
+ out:
+  upload_state_free (s, success);
+
+  /* Don't call again.  We're done.  */
+  return FALSE;
+}
+
+/* Start an upload.  */
+static void
+upload (void)
+{
+  if (uploading)
+    {
+      debug (0, "Upload in progress.  Ignoring upload request.");
+      return;
+    }
+
+  struct upload_state *s = g_malloc0 (sizeof (*s));
+
+  s->upload_temp_filename = files_logfile ("upload-temp.db");
+  /* Delete any existing database.  */
+  unlink (s->upload_temp_filename);
+
+  int err = sqlite3_open (s->upload_temp_filename, &s->db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   s->upload_temp_filename, sqlite3_errmsg (s->db));
+
+  sqlite3_busy_timeout (s->db, 60 * 60 * 1000);
+
+  obstack_init (&s->gather);
+  obstack_init (&s->flush);
+  obstack_init (&s->wget_output);
 
   uint64_t start = now ();
 
-  obstack_printf (&gather, "begin transaction;");
+  obstack_printf (&s->gather, "begin transaction;");
 
-  char *upload_db = files_logfile ("upload.db");
-  obstack_printf (&flush, "attach '%s' as uploader; begin transaction;",
-		  upload_db);
+  s->upload_filename = files_logfile ("upload.db");
+  obstack_printf (&s->flush, "attach '%s' as uploader; begin transaction;",
+		  s->upload_filename);
 
   /* Get the UUID and thereby ensure that the UUID table is
-     registered.  This requires the dbs_lock.  */
+     registered.  */
   const char *my_uuid = uuid ();
-
-  pthread_mutex_lock (&dbs_lock);
 
   struct db *d;
   for (d = dbs; d; d = d->next)
@@ -427,7 +641,7 @@ upload (void)
       char *dbname = sanitize_strings (strrchr (d->filename, '/') + 1, NULL);
 
       char *errmsg = NULL;
-      err = sqlite3_exec_printf (db,
+      err = sqlite3_exec_printf (s->db,
 				 "attach %Q as %s;",
 				 NULL, NULL, &errmsg, d->filename, dbname);
       if (errmsg)
@@ -448,7 +662,7 @@ upload (void)
 	  }
 
 	  char *errmsg = NULL;
-	  err = sqlite3_exec_printf (db,
+	  err = sqlite3_exec_printf (s->db,
 				     "select max (ROWID) from %s.%s;",
 				     callback, NULL, &errmsg, dbname, t->table);
 	  if (errmsg)
@@ -462,7 +676,7 @@ upload (void)
 		 d->filename, t->table, t->stake - t->through);
 
 	  char *name = sanitize_strings (dbname, t->table);
-	  obstack_printf (&gather,
+	  obstack_printf (&s->gather,
 			  "create table %s as"
 			  " select ROWID, * from %s.%s"
 			  "  where %"PRId64" < ROWID and ROWID <= %"PRId64";",
@@ -472,13 +686,13 @@ upload (void)
 	    /* Delete the synchronized records.  Note that we don't
 	       actually delete the very last record just in case we
 	       didn't set AUTOINCREMENT on the primary index.  */
-	    obstack_printf (&flush,
+	    obstack_printf (&s->flush,
 			    "delete from %s.%s where ROWID < %"PRId64";",
 			    dbname, t->table, t->stake);
 
 	  /* Update through to avoid synchronizing the same data
 	     multiple times.  */
-	  obstack_printf (&flush,
+	  obstack_printf (&s->flush,
 			  "update uploader.status set through = %"PRId64
 			  " where db = '%s' and tbl = '%s';",
 			  t->stake, d->filename, t->table);
@@ -489,22 +703,21 @@ upload (void)
       free (dbname);
     }
 
-  pthread_mutex_unlock (&dbs_lock);
-
-  obstack_printf (&gather, "end transaction;");
+  obstack_printf (&s->gather, "end transaction;");
   uint64_t mid = now ();
   /* NUL terminate the SQL string.  */
-  obstack_1grow (&gather, 0);
-  char *sql = obstack_finish (&gather);
+  obstack_1grow (&s->gather, 0);
+  char *sql = obstack_finish (&s->gather);
   debug (5, "Copying: `%s'", sql);
   char *errmsg = NULL;
-  err = sqlite3_exec (db, sql, NULL, NULL, &errmsg);
+  err = sqlite3_exec (s->db, sql, NULL, NULL, &errmsg);
   if (errmsg)
     {
       debug (0, "%d: %s", err, errmsg);
       sqlite3_free (errmsg);
       errmsg = NULL;
-      goto out;
+      upload_state_free (s, FALSE);
+      return;
     }
 
   uint64_t end = now ();
@@ -519,102 +732,25 @@ upload (void)
 	    " -O /dev/stdout -o /dev/stdout"
 	    " --ca-certificate="PKGDATADIR"/ssl-receiver.cert"
 	    " https://hssl.cs.jhu.edu:9321/%s 2>&1",
-	    filename, my_uuid);
+	    s->upload_temp_filename, my_uuid);
   debug (0, "Executing %s", cmd);
-  FILE *wget = popen (cmd, "r");
+  s->wget = popen (cmd, "r");
   free (cmd);
 
-  ssize_t len;
-  char *line = NULL;
-  size_t size = 0;
-  while ((len = getline (&line, &size, wget)) > 0)
-    /* LEN includes a terminating newline (if any) and a NUL.  */
+  int fd = fileno (s->wget);
+  if (fd == -1)
     {
-      /* Remove the newline character.  */
-      int l = len;
-      /* Ignore the NUL.  */
-      l --;
-      obstack_grow (&wget_output_obstack, line, l);
-      if (line[l] == '\n')
-	line[l --] = 0;
-      if (line[l] == '\r')
-	line[l --] = 0;
-      debug (0, "%s", line);
-    }
-  free (line);
-  obstack_1grow (&wget_output_obstack, 0);
-  wget_output = obstack_finish (&wget_output_obstack);
-
-  /* Note: wget_status is as waitpid's status.  Because we do an open
-     waitpid, pclose might not actually return the child's status but
-     -1.  Instead, we grok the output.  */
-  wget_status = pclose (wget);
-  debug (0, "wget returned %d (exit code: %d) (%s, %d)",
-	 wget_status, WEXITSTATUS (wget_status),
-	 wget_output, (int) strlen (wget_output));
-
-  if (strstr (wget_output, "\nDanke\n"))
-    /* We got the expected server response.  */
-    debug (1, "got expected server response.");
-  else
-    /* Assume an error occured.  */
-    goto out;
-
-  char *wget_output_quoted = sqlite3_mprintf ("%Q", wget_output);
-  obstack_printf (&flush,
-		  "insert into uploader.updates"
-		  " values (strftime('%%s','now'), %d, %s);"
-		  "end transaction;",
-		  wget_status, wget_output_quoted);
-  sqlite3_free (wget_output_quoted);
-  /* NUL terminate the SQL string.  */
-  obstack_1grow (&flush, 0);
-  sql = obstack_finish (&flush);
-
-  err = sqlite3_exec (db, sql, NULL, NULL, &errmsg);
-  if (errmsg)
-    {
-      debug (0, "%d: %s", err, errmsg);
-      sqlite3_free (errmsg);
-      errmsg = NULL;
-      /* We still return true as the actual upload went quite well.
-	 Later, we'll send a bit more data, but that's okay.  */
+      debug (0, "Failed to get underlying file descriptor.");
+      upload_state_free (s, FALSE);
+      return;
     }
 
-  /* Move T->THROUGH to T->STAKE.  */
-  for (d = dbs; d; d = d->next)
-    {
-      struct table *t;
-      for (t = d->tables; t; t = t->next)
-	t->through = t->stake;
-    }
+  s->wget_channel = g_io_channel_unix_new (fd);
 
-  ret = true;
- out:
-  if (! ret)
-    {
-      err = sqlite3_exec_printf (db, 
-				 "attach '%s' as uploader;"
-				 "insert into uploader.updates"
-				 " values (strftime('%%s','now'), %d, %Q);",
-				 NULL, NULL, &errmsg,
-				 upload_db, wget_status, wget_output);
-      if (errmsg)
-	{
-	  debug (0, "%d: %s", err, errmsg);
-	  sqlite3_free (errmsg);
-	  errmsg = NULL;
-	}
-    }
-  free (upload_db);
-
-  sqlite3_close (db);
-  obstack_free (&gather, NULL);
-  obstack_free (&flush, NULL);
-  obstack_free (&wget_output_obstack, NULL);
-  unlink (filename);
-  free (filename);
-  return ret;
+  uploading = true;
+  g_io_add_watch (s->wget_channel,
+		  G_IO_IN|G_IO_PRI|G_IO_ERR|G_IO_HUP|G_IO_NVAL,
+		  wget_output_cb, s);
 }
 
 #if 1
@@ -639,16 +775,11 @@ static uint64_t connected;
 /* The time the user went inactive (0 if the user is active).  */
 static uint64_t inactive;
 
-/* The time of the last (successful) upload.  */
-static uint64_t last_upload = 0;
-/* The last time we tried to upload.  */
-static uint64_t last_upload_try = 0;
-
-static guint upload_maybe_source_id;
+static guint upload_schedule_source_id;
 
 /* Check if all predicates have been met for a synchronization.  */
 static gboolean
-upload_maybe (gpointer user_data)
+upload_schedule (gpointer user_data)
 {
   uint64_t n = now ();
 
@@ -659,32 +790,33 @@ upload_maybe (gpointer user_data)
 	 TIME_PRINTF (n - last_upload),
 	 TIME_PRINTF (n - last_upload_try));
 
+  if (upload_schedule_source_id)
+    {
+      g_source_remove (upload_schedule_source_id);
+      upload_schedule_source_id = 0;
+    }
+
+  if (uploading || connected == 0 || inactive == 0)
+    /* We must not be uploading, be connected and the user must be
+       idle.  */
+    {
+      debug (1, "Upload predicates not satisfied "
+	     "(uploading: %s; connected: %"PRId64"; inactive: %"PRId64").",
+	     uploading ? "true" : "false", connected, inactive);
+      return FALSE;
+    }
+
   if (connected && n - connected >= MIN_CONNECT_TIME
       && inactive && n - inactive >= MIN_INACTIVITY
       && n - last_upload >= SYNC_AGE
       && n - last_upload_try >= UPLOAD_RETRY_INTERVAL)
-    /* Time to do an update!  */
+    /* We've been connected long enough, the user has been inactive
+       long enough, the data is old enough and we have not tried too
+       recently.  Time to do an upload!  */
     {
       debug (1, "Starting upload.");
 
-      if (upload ())
-	last_upload = n;
-      else
-	/* Upload failed.  */
-	last_upload_try = n;
-    }
-
-  if (upload_maybe_source_id)
-    {
-      g_source_remove (upload_maybe_source_id);
-      upload_maybe_source_id = 0;
-    }
-
-  if (connected == 0 || inactive == 0)
-    {
-      debug (1, "Upload predicates not satisfied "
-	     "(connected: %"PRId64"; inactive: %"PRId64").",
-	     connected, inactive);
+      upload ();
       return FALSE;
     }
 
@@ -706,8 +838,8 @@ upload_maybe (gpointer user_data)
 	 TIME_PRINTF (connect_timeout), TIME_PRINTF (inactivity_timeout),
 	 TIME_PRINTF (age_timeout), TIME_PRINTF (retry_timeout));
 
-  upload_maybe_source_id
-    = g_timeout_add_seconds ((999 + timeout) / 1000, upload_maybe, NULL);
+  upload_schedule_source_id
+    = g_timeout_add_seconds ((999 + timeout) / 1000, upload_schedule, NULL);
 
   return FALSE;
 }
@@ -726,7 +858,7 @@ default_connection_changed (NCNetworkMonitor *nm,
 	{
 	  debug (1, "Connected");
 	  connected = now ();
-	  upload_maybe (NULL);
+	  upload_schedule (NULL);
 	}
     }
 }
@@ -739,7 +871,7 @@ idle_active (WCUserActivityMonitor *m, gboolean idle, int64_t t,
   if (idle == WC_USER_IDLE)
     {
       inactive = now ();
-      upload_maybe (NULL);
+      upload_schedule (NULL);
     }
 }
 
@@ -788,5 +920,5 @@ logger_uploader_init (void)
   g_signal_connect (G_OBJECT (m), "user-idle-active",
 		    G_CALLBACK (idle_active), NULL);
 
-  upload_maybe (NULL);
+  upload_schedule (NULL);
 }
