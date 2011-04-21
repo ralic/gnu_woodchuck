@@ -156,12 +156,16 @@ service_new (WCServiceMonitor *m, pid_t pid, const char *dbus_name)
       debug (0, "Service %s already associated with pid %d "
 	     "(you are trying to associate it with %d)",
 	     dbus_name, process->pid, pid);
-      assert (0 == 1);
 
       if (process->pid == pid)
 	return process;
       else
-	return NULL;
+	{
+	  /* Is the old association stale?  If so, should we move the
+	     association?  */
+	  assert (0 == 1);
+	  return NULL;
+	}
     }
 
   process = process_lookup (pid);
