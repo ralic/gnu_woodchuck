@@ -1942,9 +1942,9 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  debug (3, "thread_trace (tid: %d, parent: %d, %s ptracing)",
+  debug (3, "thread_trace (tid: %d, parent: %d, %s attached)",
 	 (int) tid, parent ? parent->group_leader.tid : 0,
-	 already_ptracing ? "already" : "not yet");
+	 already_ptracing ? "already" : "need to");
 
   struct tcb *tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) tid);
   if (tcb)
@@ -1973,7 +1973,10 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
   if (! pgl)
     /* Failed to get the process group leader.  The thread no longer
        exists.  */
-    return NULL;
+    {
+      debug (0, "Can't trace %d: thread appears to no longer exist.", tid);
+      return NULL;
+    }
 
   struct pcb *pcb = g_hash_table_lookup (pcbs, (gpointer) (uintptr_t) pgl);
   if (! pcb)
@@ -2399,6 +2402,10 @@ process_monitor (void *arg)
 
   process_monitor_signaler_init ();
 
+  const uintptr_t ptrace_options
+    = (PTRACE_O_TRACESYSGOOD|PTRACE_O_TRACECLONE|PTRACE_O_TRACEFORK
+       |PTRACE_O_TRACEEXEC|PTRACE_O_TRACEEXIT);
+
   struct tcb *tcb = NULL;
   while (! (quit && tcb_count == 0))
     {
@@ -2536,36 +2543,60 @@ process_monitor (void *arg)
 
       int event = status >> 16;
 
-      do_debug (4)
-	{
-	  debug (0, "Signal from %d: status: %x", tid, status);
-	  if (WIFEXITED (status))
-	    debug (0, " Exited: %d", WEXITSTATUS (status));
-	  if (WIFSIGNALED (status))
-	    debug (0, " Signaled: %s (%d)",
-		   strsignal (WTERMSIG (status)), WTERMSIG (status));
-	  if (WIFSTOPPED (status))
-	    debug (0, " Stopped: %s (%d)",
-		   WSTOPSIG (status) == (SIGTRAP | 0x80)
-		   ? "monitor SIGTRAP" : strsignal (WSTOPSIG (status)),
-		   WSTOPSIG (status));
-	  if (WIFCONTINUED (status))
-	    debug (0, " continued");
-	  debug (0, " ptrace event: %x", event);
-	}
+      void signal_state (int level)
+      {
+	debug (level, "Signal from %d: status: %x", tid, status);
+	if (WIFEXITED (status))
+	  debug (level, " Exited: %d", WEXITSTATUS (status));
+	if (WIFSIGNALED (status))
+	  debug (level, " Signaled: %s (%d)",
+		 strsignal (WTERMSIG (status)), WTERMSIG (status));
+	if (WIFSTOPPED (status))
+	  debug (level, " Stopped: %s (%d)",
+		 WSTOPSIG (status) == (SIGTRAP | 0x80)
+		 ? "monitor SIGTRAP" : strsignal (WSTOPSIG (status)),
+		 WSTOPSIG (status));
+	if (WIFCONTINUED (status))
+	  debug (level, " continued");
+	debug (level, " ptrace event: %x", event);
+      }
+      signal_state (4);
 
       /* Look up the thread.  */
       if (! (tcb && tcb->tid == tid))
 	{
 	  tcb = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) tid);
 	  if (! tcb)
-	    /* We aren't monitoring this process...  There are two
-	       possibilities: either it is a new thread and the initial
-	       SIGSTOP was delivered before the thread create event was
-	       delivered (PTRACE_O_TRACECLONE).  This is not a problem:
-	       the thread will be fully configured once we see that event.
-	       The alternative is that another thread in this task started
-	       a program and we just got in its way.  OUCH.  */
+	    /* We haven't yet registered this process, but we are
+	       clearly ptracing it...  There are a few possibilities.
+
+	         - This is a new thread and the initial SIGSTOP was
+		   delivered before the thread create event was
+		   delivered (PTRACE_O_TRACECLONE).  This is not a
+		   problem: the thread will be fully configured once
+		   we see that event.
+
+		 - We attached to this thread's parent, but before we
+		   could set the ptrace options, it created this
+		   thread.
+
+		 - On the N900, when checking for new mail, modest
+                   creates a bunch of threads in rapid succession.
+                   Sometimes we never get a PTRACE_EVENT_CLONE for a
+                   thread.
+
+		 - Another thread in our process started a program and
+		   we just got its wait() status.  OUCH.
+
+		 We know we are tracing this thread if 0x80 is set.
+		 If this was not set on the process, but ptrace set
+		 options succeeds, then we are definately tracing the
+		 thread.
+		   
+		 We don't want to just register this thread and eat
+		 the signal.  It might be waiting for it.
+
+	    */
 	    {
 	      if (WSTOPSIG (status) == (0x80 | SIGTRAP))
 		/* It's got the ptrace monitor bit set.  It was
@@ -2576,7 +2607,32 @@ process_monitor (void *arg)
 		  tcb->trace_options = 1;
 		}
 	      else
-		debug (3, "Got signal for %d, but not monitoring it!", tid);
+		{
+		  pid_t pgl = tid_to_process_group_leader (tid);
+		  struct tcb *leader
+		    = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) pgl);
+		  debug (0, "Got signal for %d "
+			 "(group leader: %d;%s;%s;%s;trace options %sset; "
+			 "parent: %d), but not monitoring it!",
+			 tid, pgl,
+			 leader ? leader->pcb->exe : "<not traced>",
+			 leader ? leader->pcb->arg0 : "",
+			 leader ? leader->pcb->arg1 : "",
+			 leader && leader->trace_options ? "" : "not ",
+			 tid_to_ppid (tid));
+		  signal_state (0);
+
+		  if (ptrace (PTRACE_SETOPTIONS, tid, 0, ptrace_options) == -1)
+		    debug (0, "Failed to set trace options on thread %d: %m",
+			   tid);
+		  else
+		    /* This will only work if we are actually tracing
+		       the thread...  */
+		    {
+		      tcb = thread_trace (tid, NULL, true);
+		      tcb->trace_options = 1;
+		    }
+		}
 
 	      if (! tcb)
 		goto out;
@@ -2698,10 +2754,7 @@ process_monitor (void *arg)
 	/* This is a running thread that we have manually attached to.
 	   The thread is now running.  */
 	{
-	  if (ptrace (PTRACE_SETOPTIONS, tid, 0,
-		      (PTRACE_O_TRACESYSGOOD|PTRACE_O_TRACECLONE
-		       |PTRACE_O_TRACEFORK|PTRACE_O_TRACEEXEC
-		       |PTRACE_O_TRACEEXIT)) == -1)
+	  if (ptrace (PTRACE_SETOPTIONS, tid, 0, ptrace_options) == -1)
 	    {
 	      debug (0, "Failed to set trace options on thread %d: %m", tid);
 	      thread_untrace (tcb, true);
