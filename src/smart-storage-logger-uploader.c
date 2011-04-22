@@ -888,15 +888,19 @@ logger_uploader_init (void)
     debug (0, "last_upload: %s; last_upload_try: %s", argv[0], argv[1]);
     if (argv[0])
       last_upload = atoll (argv[0]) * 1000;
+
     if (argv[1])
       last_upload_try = atoll (argv[1]) * 1000;
+    else
+      last_upload_try = last_upload;
+
     return 0;
   }
 
   char *errmsg = NULL;
   sqlite3_exec (db,
-		"select (select max (at) from updates where ret = 0),"
-		"  (select max (at) from updates where ret != 0);",
+		"select (select max (at) from updates where success != 0),"
+		"  (select max (at) from updates where success = 0);",
 		callback, NULL, &errmsg);
   if (errmsg)
     {
@@ -904,7 +908,6 @@ logger_uploader_init (void)
       sqlite3_free (errmsg);
       errmsg = NULL;
     }
-
 
   /* Listen for events relevant to our predicate.  */
   NCNetworkMonitor *nm = nc_network_monitor_new ();
