@@ -1531,6 +1531,8 @@ thread_apply_patches (struct tcb *tcb)
 	g_string_free (s, true);
       }
 
+    if (lib->patch_count == 0)
+      lib->patch_count = -1;
     debug (0, "%s: %d patches.", lib->filename, lib->patch_count);
 
     g_free (map);
@@ -1695,7 +1697,7 @@ thread_apply_patches (struct tcb *tcb)
 			     &map_addr, &map_end))
 	    {
 	    case 1:
-	      if (! library_patches[i].patches)
+	      if (! library_patches[i].patch_count)
 		/* We have not yet generated the patch list.  */
 		scan (&library_patches[i], map_addr, map_end);
 	      tcb->pcb->lib_base[i] = map_addr;
@@ -1725,8 +1727,6 @@ thread_apply_patches (struct tcb *tcb)
   for (i = 0; i < LIBRARY_COUNT; i ++)
     if (patch[i])
       {
-	total += library_patches[i].patch_count;
-
 	int j;
 	for (j = 0; j < library_patches[i].patch_count; j ++)
 	  {
@@ -1735,6 +1735,8 @@ thread_apply_patches (struct tcb *tcb)
 			      p->ins, p->ins_len) != 1)
 	      bad ++;
 	  }
+
+	total += j;
       }
 
   if (bad)
