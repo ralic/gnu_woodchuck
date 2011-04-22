@@ -83,10 +83,8 @@ tkill (int tid, int sig)
   return syscall (__NR_tkill, tid, sig);
 }
 
-/* Given a Linux thread id, return the thread id of its process's
-   group leader.  */
-static pid_t
-tid_to_process_group_leader (pid_t tid)
+static char *
+tid_state (pid_t tid, const char *key)
 {
   char filename[32];
   gchar *contents = NULL;
@@ -100,15 +98,60 @@ tid_to_process_group_leader (pid_t tid)
 	     filename, error->message);
       g_error_free (error);
       error = NULL;
-      return 0;
+      return NULL;
     }
 
-  char *tgid_str = strstr (contents, "\nTgid:");
-  tgid_str += 7;
-  pid_t process_group_leader_pid = atoi (tgid_str);
+  char *record;
+  do
+    record = strstr (contents, key);
+  while (record && ((record > contents && record[-1] != '\n')
+		    || record[strlen (key)] != ':'));
+
+  char *value = NULL;
+  if (record)
+    {
+      record += strlen (key) + 1 /* Skip the colon as well.  */;
+      while (*record == '\t' || *record == ' ')
+	record ++;
+      char *end = strchr (record, '\n');
+      if (end)
+	value = strndup (record, (uintptr_t) end - (uintptr_t) record);
+    }
+  else
+    debug (0, "Field %s not present in %s!", key, filename);
+
   g_free (contents);
 
-  return process_group_leader_pid;
+  debug (5, "%s -> %s", key, value);
+
+  return value;
+}
+
+/* Given a Linux thread id, return the thread id of its process's
+   group leader.  */
+static pid_t
+tid_to_process_group_leader (pid_t tid)
+{
+  char *s = tid_state (tid, "Tgid");
+  if (! s)
+    return 0;
+
+  pid_t p = atoi (s);
+  free (s);
+  return p;
+}
+
+/* Given a Linux thread id, return the parent pid.  */
+static pid_t
+tid_to_ppid (pid_t tid)
+{
+  char *s = tid_state (tid, "PPid");
+  if (! s)
+    return 0;
+
+  pid_t p = atoi (s);
+  free (s);
+  return p;
 }
 
 /* Binary instrumentation.  */
