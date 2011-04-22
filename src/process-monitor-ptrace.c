@@ -2142,7 +2142,7 @@ process_untrace (pid_t pid)
     }
 }
 
-static bool quit;
+static uint64_t quit;
 
 enum process_monitor_commands
   {
@@ -2400,6 +2400,36 @@ process_monitor (void *arg)
   struct tcb *tcb = NULL;
   while (! (quit && tcb_count == 0))
     {
+      if (quit && now () - quit > 5000)
+	/* If we don't manage to exit in about 5 seconds, something is
+	   likely wrong.  Increase the debugging output.  */
+	{
+	  quit = now ();
+	  output_debug = 5;
+
+	  debug (0, "Need to detach from:");
+	  void iter (gpointer key, gpointer value, gpointer user_data)
+	  {
+	    pid_t tid = (int) (uintptr_t) key;
+	    struct tcb *tcb = value;
+	    debug (1, "%d: %s;%s;%s",
+		   tid, tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
+	    assert (tid == tcb->tid);
+
+	    if (tcb->suspended > 0)
+	      /* Already suspended.  */
+	      thread_untrace (tcb, false);
+	    else if (tkill (tid, SIGSTOP) < 0)
+	      /* Failed to send it SIGSTOP.  Assume it is
+		 dead.  */
+	      {
+		debug (0, "tkill (%d, SIGSTOP): %m", tid);
+		thread_untrace (tcb, false);
+	      }
+	  }
+	  g_hash_table_foreach (tcbs, iter, NULL);
+	}
+
       /* SIGNO is the signal the child received and the signal to be
 	 propagated to the child (if any).  */
       int signo = 0;
@@ -2474,7 +2504,7 @@ process_monitor (void *arg)
 		  g_hash_table_foreach (tcbs, iter, NULL);
 		  tcb = NULL;
 
-		  quit = true;
+		  quit = now ();
 		  break;
 
 		case PROCESS_MONITOR_TRACE:
