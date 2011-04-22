@@ -293,6 +293,11 @@ struct tcb
      suspended.  The absolute value is the time we wanted to suspend
      it. */
   int64_t suspended;
+
+  /* A file descriptor for accessing the process's memory.  */
+  int memfd;
+  /* The last time the memfd was used.  */
+  uint64_t memfd_lastuse;
 };
 
 /* A hash from tids to struct tcb *s.  */
@@ -342,11 +347,6 @@ struct pcb
   char *exe;
   char *arg0;
   char *arg1;
-
-  /* A file descriptor for accessing the process's memory.  */
-  int memfd;
-  /* The last time the memfd was used.  */
-  uint64_t memfd_lastuse;
 
   /* The fd used to open the various libraries.  */
   int lib_fd[LIBRARY_COUNT];
@@ -597,12 +597,6 @@ pcb_free (struct pcb *pcb)
 	assert (0 == 1);
       }
 
-    if (pcb->memfd != -1)
-      {
-	close (pcb->memfd);
-	memfd_count --;
-      }
-
     if (pcb->top_level)
       callback_enqueue (&pcb->group_leader,
 			WC_PROCESS_EXIT_CB, NULL, NULL, 0, NULL);
@@ -770,22 +764,22 @@ pcb_read_exe (struct pcb *pcb)
 }
 
 static void
-pcb_memfd_cleanup (void)
+tcb_memfd_cleanup (void)
 {
   assert (memfd_count >= 0);
-  assert (memfd_count <= pcb_count);
+  assert (memfd_count <= tcb_count);
 
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
   void iter (gpointer key, gpointer value, gpointer user_data)
   {
-    struct pcb *pcb = value;
+    struct tcb *tcb = value;
     uintptr_t horizon = (uintptr_t) user_data;
 
-    if (pcb->memfd != -1 && pcb->memfd_lastuse < horizon)
+    if (tcb->memfd != -1 && tcb->memfd_lastuse < horizon)
       {
-	close (pcb->memfd);
-	pcb->memfd = -1;
+	close (tcb->memfd);
+	tcb->memfd = -1;
 	memfd_count --;
       }
   }
@@ -794,38 +788,44 @@ pcb_memfd_cleanup (void)
 
   if (memfd_count > 96)
     /* Close any fd not used in the last 60 seconds.  */
-    g_hash_table_foreach (pcbs, iter, (gpointer) (uintptr_t) (n - 60*1000));
+    g_hash_table_foreach (tcbs, iter, (gpointer) (uintptr_t) (n - 60*1000));
   if (memfd_count > 128)
     /* That apparently didn't close enough.  Try again.  Close any fd
        not used in the last 5 seconds.  */
-    g_hash_table_foreach (pcbs, iter, (gpointer) (uintptr_t) (n - 5*1000));
+    g_hash_table_foreach (tcbs, iter, (gpointer) (uintptr_t) (n - 5*1000));
 }
 
 static int
-pcb_memfd (struct pcb *pcb)
+tcb_memfd (struct tcb *tcb, bool reopen)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
-  pcb->memfd_lastuse = now ();
+  tcb->memfd_lastuse = now ();
 
-  if (pcb->memfd == -1)
+  if (tcb->memfd != -1 && reopen)
     {
-      pcb_memfd_cleanup ();
+      close (tcb->memfd);
+      tcb->memfd = -1;
+      memfd_count --;
+    }
+
+  if (tcb->memfd == -1)
+    {
+      tcb_memfd_cleanup ();
 
       char filename[32];
-      snprintf (filename, sizeof (filename), "/proc/%d/mem",
-		(int) pcb->group_leader.tid);
-      pcb->memfd = open (filename, O_RDONLY);
-      if (pcb->memfd < 0)
+      snprintf (filename, sizeof (filename), "/proc/%d/mem", (int) tcb->tid);
+      tcb->memfd = open (filename, O_RDONLY);
+      if (tcb->memfd < 0)
 	{
 	  debug (0, "Failed to open %s: %m", filename);
-	  pcb->memfd = -1;
+	  tcb->memfd = -1;
 	  return -1;
 	}
       memfd_count ++;
     }
 
-  return pcb->memfd;
+  return tcb->memfd;
 }
 
 /* Read up to SIZE bytes from a process PCB's memory starting at
@@ -833,20 +833,27 @@ pcb_memfd (struct pcb *pcb)
    if we see a NUL byte.  Returns the location of the last byte
    written.  On error, returns NULL.  */
 static char *
-pcb_mem_read (struct pcb *pcb, uintptr_t addr, char *buffer, int size,
+tcb_mem_read (struct tcb *tcb, uintptr_t addr, char *buffer, int size,
 	      bool string)
 {
   if (size == 0)
     return buffer;
 
-  int memfd = pcb_memfd (pcb);
+  bool retry = false;
+ do_retry:;
+  int memfd = tcb_memfd (tcb, retry);
   if (memfd == -1)
     return NULL;
 
   if (lseek (memfd, addr, SEEK_SET) < 0)
     {
       debug (0, "Error seeking in process %d's memory: %m",
-	     pcb->group_leader.tid);
+	     tcb->pcb->group_leader.tid);
+      if (! retry)
+	{
+	  retry = true;
+	  goto do_retry;
+	}
       return NULL;
     }
 
@@ -857,8 +864,14 @@ pcb_mem_read (struct pcb *pcb, uintptr_t addr, char *buffer, int size,
       int r = read (memfd, b, s);
       if (r < 0)
 	{
+	  if (buffer == b && ! retry)
+	    {
+	      retry = true;
+	      goto do_retry;
+	    }
+
 	  debug (0, "Error reading from process %d's memory: %m",
-		 pcb->group_leader.tid);
+		 tcb->pcb->group_leader.tid);
 
 	  if (buffer == b)
 	    /* We didn't manage to read anything...  */
@@ -882,7 +895,7 @@ pcb_mem_read (struct pcb *pcb, uintptr_t addr, char *buffer, int size,
   /* B points at the next byte to write.  */
   return b - 1;
 }
-
+
 /* Returns whether the process has been patched.  */
 static bool
 pcb_patched (struct pcb *pcb)
@@ -905,7 +918,7 @@ thread_check (struct tcb *tcb, uintptr_t addr, const char *value, int bytes)
 
   errno = EFAULT;
   char real[bytes];
-  if (! pcb_mem_read (tcb->pcb, addr, real, bytes, false))
+  if (! tcb_mem_read (tcb, addr, real, bytes, false))
     {
       debug (0, "Failed to read from process %d's memory: %m",
 	     (int) tcb->pcb->group_leader.tid);
@@ -1224,9 +1237,12 @@ thread_instruction_is (struct tcb *tcb, uintptr_t addr, int instruction)
 {
   char ins[INSTRUCTION_LEN_MAX];
 
-  char *end = pcb_mem_read (tcb->pcb, addr, ins, sizeof (ins), false);
+  char *end = tcb_mem_read (tcb, addr, ins, sizeof (ins), false);
   if (! end)
-    return ins_unknown; 
+    {
+      debug (0, "tcb_mem_read failed.");
+      return ins_unknown; 
+    }
 
   int ins_len = (uintptr_t) end - (uintptr_t) ins + 1;
 
@@ -1376,14 +1392,17 @@ thread_apply_patches (struct tcb *tcb)
 	   lib->filename, map_start, map_end, map_length);
 
     char *map = g_malloc (map_length);
-    char *end = pcb_mem_read (tcb->pcb, map_start, map, map_length, false);
+    char *end = tcb_mem_read (tcb, map_start, map, map_length, false);
     if ((uintptr_t) end + 1 - (uintptr_t) map != map_length)
       debug (0, DEBUG_BOLD ("Reading library %s from process %d: "
 			    "read %"PRIdPTR" bytes, expected %"PRIdPTR),
 	     lib->filename, tcb->pcb->group_leader.tid,
 	     (uintptr_t) end + 1 - (uintptr_t) map, map_length);
     if (! end)
-      return;
+      {
+	debug (0, "tcb_mem_read failed.");
+	return;
+      }
     map_length = (uintptr_t) end - (uintptr_t) map + 1;
 
     /* We want to cache the real map length, not the truncated
@@ -1866,6 +1885,12 @@ thread_untrace (struct tcb *tcb, bool need_detach)
   g_free (tcb->saved_src);
   g_free (tcb->saved_stat);
 
+  if (tcb->memfd != -1)
+    {
+      close (tcb->memfd);
+      memfd_count --;
+    }
+
   /* After calling pcb_free, TCB may be freed.  Copy some data.  */
   pid_t tid = tcb->tid;
   pid_t pid = tcb->pcb->group_leader.tid;
@@ -1959,8 +1984,6 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
       g_hash_table_insert (pcbs, (gpointer) (uintptr_t) pgl, pcb);
       pcb_count ++;
 
-      pcb->memfd = -1;
-
       pcb_read_exe (pcb);
 
       int i;
@@ -1996,6 +2019,7 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
   tcb->tid = tid;
   tcb->pcb = pcb;
   tcb->current_syscall = -1;
+  tcb->memfd = -1;
   g_hash_table_insert (tcbs, (gpointer) (uintptr_t) tid, tcb);
   pcb->tcbs = g_slist_prepend (pcb->tcbs, tcb);
 
@@ -2996,13 +3020,16 @@ process_monitor (void *arg)
 	    char buffer[1024];
 	    do_debug (5)
 	      {
-		char *end = pcb_mem_read (tcb->pcb, ARG1, buffer,
+		char *end = tcb_mem_read (tcb, ARG1, buffer,
 					  sizeof (buffer) - 1, true);
 		if (end)
 		  /* Ensure the string is NUL terminated.  */
 		  end[1] = 0;
 		else
-		  buffer[0] = 0;
+		  {
+		    debug (0, "tcb_mem_read failed.");
+		    buffer[0] = 0;
+		  }
 
 		if (fd < 0)
 		  debug (0, "opening %s failed.", buffer);
@@ -3164,7 +3191,7 @@ process_monitor (void *arg)
 
 	      char buffer[1024];
 	      char *end;
-	      if ((end = pcb_mem_read (tcb->pcb, filename,
+	      if ((end = tcb_mem_read (tcb, filename,
 				       buffer, sizeof (buffer) - 1, true)))
 		{
 		  end[1] = 0;
@@ -3191,6 +3218,8 @@ process_monitor (void *arg)
 			debug (4, "Failed to stat %s: %m", tcb->saved_src);
 		    }
 		}
+	      else
+		debug (0, "tcb_mem_read failed.");
 
 	      debug (4, "%d: %s;%s;%s: %s (%s)",
 		     (int) tcb->tid,
@@ -3235,7 +3264,7 @@ process_monitor (void *arg)
 
 		  char buffer[1024];
 		  char *end;
-		  if ((end = pcb_mem_read (tcb->pcb, filename,
+		  if ((end = tcb_mem_read (tcb, filename,
 					   buffer, sizeof (buffer) - 1, true)))
 		    {
 		      end[1] = 0;
@@ -3254,6 +3283,8 @@ process_monitor (void *arg)
 		      dest = canonicalize_file_name (p);
 		      g_free (p);
 		    }
+		  else
+		    debug (0, "tcb_mem_read failed.");
 
 		  debug (4, "%d: %s;%s;%s: %s (%s, %s) -> %d",
 			 tcb->tid,
