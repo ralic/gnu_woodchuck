@@ -59,10 +59,14 @@ main (int argc, char *argv[])
        "%s [--all] [--follow] [FILTER]\n"
        "Dumps entries in %s.\n\n"
        "Filter is an SQL expression on level, timestamp (MS in UTC),\n"
-       "function, file or line.\n\n"
+       "function, file or line.\n"
+       "\n"
        "To see all entries in the last 24 hours, run:\n"
-       "  %s --all 'timestamp > strftime (\"now\") - 24 * 60 * 60'\n",
-       argv[0], filename, argv[0]);
+       "  %s --all 'timestamp > strftime (\"now\") - 24 * 60 * 60'\n"
+       "\n"
+       "To see all entries since the last start, run:\n"
+       "  %s --all 'ROWID >= (select max (ROWID) from log where message like \"smart-storage-logger compiled on %\")'\n",
+       argv[0], filename, argv[0], argv[0]);
     exit (status);
   }
 
