@@ -802,7 +802,7 @@ battery_status (WCBatteryMonitor *m,
 		int old_charger, int charger,
 		gpointer user_data)
 {
-  debug (0, "Battery status: "
+  debug (4, "Battery status: "
 	 "charging: %d -> %d; discharging: %d -> %d; "
 	 "mV: %d -> %d; mAh: %d -> %d; charger: %s -> %s",
 	 old_is_charging, is_charging,
@@ -870,7 +870,7 @@ bm_init (void)
 			  wc_battery_mv_design (b),
 			  wc_battery_mah_design (b));
 
-      debug (0, DEBUG_BOLD ("Initial battery status")" %s: "
+      debug (4, "Initial battery status %s: "
 	     "charging: %d; discharging: %d; "
 	     "mV: %d of %d; mAh: %d of %d; charger: %s",
 	     wc_battery_id (b),
@@ -968,7 +968,7 @@ service_fs_access (WCServiceMonitor *m,
   if (strncmp (prefix, src, strlen (prefix)) == 0)
     dotfile = true;
 
-  debug (0, "%d(%d): %s;%s;%s: %s ("DEBUG_BOLD("%s")"%s%s%s, "BYTES_FMT")",
+  debug (4, "%d(%d): %s;%s;%s: %s ("DEBUG_BOLD("%s")"%s%s%s, "BYTES_FMT")",
 	 cb->top_levels_pid, cb->actor_pid,
 	 cb->top_levels_exe, cb->top_levels_arg0, cb->top_levels_arg1,
 	 wc_process_monitor_cb_str (cb->cb),
@@ -1238,6 +1238,7 @@ main (int argc, char *argv[])
   g_type_init ();
   g_thread_init (NULL);
 
+  debug (0, DEBUG_BOLD ("STARTING"));
   debug (0, "smart-storage-logger compiled on %s %s", __DATE__, __TIME__);
 
   /* Check if the pid file is locked before forking.  If it is locked

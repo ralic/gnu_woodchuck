@@ -182,12 +182,9 @@ service_new (WCServiceMonitor *m, pid_t pid, const char *dbus_name)
       wc_process_monitor_ptrace_trace (process->pid);
     }
 
-  do_debug (3)
-    {
-      GSList *l;
-      for (l = process->dbus_names; l; l = l->next)
-	debug (0, "Pid %d also has %s", pid, (char *) l->data);
-    }
+  GSList *l;
+  for (l = process->dbus_names; l; l = l->next)
+    debug (3, "Pid %d also has %s", pid, (char *) l->data);
 
   /* Add the dbus name to the list of names owned by this process.  */
   char *s = g_strdup (dbus_name);
@@ -233,7 +230,7 @@ service_free (WCServiceMonitor *m,
 	  found = true;
 	}
       else
-	debug (0, "Process %d still provides: %s",
+	debug (3, "Process %d still provides: %s",
 	       process->pid, name);
     }
   assert (found);

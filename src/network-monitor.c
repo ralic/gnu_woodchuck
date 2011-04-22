@@ -471,7 +471,7 @@ stats_update (NCNetworkMonitor *network_monitor, bool force)
       d->stats.tx = strtoll (f[8], NULL, 10);
     d->stats.time = n;
 
-    debug (0, "Interface %s: %"PRId64"/%"PRId64,
+    debug (5, "Interface %s: %"PRId64"/%"PRId64,
 	   interface, d->stats.rx, d->stats.tx);
 
     return true;
@@ -540,7 +540,7 @@ default_connection_update (NCNetworkMonitor *m,
      is possible to have a disconnected connection be the default
      connection.  Weird, huh?  */
 #warning XXX Respect connection_state_is_connection (c->state)?
-  debug (0, "%s %s as default connection",
+  debug (4, "%s %s as default connection",
 	 set ? "set" : "clear", c ? c->name : NULL);
 
   if (set)
@@ -549,12 +549,12 @@ default_connection_update (NCNetworkMonitor *m,
       if (c == m->default_connection_real)
 	/* It already is the default connection.  */
 	{
-	  debug (0, "Setting default: %s is already default.",
+	  debug (5, "Setting default: %s is already default.",
 		 c ? c->name : "none");
 	  return;
 	}
 
-      debug (0, "Setting default: %s -> %s.",
+      debug (4, "Setting default: %s -> %s.",
 	     m->default_connection_real
 	     ? m->default_connection_real->name : "none",
 	     c ? c->name : "none");
@@ -568,12 +568,12 @@ default_connection_update (NCNetworkMonitor *m,
 	/* But, we don't actually thing it is the default connection.
 	   Nothing to do.  */
 	{
-	  debug (0, "Clearing default: %s was not default, ignoring.",
+	  debug (5, "Clearing default: %s was not default, ignoring.",
 		 c ? c->name : "none");
 	  return;
 	}
       
-      debug (0, "Clearing default: %s.", c ? c->name : "none");
+      debug (4, "Clearing default: %s.", c ? c->name : "none");
 
       m->default_connection_real = NULL;
     }
@@ -974,7 +974,7 @@ nc_network_connection_info (NCNetworkConnection *c, uint32_t mask)
 		 interface.  */
 	      {
 		uint32_t ip = strtol (fields[1], NULL, 16);
-		debug (1, "gateway: %s via %s",
+		debug (4, "gateway: %s via %s",
 		       inet_ntoa ((struct in_addr) { ip }), d->interface);
 		
 		info->gateway4[0] = (ip >> 0) & 0xFF;

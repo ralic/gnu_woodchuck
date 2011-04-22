@@ -142,7 +142,7 @@ battery_properties_reread (gpointer user_data)
   WCBattery *b = WC_BATTERY (user_data);
   b->properties_reread = 0;
 
-  debug (3, "Rereading properties...");
+  debug (5, "Rereading properties...");
 
   int old_is_charging = b->is_charging;
   int old_is_discharging = b->is_discharging;
@@ -189,7 +189,7 @@ battery_properties_reread (gpointer user_data)
     {
       b->version ++;
 
-      debug (3, "Something changed: "
+      debug (4, "Something changed: "
 	     "charging: %d -> %d; discharging: %d -> %d; "
 	     "mv: %d -> %d; mah: %d -> %d; charger: %s -> %s",
 	     old_is_charging, b->is_charging,
@@ -208,7 +208,7 @@ battery_properties_reread (gpointer user_data)
 		     old_charger, b->charger);
     }
   else
-    debug (3, "Gratutitious status update:  nothing changed.");
+    debug (4, "Gratutitious status update:  nothing changed.");
 
   /* Don't run this idle handler again.  */
   return FALSE;
@@ -249,7 +249,7 @@ battery_properties_modified_cb (DBusGProxy *proxy,
 	   j ++)
 	if (strcmp (prop, interesting_properties[j]) == 0)
 	  {
-	    debug (2, "%s changed.  Queuing battery reread.", prop);
+	    debug (4, "%s changed.  Queuing battery reread.", prop);
 
 	    if (! b->properties_reread)
 	      /* Don't use an idle handler.  Allow changes to
@@ -262,7 +262,7 @@ battery_properties_modified_cb (DBusGProxy *proxy,
 
       if (j == (sizeof (interesting_properties)
 		/ sizeof (interesting_properties[0])))
-	debug (3, "%s changed, but we don't care.", prop);
+	debug (4, "%s changed, but we don't care.", prop);
     }
 }
 
@@ -345,7 +345,7 @@ wc_battery_new (WCBatteryMonitor *m, const char *name)
 {
   WCBattery *b = WC_BATTERY (g_object_new (WC_BATTERY_TYPE, NULL));
 
-  debug (1, "Adding battery %s", name);
+  debug (4, "Adding battery %s", name);
 
   b->monitor = m;
 
@@ -410,7 +410,7 @@ static void
 wc_battery_dispose (GObject *object)
 {
   WCBattery *b = WC_BATTERY (object);
-  debug (2, DEBUG_BOLD ("Disposing battery object %s"), b->name);
+  debug (4, "Disposing battery object %s", b->name);
 
   WCBatteryMonitor *m = b->monitor;
 
@@ -528,7 +528,7 @@ wc_battery_monitor_init (WCBatteryMonitor *m)
       g_free (devices[i]);
     }
   g_free (devices);
-  debug (1, "Found %d batteries.", i);
+  debug (4, "Found %d batteries.", i);
 }
 
 static void

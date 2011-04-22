@@ -1489,7 +1489,7 @@ thread_apply_patches (struct tcb *tcb)
 		      p->ins_len = mov_info.ins_len;
 		      memcpy (p->ins, mov_info.ins_bits, mov_info.ins_len);
 
-		      do_debug (0)
+		      do_debug (3)
 			{
 			  GString *s = g_string_new ("");
 			  g_string_append_printf
@@ -1500,7 +1500,7 @@ thread_apply_patches (struct tcb *tcb)
 			  for (i = 0; i < p->ins_len; i ++)
 			    g_string_append_printf
 			      (s, " 0x%02x", (int) (unsigned char) p->ins[i]);
-			  debug (0, "%s", s->str);
+			  debug (3, "%s", s->str);
 			  g_string_free (s, true);
 			}
 
@@ -1512,7 +1512,7 @@ thread_apply_patches (struct tcb *tcb)
 	  }
       }
 
-    debug (0, "%d system call sites in %s.", syscall_count, lib->filename);
+    debug (3, "%d system call sites in %s.", syscall_count, lib->filename);
     int i;
     for (i = 0; i < 2; i ++)
       {
@@ -1527,13 +1527,13 @@ thread_apply_patches (struct tcb *tcb)
 	    for (k = 0; k <= syscall_errno_check_horizon; k ++)
 	      g_string_append_printf (s, "%4d", sigs[j][k][i]);
 	  }
-	debug (0, "%s", s->str);
+	debug (3, "%s", s->str);
 	g_string_free (s, true);
       }
 
     if (lib->patch_count == 0)
       lib->patch_count = -1;
-    debug (0, "%s: %d patches.", lib->filename, lib->patch_count);
+    debug (3, "%s: %d patches.", lib->filename, lib->patch_count);
 
     g_free (map);
 
@@ -1657,8 +1657,8 @@ thread_apply_patches (struct tcb *tcb)
 	      }
 	  }
 
-	debug (0, DEBUG_BOLD ("%d: Found library %s at "
-			      "0x%"PRIxPTR"-0x%"PRIxPTR" (0x%"PRIxPTR")"),
+	debug (3, "%d: Found library %s at "
+	       "0x%"PRIxPTR"-0x%"PRIxPTR" (0x%"PRIxPTR")",
 	       tcb->tid, lib->filename,
 	       *map_start, *map_end, *map_end - *map_start);
 
@@ -1909,7 +1909,7 @@ thread_untrace (struct tcb *tcb, bool need_detach)
 	   We have to do this before we PTRACE_DETACH from the
 	   thread.  */
 	{
-	  debug (0, "Reverting patches on process %d (last thread %d, quit)",
+	  debug (3, "Reverting patches on process %d (last thread %d, quit)",
 		 pid, tid);
 	  thread_revert_patches (tcb);
 	}
@@ -2043,7 +2043,7 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
 	}
     }
 
-  debug (0, "Now tracing thread %d (%s;%s;%s).  Process: %d",
+  debug (3, "Now tracing thread %d (%s;%s;%s).  Process: %d",
 	 tid, pcb->exe, pcb->arg0, pcb->arg1, pcb->group_leader.tid);
 
   debug (4, "%d processes being traced (%d threads)",
@@ -2416,7 +2416,7 @@ process_monitor (void *arg)
 	  quit = now ();
 	  output_debug = 5;
 
-	  debug (0, "Need to detach from:");
+	  debug (1, "Need to detach from:");
 	  void iter (gpointer key, gpointer value, gpointer user_data)
 	  {
 	    pid_t tid = (int) (uintptr_t) key;
@@ -2611,7 +2611,7 @@ process_monitor (void *arg)
 		  pid_t pgl = tid_to_process_group_leader (tid);
 		  struct tcb *leader
 		    = g_hash_table_lookup (tcbs, (gpointer) (uintptr_t) pgl);
-		  debug (0, "Got signal for %d "
+		  debug (1, "Got signal for %d "
 			 "(group leader: %d;%s;%s;%s;trace options %sset; "
 			 "parent: %d), but not monitoring it!",
 			 tid, pgl,
@@ -2874,7 +2874,7 @@ process_monitor (void *arg)
 	      {
 		/* Get the name of the new child.  */
 		pid_t child = (pid_t) msg;
-		debug (1, "New thread %d", (int) child);
+		debug (3, "New thread %d", (int) child);
 		if (child)
 		  {
 		    /* Set up its TCB.  */

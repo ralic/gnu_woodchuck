@@ -129,7 +129,7 @@ do_delayed_flush (gpointer user_data)
   assert (q->flush_source);
   q->flush_source = 0;
 
-  debug (0, DEBUG_BOLD ("Delayed flush (have %d bytes)"), q->used);
+  debug (5, "Delayed flush (have %d bytes)", q->used);
 
   sqlq_flush (q);
 

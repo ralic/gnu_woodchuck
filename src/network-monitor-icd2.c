@@ -148,7 +148,7 @@ default_connection_scan_cb (gpointer user_data)
 	  }
       }
 
-    debug (0, "No connection associated with device %s", interface);
+    debug (1, "No connection associated with device %s", interface);
 
     /* We're done.  */
     return false;
@@ -220,7 +220,7 @@ addrinfo_sig_cb (DBusGProxy *proxy,
   char network_id[network_id_array->len + 1];
   memcpy (network_id, network_id_array->data, network_id_array->len);
   network_id[network_id_array->len] = 0;
-  debug (0, "service: %s/%x/%s; network: %s/%x/%s",
+  debug (4, "service: %s/%x/%s; network: %s/%x/%s",
 	 service_type, service_attributes, service_id,
 	 network_type, network_attributes, network_id);
 
@@ -236,7 +236,7 @@ addrinfo_sig_cb (DBusGProxy *proxy,
   if (c->per_connection_device_state == NULL)
     /* This is a new connection: we haven't assign it devices yet.  */
     {
-      debug (0, DEBUG_BOLD ("New connection %s"), network_id);
+      debug (4, "New connection %s", network_id);
       new_connection = true;
     }
 
@@ -245,7 +245,7 @@ addrinfo_sig_cb (DBusGProxy *proxy,
      does it mean that one device has multiple ip addresses?
      Currently, we assume the former.  But in that case, what does
      NETWORK_TYPE really mean?  */
-  debug (0, "%s has %d addresses", network_id, addresses->len);
+  debug (5, "%s has %d addresses", network_id, addresses->len);
   int i;
   for (i = 0; i < addresses->len; i ++)
     {
@@ -259,7 +259,7 @@ addrinfo_sig_cb (DBusGProxy *proxy,
 	  for (j = 0; j < 6; j ++)
 	    {
 	      GValue *ip = g_value_array_get_nth (boxed_info, j);
-	      debug (0, "  %s: %s",
+	      debug (5, "  %s: %s",
 		     desc[j],
 		     ip ? g_value_get_string (ip) : "<out of range>");
 	    }
@@ -279,7 +279,7 @@ addrinfo_sig_cb (DBusGProxy *proxy,
 	  else
 	    {
 	      interface = ip_to_interface (addr.s_addr);
-	      debug (0, "Interface: %s", interface);
+	      debug (5, "Interface: %s", interface);
 	    }
 	}
 
@@ -317,7 +317,7 @@ addrinfo_sig_cb (DBusGProxy *proxy,
 
       if (new_connection)
 	{
-	  debug (0, DEBUG_BOLD ("Adding device %s to connection %s"),
+	  debug (4, "Adding device %s to connection %s",
 		 interface, network_id);
 	  connection_add_device (c, interface);
 	}
@@ -380,7 +380,7 @@ icd2_state_sig_cb (DBusGProxy *proxy,
 
   NCNetworkConnection *c = connection_name_to_connection (m, network_id);
 
-  debug (0, DEBUG_BOLD ("state_sig: ") "%s: %s -> %s",
+  debug (4, "state_sig: %s: %s -> %s",
 	 network_id,
 	 c ? connection_state_to_str (c->state) : "<new connection>",
 	 connection_state_to_str (nstate));
@@ -391,7 +391,7 @@ icd2_state_sig_cb (DBusGProxy *proxy,
     {
       if (connection_state_is_connected (nstate))
 	{
-	  debug (0, "Now tracking connection %s.", network_id);
+	  debug (4, "Now tracking connection %s.", network_id);
 
 	  c = nc_network_connection_new (m, network_id);
 	  /* Don't use connection_state_set as we are not ready to
@@ -401,7 +401,7 @@ icd2_state_sig_cb (DBusGProxy *proxy,
 	  schedule_addrinfo = true;
 	}
       else
-	debug (0, "Ignoring disconnected connection %s.", network_id);
+	debug (4, "Ignoring disconnected connection %s.", network_id);
     }
   else if (c && c->state != nstate)
     {
@@ -466,7 +466,7 @@ gprs_status (DBusGProxy *proxy, GHashTable *conns, gpointer user_data)
     uint64_t rx = g_value_get_uint64 (g_value_array_get_nth (value, 5));
     uint64_t tx = g_value_get_uint64 (g_value_array_get_nth (value, 6));
 
-    debug (0, "apn: %s; protocol: %s; iface: %s; address: %s; unknown: %d; "
+    debug (4, "apn: %s; protocol: %s; iface: %s; address: %s; unknown: %d; "
 	   "rx/tx: %"PRId64"/%"PRId64,
 	   apn, proto, iface, addr, unknown, rx, tx);
   }
@@ -481,12 +481,12 @@ gprs_status (DBusGProxy *proxy, GHashTable *conns, gpointer user_data)
       m->gprs_direct_connection = n;
       if (tether)
 	{
-	  debug (0, "Device has a GPRS connection.  "
+	  debug (4, "Device has a GPRS connection.  "
 		 "Destroying tethered connection.");
 	  connection_state_set (tether, CONNECTION_STATE_DISCONNECTED, false);
 	}
       else
-	debug (0, "Device has a GPRS connection.  Assuming not tethered.");
+	debug (4, "Device has a GPRS connection.  Assuming not tethered.");
       return;
     }
 
@@ -494,7 +494,7 @@ gprs_status (DBusGProxy *proxy, GHashTable *conns, gpointer user_data)
     /* We observed a direct GPRS connection a few seconds ago.  Wait a
        bit before we create a tether connection.  */
     {
-      debug (0, "Last direct gprs connection just "TIME_FMT" ago.  "
+      debug (4, "Last direct gprs connection just "TIME_FMT" ago.  "
 	     "Ignoring gprs.status.",
 	     TIME_PRINTF (n - m->gprs_direct_connection));
       return;
@@ -504,14 +504,14 @@ gprs_status (DBusGProxy *proxy, GHashTable *conns, gpointer user_data)
   if (! tether)
     /* We have not created the tether connection yet.  */
     {
-      debug (0, "Device has a GPRS connection, which appears to be a tether.");
+      debug (4, "Device has a GPRS connection, which appears to be a tether.");
       tether = nc_network_connection_new (m, "modem");
       connection_add_device (tether, "modem");
       connection_state_set (tether, CONNECTION_STATE_CONNECTED, true);
     }
   else if (tether->state != CONNECTION_STATE_CONNECTED)
     {
-      debug (0, "Device has a GPRS connection, which appears to be a tether.  "
+      debug (4, "Device has a GPRS connection, which appears to be a tether.  "
 	     "Tether connection exists, but not connected (%s), forcing.",
 	     connection_state_to_str (tether->state));
 
