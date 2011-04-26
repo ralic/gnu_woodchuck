@@ -1172,6 +1172,17 @@ unix_signal_handler (WCSignalHandler *sh, struct signalfd_siginfo *si,
       if (loop)
 	g_main_loop_quit (loop);
     }
+
+  if (si->ssi_signo == SIGUSR1)
+    {
+      output_debug = MIN (5, output_debug + 1);
+      debug (0, "Got SIGUSR1.  Raised output_debug to %d", output_debug);
+    }
+  if (si->ssi_signo == SIGUSR2)
+    {
+      output_debug = MIN (0, output_debug - 1);
+      debug (0, "Got SIGUSR1.  Lowered output_debug to %d", output_debug);
+    }
 }
 
 static void
@@ -1184,6 +1195,8 @@ signal_handler_init (void)
   sigaddset (&signal_mask, SIGINT);
   sigaddset (&signal_mask, SIGQUIT);
   sigaddset (&signal_mask, SIGHUP);
+  sigaddset (&signal_mask, SIGUSR1);
+  sigaddset (&signal_mask, SIGUSR2);
 
   WCSignalHandler *sh = wc_signal_handler_new (&signal_mask);
 
