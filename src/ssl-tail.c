@@ -15,15 +15,6 @@ main (int argc, char *argv[])
 {
   files_init ();
 
-  char *filename = files_logfile (DEBUG_OUTPUT_FILENAME);
-  sqlite3 *db;
-  int err = sqlite3_open (filename, &db);
-  if (err)
-    error (1, 0, "sqlite3_open (%s): %s",
-	   filename, sqlite3_errmsg (db));
-
-  sqlite3_busy_timeout (db, 60 * 60 * 1000);
-
   char *last = NULL;
   int callback (void *cookie, int argc, char **argv, char **names)
   {
@@ -52,11 +43,18 @@ main (int argc, char *argv[])
     return 0;
   }
 
+  bool first = true;
+  char *filter = NULL;
+  bool follow = false;
+  last = strdup ("(select max (ROWID) - 10 from log)");
+  char *filename = files_logfile (DEBUG_OUTPUT_FILENAME);
+  char *table = NULL;
+
   void usage (int status)
   {
     fprintf
       (stderr,
-       "%s [--all] [--follow] [FILTER]\n"
+       "%s [--all] [--follow] [--file=LOG_FILE] [--table=TABLE] [FILTER]\n"
        "Dumps entries in %s.\n\n"
        "Filter is an SQL expression on level, timestamp (MS in UTC),\n"
        "function, file or line.\n"
@@ -65,15 +63,10 @@ main (int argc, char *argv[])
        "  %s --all 'timestamp > strftime (\"now\") - 24 * 60 * 60'\n"
        "\n"
        "To see all entries since the last start, run:\n"
-       "  %s --all 'ROWID >= (select max (ROWID) from log where message like \"smart-storage-logger compiled on %\")'\n",
+       "  %s --all 'ROWID >= (select max (ROWID) from log where message like \"smart-storage-logger compiled on %%\")'\n",
        argv[0], filename, argv[0], argv[0]);
     exit (status);
   }
-
-  bool first = true;
-  char *filter = NULL;
-  bool follow = false;
-  last = strdup ("(select max (ROWID) - 10 from log)");
 
   int i;
   for (i = 1; i < argc; i ++)
@@ -88,6 +81,14 @@ main (int argc, char *argv[])
     else if (strcmp (argv[i], "--help") == 0
 	     || strcmp (argv[i], "--usage") == 0)
       usage (0);
+    else if (strncmp (argv[i], "--file=", 7) == 0)
+      {
+	free (filename);
+	filename = strdup (&argv[i][7]);
+	fprintf (stderr, "Using %s\n", filename);
+      }
+    else if (strncmp (argv[i], "--table=", 8) == 0)
+      table = strdup (&argv[i][8]);
     else if (argv[i][0] == '-')
       {
 	fprintf (stderr, "Unknown option: '%s'\n", argv[i]);
@@ -99,6 +100,14 @@ main (int argc, char *argv[])
     else
       filter = argv[i];
 
+  sqlite3 *db;
+  int err = sqlite3_open (filename, &db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   filename, sqlite3_errmsg (db));
+
+  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+
   do
     {
       if (! first)
@@ -108,9 +117,10 @@ main (int argc, char *argv[])
 
       char *sql = sqlite3_mprintf
 	("select ROWID, timestamp, tz, function, file, line,"
-	 " return_address, message from log"
+	 " return_address, message from %s"
 	 " where (ROWID > %s) %s %s %s"
 	 " order by ROWID;",
+	 table ?: "log",
 	 last,
 	 filter ? "and (" : "",
 	 filter ?: "",
