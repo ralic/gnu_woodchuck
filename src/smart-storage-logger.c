@@ -1249,7 +1249,19 @@ main (int argc, char *argv[])
   if (owner)
     error (1, 0, "%s already running (pid: %d)", ssl, owner);
 
+
   char *log = files_logfile ("output");
+  {
+    gchar *contents = NULL;
+    gsize length = 0;
+    if (g_file_get_contents (log, &contents, &length, NULL))
+      {
+	debug (0, "Last instance's output: %s (%d bytes)",
+	       contents, (int) length);
+	g_free (contents);
+      }
+  }
+
   debug (0, "Daemonizing.  Further output will be sent to %s", log);
 
   /* See if we should fork.  */
@@ -1269,7 +1281,7 @@ main (int argc, char *argv[])
 
   /* Redirect stdout and stderr to the log file.  */
   {
-    int log_fd = open (log, O_WRONLY | O_CREAT | O_APPEND, 0660);
+    int log_fd = open (log, O_WRONLY | O_CREAT, 0660);
     dup2 (log_fd, STDOUT_FILENO);
     dup2 (log_fd, STDERR_FILENO);
     if (! (log_fd == STDOUT_FILENO || log_fd == STDERR_FILENO))
