@@ -1086,7 +1086,7 @@ uptime (void)
 	 interested in the first one.  */
       contents[length - 1] = 0;
       sscanf (contents, "%"PRId64, &t);
-      debug (0, "UPTIME: %s -> %"PRId64, contents, t);
+      debug (0, "UPTIME: %"PRId64" ("TIME_FMT")", t, TIME_PRINTF (t * 1000));
     }
 
   g_free (contents);
@@ -1251,7 +1251,7 @@ main (int argc, char *argv[])
   g_type_init ();
   g_thread_init (NULL);
 
-  debug (0, DEBUG_BOLD ("STARTING"));
+  debug (0, DEBUG_BOLD ("STARTING (%d)"), getpid ());
   debug (0, "smart-storage-logger compiled on %s %s", __DATE__, __TIME__);
 
   /* Check if the pid file is locked before forking.  If it is locked

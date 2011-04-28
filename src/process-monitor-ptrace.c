@@ -379,6 +379,9 @@ static pthread_t process_monitor_tid;
    of a wait.  */
 static pid_t signal_process_pid;
 
+/* Non-zero if we are trying to quit.  */
+static uint64_t quit;
+
 /* Events occur in the process monitor thread, which need to be
    forwarded to the user.  We need to make callbacks in the main
    thread.  We do this by using an idle handler (g_idle_add is thread
@@ -692,6 +695,24 @@ pcb_free (struct pcb *pcb)
 
   debug (4, "%d processes still being traced (%d threads)",
 	 pcb_count, tcb_count);
+  if (quit && tcb_count <= 4)
+    {
+      int count = 0;
+      void iter (gpointer key, gpointer value, gpointer user_data)
+      {
+	pid_t tid = (int) (uintptr_t) key;
+	struct tcb *tcb = value;
+	debug (1, "%d(%d): %s;%s;%s",
+	       tid, tcb->pcb->group_leader.tid,
+	       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
+	assert (tid == tcb->tid);
+
+	count ++;
+      }
+      g_hash_table_foreach (tcbs, iter, NULL);
+
+      assert (count == tcb_count);
+    }
 }
 
 /* Read the PCB's executable and command line.  Normally done on
@@ -1670,7 +1691,7 @@ thread_apply_patches (struct tcb *tcb)
     if (sql)
       {
 	g_string_append_printf (sql, "end transaction;\n");
-	debug (0, "%s", sql->str);
+	debug (4, "%s", sql->str);
 
 	if (process_patches_db)
 	  {
@@ -2457,8 +2478,6 @@ process_untrace (pid_t pid)
     }
 }
 
-static uint64_t quit;
-
 enum process_monitor_commands
   {
     PROCESS_MONITOR_QUIT = 1,
@@ -2471,6 +2490,7 @@ struct process_monitor_command
   enum process_monitor_commands command;
   /* Only valid for PROCESS_MONITOR_TRACE and PROCESS_MONITOR_UNTRACE.  */
   int pid;
+  uint64_t issued;
 };
 
 static pthread_cond_t process_monitor_signaler_init_cond
@@ -2532,6 +2552,7 @@ process_monitor_command (enum process_monitor_commands command, pid_t pid)
   struct process_monitor_command *cmd = g_malloc (sizeof (*cmd));
   cmd->command = command;
   cmd->pid = pid;
+  cmd->issued = now ();
 
   pthread_mutex_lock (&process_monitor_commands_lock);
 
@@ -2555,9 +2576,6 @@ static uint64_t global_load_check;
 static void
 load_shed_maybe (void)
 {
-  /* XXX: Make this do something useful.  */
-  return;
-
   uint64_t n = now ();
 
   if (n - global_load_check < 2 * CALLBACK_COUNT_BUCKET_WIDTH)
@@ -2679,8 +2697,10 @@ load_shed_maybe (void)
 
   g_slist_free (candidates);
 
-  tcb->suspended = -n;
+  // tcb->suspended = -n;
   suspended_tcbs = g_slist_prepend (suspended_tcbs, tcb);
+
+  return;
 }
 
 static void
@@ -2722,14 +2742,18 @@ process_monitor (void *arg)
        |PTRACE_O_TRACEEXEC|PTRACE_O_TRACEEXIT);
 
   struct tcb *tcb = NULL;
+  bool quit_raised_output_debug = false;
   while (! (quit && tcb_count == 0))
     {
-      if (quit && now () - quit > 5000)
-	/* If we don't manage to exit in about 5 seconds, something is
+      if (quit && now () - quit > 10000)
+	/* If we don't manage to exit in about 10 seconds, something is
 	   likely wrong.  Increase the debugging output.  */
 	{
-	  quit = now ();
-	  output_debug = 5;
+	  if (! quit_raised_output_debug)
+	    {
+	      output_debug = MAX (4, output_debug);
+	      quit_raised_output_debug = true;
+	    }
 
 	  debug (1, "Need to detach from:");
 	  void iter (gpointer key, gpointer value, gpointer user_data)
@@ -2783,6 +2807,7 @@ process_monitor (void *arg)
 	    /* Execute the commands in the order received.  */
 	    commands = g_slist_reverse (commands);
 
+	  uint64_t n = now ();
 	  while (commands)
 	    {
 	      struct process_monitor_command *c = commands->data;
@@ -2790,6 +2815,11 @@ process_monitor (void *arg)
 
 	      int command = c->command;
 	      pid_t pid = c->pid;
+
+	      if (n - c->issued > 500)
+		debug (0, "Command %d (%d) latency: "TIME_FMT,
+		       command, pid, TIME_PRINTF (n - c->issued));
+
 	      g_free (c);
 	      c = NULL;
 
@@ -3363,7 +3393,7 @@ process_monitor (void *arg)
 	    int ret = readlink (buffer, buffer, size - 1);
 	    if (ret < 0)
 	      {
-		debug (0, "%d: Failed to read %s: %m", pid, buffer);
+		debug (4, "%d: Failed to read %s: %m", pid, buffer);
 		return false;
 	      }
 
@@ -3750,7 +3780,8 @@ process_monitor (void *arg)
 	}
     }
 
-  debug (0, DEBUG_BOLD ("Process monitor exited."));
+  debug (0, DEBUG_BOLD ("Process monitor exited ("TIME_FMT")."),
+	 TIME_PRINTF (now () - quit));
 
   /* Kill the signal process.  */
   kill (signal_process_pid, SIGKILL);

@@ -147,7 +147,7 @@ process_info (pid_t pid, char **exep, char **arg0p, char **arg1p)
 static struct wc_process *
 service_new (WCServiceMonitor *m, pid_t pid, const char *dbus_name)
 {
-  debug (0, "service_new (%d, %s)", pid, dbus_name);
+  debug (3, "service_new (%d, %s)", pid, dbus_name);
   assert (dbus_name);
 
   struct wc_process *process = process_lookup_by_dbus_name (dbus_name);
@@ -182,9 +182,24 @@ service_new (WCServiceMonitor *m, pid_t pid, const char *dbus_name)
       wc_process_monitor_ptrace_trace (process->pid);
     }
 
+  GString *d = NULL;
   GSList *l;
   for (l = process->dbus_names; l; l = l->next)
-    debug (3, "Pid %d also has %s", pid, (char *) l->data);
+    {
+      if (! d)
+	{
+	  d = g_string_new ("");
+	  g_string_append_printf (d, "Pid %d also owns:",
+				  process->pid);
+	}
+
+      g_string_append_printf (d, " %s", (char *) l->data);
+    }
+  if (d)
+    {
+      debug (3, "%s", d->str);
+      g_string_free (d, true);
+    }
 
   /* Add the dbus name to the list of names owned by this process.  */
   char *s = g_strdup (dbus_name);
@@ -217,6 +232,7 @@ service_free (WCServiceMonitor *m,
   assert (process->dbus_names);
   GSList *next = process->dbus_names;
   bool found = false;
+  GString *d = NULL;
   while (next)
     {
       GSList *l = next;
@@ -230,8 +246,21 @@ service_free (WCServiceMonitor *m,
 	  found = true;
 	}
       else
-	debug (3, "Process %d still provides: %s",
-	       process->pid, name);
+	{
+	  if (! d)
+	    {
+	      d = g_string_new ("");
+	      g_string_append_printf (d, "Process %d still provides:",
+				      process->pid);
+	    }
+
+	  g_string_append_printf (d, " %s", name);
+	}
+    }
+  if (d)
+    {
+      debug (3, "%s", d->str);
+      g_string_free (d, true);
     }
   assert (found);
 
