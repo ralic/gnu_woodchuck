@@ -2186,6 +2186,13 @@ process_monitor_signaler_init (void)
     case 0:
       /* Child.  */
       debug (4, "Signal process monitor running.");
+
+      sigset_t set;
+      sigemptyset (&set);
+      sigaddset (&set, SIGUSR2);
+      if (pthread_sigmask (SIG_UNBLOCK, &set, NULL) != 0)
+	debug (0, "Unblocking delivery of SIGUSR2: %m");
+
       while (true)
 	sleep (INT_MAX);
     default:
