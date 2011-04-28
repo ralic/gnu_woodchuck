@@ -355,6 +355,29 @@ blacklisted_arg0 (const char *arg0)
   return false;
 }
 
+struct service_free_delayed
+{
+  WCServiceMonitor *m;
+  char name[];
+};
+
+static gboolean
+service_free_delayed_cb (gpointer user_data)
+{
+  struct service_free_delayed *s = user_data;
+  WCServiceMonitor *m = WC_SERVICE_MONITOR (s->m);
+  char *name = s->name;
+
+  struct wc_process *process = process_lookup_by_dbus_name (name);
+  if (process)
+    service_free (m, process, name);
+
+  g_free (user_data);
+
+  /* Don't call again.  */
+  return FALSE;
+}
+
 static void
 name_owner_changed_signal_cb (DBusGProxy *proxy,
 			      char *name, char *old_owner, char *new_owner,
@@ -375,7 +398,16 @@ name_owner_changed_signal_cb (DBusGProxy *proxy,
 	  debug (1, "%s abandoned %s", old_owner, name);
 	  struct wc_process *process = process_lookup_by_dbus_name (name);
 	  if (process)
-	    service_free (m, process, name);
+	    {
+	      /* Don't call service_free immediately.  Instead, wait a
+		 few seconds to see if the process exists.  */
+	      struct service_free_delayed *s
+		= g_malloc (sizeof (*s) + strlen (name) + 1);
+	      s->m = m;
+	      strcpy (s->name, name);
+
+	      g_timeout_add_seconds (5, service_free_delayed_cb, s);
+	    }
 	}
 
       if (new_owner && *new_owner)
