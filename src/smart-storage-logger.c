@@ -58,21 +58,38 @@ static NCNetworkMonitor *nm;
 static uint64_t nm_stop_logging;
 
 /* The time, as returned by now, of the last network scan.  */
-static uint64_t last_scan;
+static uint64_t last_scan[4];
 
-/* How often to scan for networks, in ms.  */
+/* The maximum amount of time to wait between scanning for WiFi
+   networks, in ms.  */
 #define SCAN_INTERVAL_MAX (3 * 60 * 60 * 1000)
 /* We must wait at least this long before performing a scan.  */
-#define SCAN_INTERVAL_MIN (60 * 60 * 1000)
+#define SCAN_INTERVAL_MIN (4 * 60 * 1000)
+#define SCAN_INTERVAL_MIN_LOW_PRIORITY (45 * 60 * 1000)
+/* On average, we don't want to scan more than once an hour.  */
+#define SCAN_INTERVAL_AVERAGE (60 * 60 * 1000)
 
 static void
-nm_scan_queue (void)
+nm_scan_queue (bool high_priority)
 {
   uint64_t n = now ();
-  if (now () - last_scan >= SCAN_INTERVAL_MIN)
+  if (n - last_scan[0]
+      >= high_priority ? SCAN_INTERVAL_MIN : SCAN_INTERVAL_MIN_LOW_PRIORITY)
     {
-      last_scan = n;
-      nm_scan (nm);
+      uint64_t average = 0;
+      int i;
+      for (i = 0; i < sizeof (last_scan) / sizeof (last_scan[0]); i ++)
+	average += n - last_scan[i];
+      average /= i;
+
+      if (average <= SCAN_INTERVAL_AVERAGE)
+	{
+	  for (i = 1; i < sizeof (last_scan) / sizeof (last_scan[0]); i ++)
+	    last_scan[i] = last_scan[i - 1];
+	  last_scan[0] = n;
+
+	  nm_scan (nm);
+	}
     }
 }
 
@@ -447,8 +464,8 @@ nm_connections_stat_cb (gpointer user_data)
   NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
   nm_connections_dump (m, "STATS");
 
-  if (now () - last_scan >= SCAN_INTERVAL_MAX)
-    nm_scan_queue ();
+  if (now () - last_scan[0] >= SCAN_INTERVAL_MAX)
+    nm_scan_queue (false);
 
   return true;
 }
@@ -467,6 +484,10 @@ nm_disconnected (NCNetworkMonitor *nm, NCNetworkConnection *nc,
 		 gpointer user_data)
 {
   nm_connection_dump (nc, "DISCONNECTED");
+
+  if (nc_network_connection_mediums (nc) & NC_CONNECTION_MEDIUM_WIFI)
+    /* By scanning, we can determine if the network has disappeared.  */
+    nm_scan_queue (true);
 }
 
 /* There is a new default connection.  */
@@ -763,7 +784,7 @@ uam_idle_active (WCUserActivityMonitor *m, gboolean idle, int64_t t,
 		      t,
 		      idle == WC_USER_IDLE ? "idle" : "active");
 
-  nm_scan_queue ();
+  nm_scan_queue (true);
 }
 
 static void
