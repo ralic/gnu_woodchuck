@@ -2062,7 +2062,9 @@ process_trace (pid_t pid)
   struct tcb *tcb = thread_trace (pid, NULL, false);
   if (! tcb)
     {
-      callback_enqueue (tcb, WC_PROCESS_TRACING_CB, NULL, NULL, false, NULL);
+      debug (0, "Failed to trace process %d, need to tell user!!!", pid);
+      /* XXX: TCB is NULL.  */
+      // callback_enqueue (tcb, WC_PROCESS_TRACING_CB, NULL, NULL, false, NULL);
       return NULL;
     }
 
@@ -2611,7 +2613,8 @@ process_monitor (void *arg)
 		   get ptrace event message soon.  */
 		{
 		  tcb = thread_trace (tid, NULL, true);
-		  tcb->trace_options = 1;
+		  if (tcb)
+		    tcb->trace_options = 1;
 		}
 	      else
 		{
@@ -2637,7 +2640,8 @@ process_monitor (void *arg)
 		       the thread...  */
 		    {
 		      tcb = thread_trace (tid, NULL, true);
-		      tcb->trace_options = 1;
+		      if (tcb)
+			tcb->trace_options = 1;
 		    }
 		}
 
@@ -2884,27 +2888,32 @@ process_monitor (void *arg)
 		debug (3, "New thread %d", (int) child);
 		if (child)
 		  {
-		    /* Set up its TCB.  */
+		    /* Set up its TCB.  (If TCB2 is NULL, it exited
+		       (was likely killed) before we could process
+		       this event.)  */
 		    struct tcb *tcb2 = thread_trace ((pid_t) child, tcb->pcb,
 						     true);
-		    /* If it is the same process, we already scanned
-		       for siblings.  If it is a new process, it must
-		       be the first (and only) thread, because it has
-		       not yet had a chance to run.  */
-		    tcb2->pcb->scanned_siblings = true;
-		    /* It inherits the options set on its parent.  */
-		    tcb2->trace_options = tcb->trace_options;
-
-		    int i;
-		    for (i = 0; i < LIBRARY_COUNT; i ++)
-		      /* It has the same memory image.  If the parent
-			 is fixed up, so is the child.  */
+		    if (tcb2)
 		      {
-			if (event != PTRACE_EVENT_CLONE)
-			  tcb2->pcb->lib_base[i] = tcb->pcb->lib_base[i];
+			/* If it is the same process, we already scanned
+			   for siblings.  If it is a new process, it must
+			   be the first (and only) thread, because it has
+			   not yet had a chance to run.  */
+			tcb2->pcb->scanned_siblings = true;
+			/* It inherits the options set on its parent.  */
+			tcb2->trace_options = tcb->trace_options;
 
-			/* The same fds are open.  */
-			tcb2->pcb->lib_fd[i] = tcb->pcb->lib_fd[i];
+			int i;
+			for (i = 0; i < LIBRARY_COUNT; i ++)
+			  /* It has the same memory image.  If the parent
+			     is fixed up, so is the child.  */
+			  {
+			    if (event != PTRACE_EVENT_CLONE)
+			      tcb2->pcb->lib_base[i] = tcb->pcb->lib_base[i];
+
+			    /* The same fds are open.  */
+			    tcb2->pcb->lib_fd[i] = tcb->pcb->lib_fd[i];
+			  }
 		      }
 		  }
 
