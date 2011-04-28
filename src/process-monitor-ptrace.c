@@ -478,7 +478,7 @@ callback_enqueue (struct tcb *tcb, int op,
   int s_len = src ? strlen (src) + 1 : 0;
   int d_len = dest ? strlen (dest) + 1 : 0;
 
-  cb = g_malloc (sizeof (struct wc_process_monitor_cb) + s_len + d_len);
+  cb = g_malloc0 (sizeof (struct wc_process_monitor_cb) + s_len + d_len);
 
   char *end = (void *) cb + sizeof (struct wc_process_monitor_cb);
 
@@ -498,23 +498,26 @@ callback_enqueue (struct tcb *tcb, int op,
   cb->cb = op;
   cb->timestamp = now ();
 
-  /* Find the top-level process.  */
-  struct pcb *tl = tcb->pcb;
-  while (! tl->top_level)
+  if (tcb)
     {
-      assert (tl->parent);
-      tl = tl->parent;
+      /* Find the top-level process.  */
+      struct pcb *tl = tcb->pcb;
+      while (! tl->top_level)
+	{
+	  assert (tl->parent);
+	  tl = tl->parent;
+	}
+
+      cb->top_levels_pid = tl->group_leader.tid;
+      cb->top_levels_exe = tl->exe;
+      cb->top_levels_arg0 = tl->arg0;
+      cb->top_levels_arg1 = tl->arg1;
+
+      cb->actor_pid = tcb->pcb->group_leader.tid;
+      cb->actor_exe = tcb->pcb->exe;
+      cb->actor_arg0 = tcb->pcb->arg0;
+      cb->actor_arg1 = tcb->pcb->arg1;
     }
-
-  cb->top_levels_pid = tl->group_leader.tid;
-  cb->top_levels_exe = tl->exe;
-  cb->top_levels_arg0 = tl->arg0;
-  cb->top_levels_arg1 = tl->arg1;
-
-  cb->actor_pid = tcb->pcb->group_leader.tid;
-  cb->actor_exe = tcb->pcb->exe;
-  cb->actor_arg0 = tcb->pcb->arg0;
-  cb->actor_arg1 = tcb->pcb->arg1;
 
   if (! stat_buf)
     /* STAT_BUF may be NULL.  Don't seg fault.  */
@@ -550,7 +553,8 @@ callback_enqueue (struct tcb *tcb, int op,
       break;
     }
 
-  tcb->load.event_count[tcb->load.callback_count_bucket] ++;
+  if (tcb)
+    tcb->load.event_count[tcb->load.callback_count_bucket] ++;
 
   pthread_mutex_lock (&pending_callbacks_lock);
  enqueue_with_lock:
@@ -2189,8 +2193,9 @@ thread_detach (struct tcb *tcb)
 static void
 thread_untrace (struct tcb *tcb, bool need_detach)
 {
-  debug (3, "thread_untrace (%d %s;%s;%s)",
-	 tcb->tid, tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
+  debug (3, "thread_untrace (%d(%d) %s;%s;%s)",
+	 tcb->tid, tcb->pcb->group_leader.tid,
+	 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
 
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
@@ -2392,8 +2397,7 @@ process_trace (pid_t pid)
   if (! tcb)
     {
       debug (0, "Failed to trace process %d, need to tell user!!!", pid);
-      /* XXX: TCB is NULL.  */
-      // callback_enqueue (tcb, WC_PROCESS_TRACING_CB, NULL, NULL, false, NULL);
+      callback_enqueue (tcb, WC_PROCESS_TRACING_CB, NULL, NULL, false, NULL);
       return NULL;
     }
 
