@@ -32,6 +32,7 @@
 #include "files.h"
 #include "pidfile.h"
 #include "smart-storage-logger-uploader.h"
+#include "md5.h"
 
 #include "signal-handler.h"
 
@@ -45,6 +46,113 @@
 static char *db_filename;
 static sqlite3 *db;
 
+static struct md5_ctx salt;
+
+static void 
+obfuscate (sqlite3_context* context, int argc, sqlite3_value **argv)
+{
+  /* Get the argument as a string.  */
+  const unsigned char *data = sqlite3_value_text (argv[0]);
+  int len = sqlite3_value_bytes (argv[0]);
+
+  struct md5_ctx hash = salt;
+  md5_process_bytes (data, len, &hash);
+
+  char result[22];
+  md5_finish_ctx (&hash, result);
+
+#if 1
+  /* 6-bits per character encoding.  a and b appear twice so that
+     the string is only alpha-numeric.  In this case we lose
+     approximately 2/32 = 6.3% of the entropy.  */
+  int i;
+  const char *translation =
+    "0123456789ABCDEFGHIJKLMNOPQRSTUV"
+    "WXYZabcdefghijklmnopqrstuvwxyzab";
+
+  for (i = 0; i < 21; i++)
+    result[i] = translation [(((uint32_t *) result)[i/5] >> (i % 5) * 6)
+			     & 0x3f];
+#else
+  /* 4-bit per character encoding.  */
+  for (i = 15; i >= 0; i --)
+    {
+      const char translation[] = "0123456789abcdef";
+      result[i * 2 + 1] = translation[result[i] & 0xf];
+      result[i * 2] = translation[((unsigned char) result[i] >> 4) & 0xf];
+    }
+#endif
+
+  result[sizeof (result) - 1] = 0;
+  debug (5, "X(%s) -> %s", data, result);
+
+  sqlite3_result_text (context,
+		       result,
+		       sizeof (result) - 1 /* Number of bytes.  */,
+		       SQLITE_TRANSIENT /* Have sqlite make a copy.  */);
+}
+
+static void
+db_init (void)
+{
+  /* Open the logging DB.  */
+  db_filename = files_logfile ("ssl.db");
+  int err = sqlite3_open (db_filename, &db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   db_filename, sqlite3_errmsg (db));
+
+  /* Sleep up to an hour if the database is busy...  */
+  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+
+  md5_init_ctx (&salt);
+
+  int salt_callback (void *cookie, int argc, char **argv, char **names)
+  {
+    md5_process_bytes (argv[0], strlen (argv[0]), &salt);
+    return 1;
+  }
+
+  char *errmsg = NULL;
+  err = sqlite3_exec (db,
+		      "create table if not exists salt (salt);"
+		      "select salt from salt;"
+		      "insert into salt (salt) values (hex(randomblob(16)));"
+		      "select salt from salt;",
+		      salt_callback, NULL, &errmsg);
+  if (errmsg)
+    {
+      if (err != SQLITE_ABORT)
+	debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+  if (err != SQLITE_ABORT)
+    debug (0, DEBUG_BOLD ("FAILED TO READ SECRET KEY"));
+
+  /* Add a custom SQL function, X.  (One parameter, any representation
+     (UTF-8, etc), no cookie, callback, no step function, no
+     destructor.)  */
+  sqlite3_create_function (db, "X", 1, SQLITE_ANY, NULL,
+			   obfuscate, NULL, NULL);
+
+  
+#if 0
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    debug (0, "XXX: %s, %s", argv[0], argv[1]);
+    return 0;
+  }
+  sqlite3_exec (db, "select X(1), X('foo');", callback, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+#endif
+}
+
 char sqlq_buffer[64 * 4096];
 struct sqlq *sqlq;
 
@@ -391,7 +499,7 @@ nm_connection_dump (NCNetworkConnection *nc, const char *state)
 
       col ("AP");
       if ((d->mask & NC_DEVICE_INFO_ACCESS_POINT))
-	val ("'%q'", d->access_point);
+	val ("X('%q')", d->access_point);
       else
 	val (DEFAULT_VALUE);
 
@@ -531,13 +639,13 @@ nm_scan_results (NCNetworkMonitor *nm, GSList *aps, gpointer user_data)
 	(sqlq, true,
 	 "insert or ignore into access_point"
 	 " (user_id, station_id, network_id, network_type)"
-	 " values (%Q, %Q, %Q, %Q);"
+	 " values (X(%Q), X(%Q), X(%Q), %Q);"
 	 "insert into access_point_log"
 	 " (APSID, APID, flags,"
 	 "  signal_strength_normalized, signal_strength_db)"
 	 " values ((select MAX (OID) from access_point_scan),"
 	 "  (select OID from access_point where"
-	 "    user_id=%Q and station_id=%Q and network_id=%Q"
+	 "    user_id=X(%Q) and station_id=X(%Q) and network_id=X(%Q)"
 	 "    and network_type=%Q),"
 	 "  '%"PRIx32"', %d, %d);",
 	 ap->user_id ?: DEFAULT_VALUE, ap->station_id ?: DEFAULT_VALUE,
@@ -589,7 +697,7 @@ nm_cell_info_changed (NCNetworkMonitor *nm, GSList *cells, gpointer user_data)
 	(sqlq, false,
 	 "insert or ignore into cells"
 	 " (lac, cell_id, network, country, network_type, operator)"
-	 " values (%"PRId16", %"PRId32", %"PRId32","
+	 " values (X(%"PRId16"), X(%"PRId32"), %"PRId32","
 	 "  %"PRId32", %d, '%q');"
 
 	 "insert into cell_info"
@@ -598,7 +706,7 @@ nm_cell_info_changed (NCNetworkMonitor *nm, GSList *cells, gpointer user_data)
 	 " values"
 	 " ("TM_FMT","
 	 "  (select OID from cells"
-	 "    where lac = %"PRId16" and cell_id = %"PRId32
+	 "    where lac = X(%"PRId16") and cell_id = X(%"PRId32")"
 	 "     and network = %"PRId32" and country = %"PRId32
 	 "     and network_type = %d and operator = '%q'),"
 	 "  '%s', %d, %d);",
@@ -1334,16 +1442,7 @@ main (int argc, char *argv[])
   const char *debug_output = debug_init_ ();
   logger_uploader_table_register (debug_output, "log", true);
 
-
-  /* Open the logging DB.  */
-  db_filename = files_logfile ("ssl.db");
-  int err = sqlite3_open (db_filename, &db);
-  if (err)
-    error (1, 0, "sqlite3_open (%s): %s",
-	   db_filename, sqlite3_errmsg (db));
-
-  /* Sleep up to an hour if the database is busy...  */
-  sqlite3_busy_timeout (db, 60 * 60 * 1000);
+  db_init ();
 
   /* Set up an sql queue.  Buffer data at most 20 seconds.  */
   sqlq = sqlq_new_static (db, sqlq_buffer, sizeof (sqlq_buffer), 20);

@@ -69,7 +69,8 @@ netczar_LDADD = $(BASE_LIBS)
 smart_storage_logger_SOURCES = $(common_sources) \
 	smart-storage-logger.c \
 	smart-storage-logger-uploader.h smart-storage-logger-uploader.c \
-	pidfile.h pidfile.c
+	pidfile.h pidfile.c \
+	md5.h md5.c
 smart_storage_logger_CPPFLAGS = $(AM_CPPFLAGS) -DLOG_TO_DB
 smart_storage_logger_LDADD = $(BASE_LIBS)
 
