@@ -22,6 +22,11 @@ script
 	exec /usr/bin/smart-storage-logger --no-fork
 end script
 
+post-stop script
+	exec /usr/bin/smart-storage-logger-recover
+end script
+
 respawn
 nice 5
-
+# We'd really prefer that smart-storage-logger exits cleanly...
+kill timeout 20

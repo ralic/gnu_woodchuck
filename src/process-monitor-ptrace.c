@@ -44,10 +44,11 @@
 #include <sys/fcntl.h>
 #include <limits.h>
 #include <sys/mman.h>
+#include <sqlite3.h>
 
 #include "signal-handler.h"
 #include "process-monitor-ptrace.h"
-
+#include "files.h"
 #include "util.h"
 
 const char *syscall_str (long syscall)
@@ -222,6 +223,10 @@ struct library_patch library_patches[] =
     { "/lib/libpthread-", },
   };
 #define LIBRARY_COUNT (sizeof (library_patches) / sizeof (library_patches[0]))
+
+/* We save patches in this db.  If we crash
+   smart-storage-logger-recover reverts any binary patches.  */
+static sqlite3 *process_patches_db;
 
 /* Load management.  */
 
@@ -307,6 +312,11 @@ static int tcb_count;
 /* List of currently suspended threads (those threads we suspended to
    reduce the load).  */
 static GSList *suspended_tcbs;
+
+/* Forwards.  */
+static struct tcb *thread_trace (pid_t tid, struct pcb *parent,
+				 bool already_ptracing);
+static void thread_untrace (struct tcb *tcb, bool need_detach);
 
 /* A process's control block.  All threads in the same process are
    mapped to the same pcb.  */
@@ -364,6 +374,10 @@ static int memfd_count;
 /* The pthread id of the process monitor thread (the thread that does
    the actually ptracing.  */
 static pthread_t process_monitor_tid;
+
+/* The PID of the signal process, used to get the process monitor out
+   of a wait.  */
+static pid_t signal_process_pid;
 
 /* Events occur in the process monitor thread, which need to be
    forwarded to the user.  We need to make callbacks in the main
@@ -629,6 +643,21 @@ pcb_free (struct pcb *pcb)
     if (p)
       do_free (p);
   }
+
+  if (process_patches_db)
+    {
+      char *errmsg = NULL;
+      int err = sqlite3_exec_printf (process_patches_db,
+				     "delete from processes where pid = %d",
+				     NULL, NULL, &errmsg,
+				     pcb->group_leader.tid);
+      if (errmsg)
+	{
+	  debug (0, "Saving patch %d: %s", err, errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+	}
+    }
 
   /* We need to reparent any children.  */
   if (pcb->children)
@@ -909,10 +938,11 @@ pcb_patched (struct pcb *pcb)
     && library_patches[LIBRARY_LD].patch_count;
 }
 
-/* Returns 0 if ADDR does not contain VALUE.  1 if it does.  -errno if
-   an error occurs.  */
+/* Returns 0 if ADDR does not contain VALUE.  The index + 1 of VALUES
+   if it does.  -errno if an error occurs.  */
 static int
-thread_check (struct tcb *tcb, uintptr_t addr, const char *value, int bytes)
+thread_check (struct tcb *tcb, uintptr_t addr, const char *values[],
+	      int count, int bytes)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
@@ -925,26 +955,33 @@ thread_check (struct tcb *tcb, uintptr_t addr, const char *value, int bytes)
       return -errno;
     }
 
-  if (memcmp (real, value, bytes) != 0)
-    {
-      GString *s = g_string_new ("");
-      g_string_append_printf
-	(s, DEBUG_BOLD ("Mismatch: reading process %d's memory")
-	 ": at %"PRIxPTR": expected:",
-	 (int) tcb->pcb->group_leader.tid, addr);
-      int i;
-      for (i = 0; i < bytes; i ++)
-	g_string_append_printf (s, " 0x%02x", (int) (unsigned char) value[i]);
-      g_string_append_printf (s, "; actual:");
-      for (i = 0; i < bytes; i ++)
-	g_string_append_printf (s, " 0x%02x", (int) (unsigned char) real[i]);
-      debug (0, "%s", s->str);
-      g_string_free (s, true);
+  int i;
+  for (i = 0; i < count; i ++)
+    if (memcmp (real, values[i], bytes) == 0)
+      return 1;
 
-      return 0;
+  GString *s = g_string_new ("");
+  g_string_append_printf
+    (s, DEBUG_BOLD ("Mismatch: reading process %d's memory")
+     ": at %"PRIxPTR": expected:",
+     (int) tcb->pcb->group_leader.tid, addr);
+  int j;
+  for (j = 0; j < count; j ++)
+    {
+      if (j > 0)
+	g_string_append_printf (s, " or ");
+
+      for (i = 0; i < bytes; i ++)
+	g_string_append_printf (s, " 0x%02x",
+				(int) (unsigned char) values[j][i]);
     }
-  else
-    return 1;
+  g_string_append_printf (s, "; actual:");
+  for (i = 0; i < bytes; i ++)
+    g_string_append_printf (s, " 0x%02x", (int) (unsigned char) real[i]);
+  debug (0, "%s", s->str);
+  g_string_free (s, true);
+
+  return 0;
 }
 
 static bool
@@ -1036,6 +1073,12 @@ enum
     ins_syscall,
     ins_syscall_errno_check,
     ins_syscall_num_load,
+    /* A numload instruction which has been replaced by a breakpoint.
+       (We don't just check for a breakpoint as a breakpoint is
+       typically 1 byte and a num load may be multiple bytes, only the
+       first of which is modified when it is converted to a
+       breakpoint.)  */
+    ins_syscall_breakpointed_num_load,
     ins_breakpoint,
     INS_COUNT
   };
@@ -1051,6 +1094,8 @@ instruction_str (int ins)
       return "syscall errno check";
     case ins_syscall_num_load:
       return "syscall num load";
+    case ins_syscall_breakpointed_num_load:
+      return "syscall breakpointed num load";
     case ins_breakpoint:
       return "breakpoint";
     default:
@@ -1080,6 +1125,8 @@ static const struct instruction ins_syscall_num_load_bits[] =
     { 4, { .byte = { /* syscall here.  */ 0x00, 0x70, 0xa0, 0xe3 } },
       .skip = (1 << 0) },
   };
+
+static struct instruction *ins_syscall_breakpointed_num_load_bits;
 
 static int syscall_num_load_horizon = 4;
 
@@ -1115,6 +1162,8 @@ static const struct instruction ins_syscall_num_load_bits[] =
     /* mov $0xXX,%al */
     { 2, { .byte = { 0xb0, /* syscall num.  */ } }, .skip = 1 << 1 }
   };
+
+static struct instruction *ins_syscall_breakpointed_num_load_bits;
 
 static int syscall_num_load_horizon = 24;
 
@@ -1164,6 +1213,33 @@ instruction_is (char *mem, int len,
     {
     case ins_syscall_num_load:
       i = ins_syscall_num_load_bits;
+      count = sizeof (ins_syscall_num_load_bits)
+	/ sizeof (ins_syscall_num_load_bits[0]);
+      break;
+
+    case ins_syscall_breakpointed_num_load:
+      if (! ins_syscall_breakpointed_num_load_bits)
+	{
+	  ins_syscall_breakpointed_num_load_bits
+	    = malloc (sizeof (ins_syscall_breakpointed_num_load_bits[0])
+		      * (sizeof (ins_syscall_num_load_bits)
+			 / sizeof (ins_syscall_num_load_bits[0])));
+	  for (count = 0;
+	       count < (sizeof (ins_syscall_num_load_bits)
+			/ sizeof (ins_syscall_num_load_bits[0]));
+	       count ++)
+	    {
+	      ins_syscall_breakpointed_num_load_bits[count]
+		= ins_syscall_num_load_bits[count];
+	      memcpy (ins_syscall_breakpointed_num_load_bits[count].byte,
+		      ins_breakpoint_bits.byte,
+		      ins_breakpoint_bits.len);
+	      /* Don't skip the break point bytes.  */
+	      ins_syscall_breakpointed_num_load_bits[count].skip
+		&= ~((1 << ins_breakpoint_bits.len) - 1);
+	    }
+	}
+      i = ins_syscall_breakpointed_num_load_bits;
       count = sizeof (ins_syscall_num_load_bits)
 	/ sizeof (ins_syscall_num_load_bits[0]);
       break;
@@ -1285,8 +1361,8 @@ thread_revert_patches (struct tcb *tcb)
 
 	    uintptr_t addr = base + p->base_offset;
 
-	    switch (thread_check (tcb, addr,
-				  ins_breakpoint_bits.byte,
+	    const char *values[] = { ins_breakpoint_bits.byte };
+	    switch (thread_check (tcb, addr, values, 1,
 				  ins_breakpoint_bits.len))
 	      {
 	      default:
@@ -1326,7 +1402,12 @@ thread_revert_patches (struct tcb *tcb)
       }
 }
 
-static void
+static GSList *pending_thread_apply_patches;
+
+/* Tries to patch the thread corresponding to TCB.  Returns true if
+   the thread may continue to run, false if it should be
+   suspended.  */
+static bool
 thread_apply_patches (struct tcb *tcb)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
@@ -1376,10 +1457,10 @@ thread_apply_patches (struct tcb *tcb)
     {
       debug (4, "Process %d already fully patched.",
 	     tcb->pcb->group_leader.tid);
-      return;
+      return true;
     }
 
-  void scan (struct library_patch *lib,
+  bool scan (struct tcb *tcb, struct library_patch *lib,
 	     uintptr_t map_start, uintptr_t map_end)
   {
     assert (lib->patch_count == 0);
@@ -1387,9 +1468,11 @@ thread_apply_patches (struct tcb *tcb)
 
     uintptr_t map_length = map_end - map_start;
 
-    debug (4, DEBUG_BOLD ("Scanning %s: %"PRIxPTR"-%"PRIxPTR" "
-			  "(0x%"PRIxPTR" bytes)"),
-	   lib->filename, map_start, map_end, map_length);
+    debug (4, DEBUG_BOLD ("Scanning %s (%d(%d) %s;%s;%s): "
+			  "%"PRIxPTR"-%"PRIxPTR" (0x%"PRIxPTR" bytes)"),
+	   lib->filename, tcb->tid, tcb->pcb->group_leader.tid,
+	   tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+	   map_start, map_end, map_length);
 
     char *map = g_malloc (map_length);
     char *end = tcb_mem_read (tcb, map_start, map, map_length, false);
@@ -1401,7 +1484,7 @@ thread_apply_patches (struct tcb *tcb)
     if (! end)
       {
 	debug (0, "tcb_mem_read failed.");
-	return;
+	return false;
       }
     map_length = (uintptr_t) end - (uintptr_t) map + 1;
 
@@ -1416,6 +1499,7 @@ thread_apply_patches (struct tcb *tcb)
     int sigs[syscall_num_load_horizon + 1][syscall_errno_check_horizon + 1][2];
     memset (sigs, 0, sizeof (sigs));
 
+    int already_patched_count = 0;
     uintptr_t off;
     for (off = INSTRUCTION_STEP; off < map_length; off += INSTRUCTION_STEP)
       {
@@ -1429,14 +1513,30 @@ thread_apply_patches (struct tcb *tcb)
 	    struct instruction_info mov_info;
 	    int j;
 	    for (j = 1; j <= syscall_num_load_horizon; j ++)
-	      if (off > j * INSTRUCTION_STEP
-		  && instruction_is (&map[off - j * INSTRUCTION_STEP],
-				     map_length - (off - j * INSTRUCTION_STEP),
-				     ins_syscall_num_load,
-				     &mov_info))
+	      if (off > j * INSTRUCTION_STEP)
 		{
-		  mov = j;
-		  break;
+		  if (instruction_is (&map[off - j * INSTRUCTION_STEP],
+				      map_length - (off - j * INSTRUCTION_STEP),
+				      ins_syscall_num_load,
+				      &mov_info))
+		    {
+		      mov = j;
+		      break;
+		    }
+		  else if (instruction_is (&map[off - j * INSTRUCTION_STEP],
+					   map_length
+					   - (off - j * INSTRUCTION_STEP),
+					   ins_syscall_breakpointed_num_load,
+					   &mov_info))
+		    {
+		      already_patched_count ++;
+		      debug (0, "Found breakpointed syscall num load at "
+			     "0x%"PRIxPTR,
+			     off  - j * INSTRUCTION_STEP);
+
+		      mov = j;
+		      break;
+		    }
 		}
 	    for (j = 1; j <= syscall_errno_check_horizon; j ++)
 	      if (off + j * INSTRUCTION_STEP < map_length
@@ -1537,22 +1637,68 @@ thread_apply_patches (struct tcb *tcb)
 
     g_free (map);
 
-    lib->patches = g_malloc (sizeof (struct patch) * lib->patch_count);
+    if (! already_patched_count)
+      lib->patches = g_malloc (sizeof (struct patch) * lib->patch_count);
+
+    GString *sql = NULL;
     for (i = 0; i < lib->patch_count; i ++)
       {
 	assert (patches);
 	struct patch *p = patches->data;
-	lib->patches[i] = *p;
 
+	if (! already_patched_count)
+	  {
+	    lib->patches[i] = *p;
+
+	    if (! sql)
+	      sql = g_string_new ("begin transaction;\n");
+	    g_string_append_printf (sql,
+				    "insert into patches (lib, offset, len");
+	    int i;
+	    for (i = 0; i < INSTRUCTION_LEN_MAX; i ++)
+	      g_string_append_printf (sql, ", o%d", i + 1);
+	    g_string_append_printf (sql, ") values ('%s', '%"PRIxPTR"', '%x'",
+				    lib->filename, p->base_offset, p->ins_len);
+	    for (i = 0; i < INSTRUCTION_LEN_MAX; i ++)
+	      g_string_append_printf (sql, ", '0x%x'", p->ins[i]);
+	    g_string_append_printf (sql, ");\n");
+	  }
+
+	/* No need to free P.  It is stack allocated.  */
 	patches = g_slist_delete_link (patches, patches);
       }
+    if (sql)
+      {
+	g_string_append_printf (sql, "end transaction;\n");
+	debug (0, "%s", sql->str);
+
+	if (process_patches_db)
+	  {
+	    char *errmsg = NULL;
+	    int err = sqlite3_exec (process_patches_db, sql->str,
+				    NULL, NULL, &errmsg);
+	    if (errmsg)
+	      {
+		debug (0, "Saving patch %d: %s", err, errmsg);
+		sqlite3_free (errmsg);
+		errmsg = NULL;
+	      }
+	  }
+	g_string_free (sql, true);
+      }
+
+    if (already_patched_count)
+      lib->patch_count = 0;
+
     assert (! patches);
+
+    return lib->patch_count != 0;
   }
 
   /* 0 => Library not found.  1 => Good library found, MAP_START and
      MAP_END valid.  -1 => Library found, but version mismatch or some
      other error.  */
-  int grep_maps (const char *maps, struct library_patch *lib,
+  int grep_maps (struct tcb *tcb, const char *maps, struct library_patch *lib,
 		 uintptr_t *map_start, uintptr_t *map_end)
   {
     int filename_len = strlen (lib->filename);
@@ -1647,10 +1793,13 @@ thread_apply_patches (struct tcb *tcb)
 	    if (*map_end - *map_start != lib->size)
 	      /* Wrong library.  */
 	      {
-		debug (0, "%d: Found library %s at 0x%"PRIxPTR"-0x%"PRIxPTR", "
+		debug (0, "%d(%d) %s;%s;%s: "
+		       "Found library %s at 0x%"PRIxPTR"-0x%"PRIxPTR", "
 		       "but wrong size "
 		       "(expected 0x%"PRIxPTR", got 0x%"PRIxPTR").",
-		       tcb->tid, lib->filename, *map_start, *map_end,
+		       tcb->tid, tcb->pcb->group_leader.tid,
+		       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+		       lib->filename, *map_start, *map_end,
 		       lib->size, *map_end - *map_start);
 		ret = -1;
 		continue;
@@ -1667,109 +1816,265 @@ thread_apply_patches (struct tcb *tcb)
     return ret;
   }
 
-  /* Figure our where the libraries are mapped.  */
-  char filename[32];
-  gchar *maps = NULL;
-  gsize length = 0;
-  GError *error = NULL;
-  snprintf (filename, sizeof (filename),
-	    "/proc/%d/maps", tcb->tid);
-  if (! g_file_get_contents (filename, &maps, &length, &error))
-    {
-      debug (0, "Error reading %s: %s; can't trace non-existent process",
-	     filename, error->message);
-      g_error_free (error);
-      error = NULL;
-      return;
-    }
+  /* Patch the thread TCB.  Returns true if the thread may be resumed,
+     false if it should not be allowed to run.  */
+  bool do_patch (struct tcb *tcb, bool fake)
+  {
+    /* Figure our where the libraries are mapped.  */
+    char filename[32];
+    gchar *maps = NULL;
+    gsize length = 0;
+    GError *error = NULL;
+    snprintf (filename, sizeof (filename),
+	      "/proc/%d/maps", tcb->tid);
+    if (! g_file_get_contents (filename, &maps, &length, &error))
+      {
+	debug (0, "Error reading %s: %s; can't trace non-existent process",
+	       filename, error->message);
+	g_error_free (error);
+	error = NULL;
+	return true;
+      }
 
-  debug (4, "%s: %s", filename, maps);
+    debug (4, "%s: %s", filename, maps);
 
-  bool patch[LIBRARY_COUNT];
-  int i;
-  for (i = 0; i < LIBRARY_COUNT; i ++)
-    {
-      patch[i] = false;
-      if (! tcb->pcb->lib_base[i])
-	{
-	  uintptr_t map_addr, map_end;
-	  switch (grep_maps (maps, &library_patches[i],
-			     &map_addr, &map_end))
-	    {
-	    case 1:
-	      if (! library_patches[i].patch_count)
-		/* We have not yet generated the patch list.  */
-		scan (&library_patches[i], map_addr, map_end);
-	      tcb->pcb->lib_base[i] = map_addr;
-	      patch[i] = true;
-	      break;
-
-	    case -1:
-	      /* Don't patch anything.  */
+  retry:;
+    bool suspend = false;
+    bool did_scan = false;
+    bool patch[LIBRARY_COUNT];
+    uintptr_t lib_base[LIBRARY_COUNT];
+    int i;
+    for (i = 0; i < LIBRARY_COUNT; i ++)
+      {
+	patch[i] = false;
+	if (! tcb->pcb->lib_base[i])
+	  {
+	    uintptr_t map_addr, map_end;
+	    switch (grep_maps (tcb, maps, &library_patches[i],
+			       &map_addr, &map_end))
 	      {
-		int j;
-		for (j = 0; j < i; j ++)
-		  if (patch[j])
-		    tcb->pcb->lib_base[j] = 0;
-		thread_revert_patches (tcb);
-		g_free (maps);
-		return;
+	      case 1:
+		if (! library_patches[i].patch_count)
+		  /* We have not yet generated the patch list.  */
+		  {
+		    if (! scan (tcb, &library_patches[i], map_addr, map_end))
+		      /* It looks like the binary was already patched.
+			 That means we crashed and did not properly
+			 clean up (i.e., revert patched processes).
+			 Given a patched binary, we can't extract the
+			 syscall numbers.  These leaves us three
+			 options.
+
+			 - We can try scanning ourself.  If we've
+			   loaded the relevant libraries, then life is
+			   good.
+
+			 - We suspend the process until another binary
+			   that uses the relevant library is
+			   sucessfully scanned.
+
+		         - We kill the process.
+
+		        We try option one, then two.  */
+		      {
+			static bool scanned_self;
+			if (! scanned_self)
+			  {
+			    debug (3, "Library self scan");
+			    scanned_self = true;
+
+			    struct tcb *self
+			      = thread_trace (signal_process_pid, NULL, true);
+			    if (self)
+			      {
+				did_scan = do_patch (self, true);
+				thread_untrace (self, false);
+				if (did_scan)
+				  goto retry;
+			      }
+			  }
+
+			suspend = true;
+			break;
+		      }
+		    else
+		      did_scan = true;
+		  }
+		lib_base[i] = map_addr;
+		patch[i] = true;
+		break;
+
+	      case -1:
+		/* Library found, but a different version.  Don't
+		   patch anything.  */
+		{
+		  thread_revert_patches (tcb);
+		  g_free (maps);
+		  return true;
+		}
 	      }
+	  }
+      }
+
+    g_free (maps);
+
+    if (suspend)
+      {
+	debug (0, "Suspending %d(%d) %s;%s;%s.",
+	       tcb->tid, tcb->pcb->group_leader.tid,
+	       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
+
+	pending_thread_apply_patches
+	  = g_slist_prepend (pending_thread_apply_patches, tcb);
+	return false;
+      }
+
+    /* Patch the current process.  */
+    int already_patched = 0;
+    int bad = 0;
+    int total = 0;
+    for (i = 0; i < LIBRARY_COUNT; i ++)
+      if (patch[i])
+	{
+	  int j;
+	  for (j = 0; j < library_patches[i].patch_count; j ++)
+	    {
+	      struct patch *p = &library_patches[i].patches[j];
+	      char patched[p->ins_len];
+	      memcpy (patched, ins_breakpoint_bits.byte,
+		      ins_breakpoint_bits.len);
+	      memcpy (&patched[ins_breakpoint_bits.len],
+		      &p->ins[ins_breakpoint_bits.len],
+		      p->ins_len - ins_breakpoint_bits.len);
+
+	      const char *values[] = { p->ins, patched };
+
+	      switch (thread_check (tcb, lib_base[i] + p->base_offset,
+				    values, 2, p->ins_len))
+		{
+		case 0:
+		  /* Mismatch.  */
+		default:
+		  /* Error reading memory.  */
+		  bad ++;
+		  break;
+		case 1:
+		  /* Instruction.  */
+		  break;
+		case 2:
+		  /* Patched instruction.  */
+		  already_patched ++;
+		  debug (0, "%d(%d) already patched at 0x%"PRIxPTR,
+			 tcb->tid, tcb->pcb->group_leader.tid,
+			 lib_base[i] + p->base_offset);
+		}
 	    }
+
+	  total += j;
 	}
-    }
 
-  g_free (maps);
-
-  /* Patch the current process.  */
-  int bad = 0;
-  int total = 0;
-  for (i = 0; i < LIBRARY_COUNT; i ++)
-    if (patch[i])
+    if (already_patched)
+      debug (0, DEBUG_BOLD ("%d of %d locations already patched."),
+	     already_patched, total);
+    if (bad)
       {
-	int j;
-	for (j = 0; j < library_patches[i].patch_count; j ++)
-	  {
-	    struct patch *p = &library_patches[i].patches[j];
-	    if (thread_check (tcb, tcb->pcb->lib_base[i] + p->base_offset,
-			      p->ins, p->ins_len) != 1)
-	      bad ++;
-	  }
-
-	total += j;
+	debug (0, DEBUG_BOLD ("%d of %d locations contain unexpected values.  "
+			      "Not patching."),
+	       bad, total);
+	return true;
       }
 
-  if (bad)
-    {
-      debug (0, DEBUG_BOLD ("%d of %d locations contain unexpected values.  "
-			    "Not patching."),
-	     bad, total);
-      return;
-    }
+    if (fake)
+      return true;
 
-  int count = 0;
-  for (i = 0; i < LIBRARY_COUNT; i ++)
-    if (patch[i])
+    GString *sql = NULL;
+    int count = 0;
+    for (i = 0; i < LIBRARY_COUNT; i ++)
       {
-	int j;
-	for (j = 0; j < library_patches[i].patch_count; j ++)
+	tcb->pcb->lib_base[i] = lib_base[i];
+	if (patch[i])
 	  {
-	    struct patch *p = &library_patches[i].patches[j];
-	    if (thread_mem_update (tcb, tcb->pcb->lib_base[i] + p->base_offset,
-				   ins_breakpoint_bits.byte,
-				   ins_breakpoint_bits.len))
-	      count ++;
+	    if (! sql)
+	      sql = g_string_new ("begin transaction;\n");
+	    g_string_append_printf
+	      (sql,
+	       "insert into processes (pid, lib, base)"
+	       " values (%d, '%s', '%"PRIxPTR"');\n",
+	       tcb->pcb->group_leader.tid, library_patches[i].filename,
+	       lib_base[i]);
+
+	    int j;
+	    for (j = 0; j < library_patches[i].patch_count; j ++)
+	      {
+		struct patch *p = &library_patches[i].patches[j];
+		if (thread_mem_update (tcb, lib_base[i] + p->base_offset,
+				       ins_breakpoint_bits.byte,
+				       ins_breakpoint_bits.len))
+		  count ++;
+	      }
 	  }
       }
 
-  debug (4, "Patched %d %s;%s;%s: applied %d of %d patches",
-	 tcb->pcb->group_leader.tid,
-	 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
-	 count, total);
+    if (sql)
+      {
+	g_string_append_printf (sql, "end transaction;\n");
+	debug (4, "%s", sql->str);
+
+	if (process_patches_db)
+	  {
+	    char *errmsg = NULL;
+	    int err = sqlite3_exec (process_patches_db, sql->str,
+				    NULL, NULL, &errmsg);
+	    if (errmsg)
+	      {
+		debug (0, "Saving patch %d: %s", err, errmsg);
+		sqlite3_free (errmsg);
+		errmsg = NULL;
+	      }
+	  }
+	g_string_free (sql, true);
+      }
+
+
+    debug (already_patched == 0 ? 3 : 0,
+	   "Patched %d %s;%s;%s: applied %d of %d (total: %d) patches",
+	   tcb->pcb->group_leader.tid,
+	   tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+	   count, total - already_patched, total);
+
+    if (did_scan)
+      {
+	/* Try to patch any suspended processes.  */
+	int suspended = 0;
+	int still_suspended = 0;
+	GSList *l;
+	l = pending_thread_apply_patches;
+	pending_thread_apply_patches = NULL;
+	while (l)
+	  {
+	    suspended ++;
+
+	    struct tcb *tcb = l->data;
+	    if (! do_patch (tcb, false))
+	      still_suspended ++;
+	    l = g_slist_delete_link (l, l);
+	  }
+
+	if (suspended)
+	  debug (0, "Patched and resumed %d of %d suspended threads.",
+		 suspended - still_suspended, suspended);
+      }
+
+    return true;
+  }
+
+  bool ret = do_patch (tcb, false);
 
 #ifndef NDEBUG
   fully_patched ();
 #endif
+
+  return ret;
 }
 
 #ifdef __x86_64__
@@ -1877,6 +2182,9 @@ thread_untrace (struct tcb *tcb, bool need_detach)
 	     (int) tcb->tid);
       assert (0 == 1);
     }
+
+  pending_thread_apply_patches
+    = g_slist_remove (pending_thread_apply_patches, tcb);
 
   if (tcb->suspended)
     {
@@ -2170,8 +2478,6 @@ static pthread_cond_t process_monitor_signaler_init_cond
 static pthread_mutex_t process_monitor_commands_lock
   = PTHREAD_MUTEX_INITIALIZER;
 static GSList *process_monitor_commands;
-
-static pid_t signal_process_pid;
 
 static void
 process_monitor_signaler_init (void)
@@ -2657,7 +2963,11 @@ process_monitor (void *arg)
       /* See if the child exited.  */
       if (WIFEXITED (status))
 	{
-	  debug (4, "%d exited: %d.", (int) tid, WEXITSTATUS (status));
+	  signal_state (4);
+	  debug (3, "%d(%d) %s;%s;%s exited: %d.",
+		 (int) tid, (int) tcb->pcb->group_leader.tid,
+		 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+		 WEXITSTATUS (status));
 	  thread_untrace (tcb, false);
 	  tcb = NULL;
 	  continue;
@@ -2665,8 +2975,10 @@ process_monitor (void *arg)
 
       if (WIFSIGNALED (status))
 	{
-	  debug (4, "%d exited due to signal: %s.",
-		 (int) tid, strsignal (WTERMSIG (status)));
+	  debug (3, "%d(%d) %s;%s;%s exited due to signal: %s (%d).",
+		 (int) tid, (int) tcb->pcb->group_leader.tid,
+		 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+		 strsignal (WTERMSIG (status)), WTERMSIG (status));
 	  thread_untrace (tcb, false);
 	  tcb = NULL;
 	  continue;
@@ -2836,7 +3148,8 @@ process_monitor (void *arg)
 		}
 	    }
 
-	  thread_apply_patches (tcb);
+	  if (! thread_apply_patches (tcb))
+	    continue;
 
 	  open_fds_iterate (WC_PROCESS_OPEN_CB);
 
@@ -3257,7 +3570,8 @@ process_monitor (void *arg)
 		     file_offset, map_addr);
 
 	      if (lib && (prot & PROT_EXEC))
-		thread_apply_patches (tcb);
+		if (! thread_apply_patches (tcb))
+		  continue;
 	    }
 	  break;
 
@@ -3273,7 +3587,8 @@ process_monitor (void *arg)
 		     (uintptr_t) ARG1, (uintptr_t) ARG2,
 		     (uintptr_t) (ARG1 + ARG2), (uintptr_t) RET);
 	      if (RET == 0 && ! pcb_patched (tcb->pcb))
-		thread_apply_patches (tcb);
+		if (! thread_apply_patches (tcb))
+		  continue;
 	    }
 	  break;
 
@@ -3520,6 +3835,38 @@ wc_process_monitor_ptrace_init (void)
   /* pid_t fits in a pointer.  */
   pcbs = g_hash_table_new (g_direct_hash, g_direct_equal);
   tcbs = g_hash_table_new (g_direct_hash, g_direct_equal);
+
+
+#ifndef PROCESS_TRACER_STANDALONE
+  char *db_filename = files_logfile ("process-patches");
+  int err = sqlite3_open (db_filename, &process_patches_db);
+  if (err)
+    {
+      debug (0, "sqlite3_open (%s): %s",
+	     db_filename, sqlite3_errmsg (process_patches_db));
+      sqlite3_close (process_patches_db);
+      process_patches_db = NULL;
+    }
+
+  /* Sleep up to an hour if the database is busy...  */
+  sqlite3_busy_timeout (process_patches_db, 60 * 60 * 1000);
+
+  char *errmsg = NULL;
+  err = sqlite3_exec (process_patches_db,
+		      "drop table if exists patches;"
+		      "create table patches"
+		      " (lib, offset, len, o1, o2, o3, o4, o5, o6, o7, o8);"
+		      "drop table if exists processes;"
+		      "create table processes (pid, lib, base);",
+  		      NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "Opening %s: %d: %s", db_filename, err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+  g_free (db_filename);
+#endif
 
   pthread_create (&process_monitor_tid, NULL, process_monitor, NULL);
   pthread_mutex_lock (&process_monitor_commands_lock);

@@ -1,4 +1,5 @@
-bin_PROGRAMS = netczar smart-storage-logger process-tracer ssl-tail
+bin_PROGRAMS = netczar smart-storage-logger smart-storage-logger-recover \
+	process-tracer ssl-tail
 
 AM_CFLAGS = -Wall -g -O2 -std=gnu99 $(BASE_CFLAGS)
 AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -DPKGDATADIR=\"$(pkgdatadir)\"
@@ -71,6 +72,13 @@ smart_storage_logger_SOURCES = $(common_sources) \
 	pidfile.h pidfile.c
 smart_storage_logger_CPPFLAGS = $(AM_CPPFLAGS) -DLOG_TO_DB
 smart_storage_logger_LDADD = $(BASE_LIBS)
+
+smart_storage_logger_recover_SOURCES = \
+	smart-storage-logger-recover.c \
+	debug.h debug.c \
+	files.h files.c
+smart_storage_logger_recover_CPPFLAGS = $(AM_CPPFLAGS) -DLOG_TO_DB
+smart_storage_logger_recover_LDADD = $(BASE_LIBS)
 
 process_tracer_CPPFLAGS = $(AM_CPPFLAGS) -DPROCESS_TRACER_STANDALONE
 process_tracer_LDADD = $(BASE_LIBS)
