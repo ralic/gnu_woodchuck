@@ -2454,7 +2454,8 @@ process_untrace (pid_t pid)
     for (t = pcb->tcbs; t; t = t->next)
       {
 	struct tcb *tcb = t->data;
-	if (tcb->suspended <= 0 && tkill (tcb->tid, SIGSTOP) < 0)
+	if (tcb->suspended <= 0
+	    && (tkill (tcb->tid, SIGSTOP) < 0 || tkill (tcb->tid, SIGCONT) < 0))
 	  {
 	    debug (0, "tkill (%d, SIGSTOP): %m", tcb->tid);
 	    dofree = g_slist_prepend (dofree, tcb);
@@ -2771,9 +2772,8 @@ process_monitor (void *arg)
 	    if (tcb->suspended > 0)
 	      /* Already suspended.  */
 	      thread_untrace (tcb, false);
-	    else if (tkill (tid, SIGSTOP) < 0)
-	      /* Failed to send it SIGSTOP.  Assume it is
-		 dead.  */
+	    else if (tkill (tid, SIGSTOP) < 0 || tkill (tid, SIGCONT) < 0)
+	      /* Failed to send it a signal.  Assume it is dead.  */
 	      {
 		debug (0, "tkill (%d, SIGSTOP): %m", tid);
 		thread_untrace (tcb, false);
@@ -2851,8 +2851,9 @@ process_monitor (void *arg)
 		    if (tcb->suspended > 0)
 		      /* Already suspended.  */
 		      thread_untrace (tcb, false);
-		    else if (tkill (tid, SIGSTOP) < 0)
-		      /* Failed to send it SIGSTOP.  Assume it is
+		    else if (tkill (tid, SIGSTOP) < 0
+			     || tkill (tid, SIGCONT) < 0)
+		      /* Failed to send a signal.  Assume it is
 			 dead.  */
 		      {
 			debug (0, "tkill (%d, SIGSTOP): %m", tid);
