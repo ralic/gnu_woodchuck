@@ -1274,6 +1274,7 @@ main (int argc, char *argv[])
 	g_free (contents);
       }
   }
+  unlink (log);
 
   debug (0, "Daemonizing.  Further output will be sent to %s", log);
 
