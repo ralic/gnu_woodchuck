@@ -19,7 +19,23 @@ script
 	/usr/sbin/waitdbus system
 	/usr/sbin/waitdbus session
 
-	exec /usr/bin/smart-storage-logger --no-fork
+	{
+	  echo "Running smart-storage-logger-consent."
+	  if run-standalone.sh python /usr/bin/smart-storage-logger-consent
+	  then
+	    echo "Have user's consent."
+	    exec /usr/bin/smart-storage-logger --no-fork
+	  else
+	    echo "User did not give consent, uninstalling."
+	    sleep 10
+	    while ! nohup dpkg -P smart-storage-logger
+	    do
+	      echo "Uninstalling smart-storage-logger failed." \
+	        "Sleeping and trying again."
+	      sleep 5
+	    done
+	  fi
+	} >/tmp/smart-storage-logger-output 2>&1
 end script
 
 post-stop script

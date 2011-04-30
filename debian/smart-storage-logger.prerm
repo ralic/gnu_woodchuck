@@ -1,5 +1,10 @@
 #! /bin/sh
 
 stop smart-storage-logger
+if test x"$1" != "xupgrade"
+then
+    echo Removing /home/user/.smart-storage/consent
+    rm -f /home/user/.smart-storage/consent
+fi
 
 #DEBHELPER#

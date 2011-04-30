@@ -1,5 +1,9 @@
 bin_PROGRAMS = netczar smart-storage-logger smart-storage-logger-recover \
 	process-tracer ssl-tail
+bin_SCRIPTS = smart-storage-logger-consent
+
+%: %.py
+	cp "$<" "$@"
 
 AM_CFLAGS = -Wall -g -O2 -std=gnu99 $(BASE_CFLAGS)
 AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -DPKGDATADIR=\"$(pkgdatadir)\"

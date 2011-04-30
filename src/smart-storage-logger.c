@@ -1383,6 +1383,28 @@ main (int argc, char *argv[])
   debug (0, DEBUG_BOLD ("STARTING (%d)"), getpid ());
   debug (0, "smart-storage-logger compiled on %s %s", __DATE__, __TIME__);
 
+#if HAVE_MAEMO
+  {
+    char *filename = "/home/user/.smart-storage/consent";
+    char *contents = NULL;
+    gsize length = 0;
+    GError *error = NULL;
+    if (! g_file_get_contents (filename, &contents, &length, &error))
+      {
+	debug (0, "Error reading %s: %s", filename, error->message);
+	g_error_free (error);
+	error = NULL;
+	return 1;
+      }
+    if (! g_str_has_prefix (contents, "accept "))
+      {
+	debug (0, "Don't have user's consent. Refusing to run.");
+	return 1;
+      }
+    g_free (contents);
+  }
+#endif
+
   /* Check if the pid file is locked before forking.  If it is locked
      bail.  Otherwise, fork and then acquire it definitively.  */
   char *pidfilename = files_logfile ("pid");
