@@ -1,5 +1,22 @@
 #! /bin/sh
 
+if test -e /home/user/.smart-storage/logs/uuid.db
+then
+    # Old version.  Delete the old logs.
+    echo "Removing old log files."
+    if rm /home/user/.smart-storage/logs/uuid.db
+    then
+	rm -f /home/user/.smart-storage/logs/access.db \
+          /home/user/.smart-storage/logs/activity.db \
+          /home/user/.smart-storage/logs/battery.db \
+          /home/user/.smart-storage/logs/log \
+          /home/user/.smart-storage/logs/log.db \
+          /home/user/.smart-storage/logs/network.db \
+          /home/user/.smart-storage/logs/process.db \
+          /home/user/.smart-storage/logs/upload.db
+    fi
+fi
+
 start smart-storage-logger
 
 #DEBHELPER#
