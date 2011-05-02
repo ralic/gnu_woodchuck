@@ -230,7 +230,7 @@ uuid (void)
 
   /* First, open the database.  */
 
-  char *filename = files_logfile ("uuid.db");
+  char *filename = files_logfile ("ssl.db");
 
   sqlite3 *db;
   int err = sqlite3_open (filename, &db);
