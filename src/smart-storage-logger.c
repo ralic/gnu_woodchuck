@@ -850,6 +850,9 @@ nm_init (void)
   logger_uploader_table_register (db_filename, "access_point_scan", true);
   logger_uploader_table_register (db_filename, "access_point_log", true);
 
+  logger_uploader_table_register (db_filename, "cells", false);
+  logger_uploader_table_register (db_filename, "cell_info", true);
+
   /* Initialize the network monitor.  */
   nm = nc_network_monitor_new ();
 
@@ -1165,6 +1168,7 @@ sm_init (void)
     }
 
   logger_uploader_table_register (db_filename, "service_log", true);
+  logger_uploader_table_register (db_filename, "file_access_log", true);
 
   WCServiceMonitor *m = wc_service_monitor_new ();
 
