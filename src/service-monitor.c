@@ -312,10 +312,8 @@ static const char *arg0_blacklist[] =
     "/usr/sbin/alarmd",
     "/usr/sbin/ke-recv",
     "/usr/bin/osso-connectivity-ui-conndlgs",
-
-    /* This doesn't belong here.  But, if we try to play videos it
-       won't work.  */
-    // "/usr/bin/mafw-dbus-wrapper"
+    "/usr/bin/hildon-application-manager",
+    "/usr/bin/osso-xterm",
 #else
     /* Standard program in a GNOME session we can ignore (at least in
        Debian).  */
