@@ -455,24 +455,11 @@ callback_enqueue (struct tcb *tcb, int op,
     /* Free.  Stash stat_buf in open.filename.  */
     {
       pthread_mutex_lock (&pending_callbacks_lock);
-      if (! pending_callbacks)
-	/* There are no pending callbacks, we can free this
-	   already.  */
-	{
-	  pthread_mutex_unlock (&pending_callbacks_lock);
-	  debug (4, "no pending callbacks. freeing %p immediately",
-		 stat_buf);
-	  g_free (stat_buf);
-	  return;
-	}
-      else
-	{
-	  cb = g_malloc (sizeof (struct wc_process_monitor_cb));
-	  cb->cb = op;
-	  cb->open.filename = (void *) stat_buf;
-	  src_copy = cb->open.filename;
-	  goto enqueue_with_lock;
-	}
+      cb = g_malloc (sizeof (struct wc_process_monitor_cb));
+      cb->cb = op;
+      cb->open.filename = (void *) stat_buf;
+      src_copy = cb->open.filename;
+      goto enqueue_with_lock;
     }
 
   int s_len = src ? strlen (src) + 1 : 0;
