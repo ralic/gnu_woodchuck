@@ -143,13 +143,17 @@ def main():
             dialog = gtk.Dialog \
                 ("Woodchuck Research Project Participation: Consent Granted")
             text_area = build_text_area (accept_text)
+            finish_button = dialog.add_button("Install",
+                                              hildon.WIZARD_DIALOG_FINISH)
         else:
             dialog = gtk.Dialog \
                 ("Woodchuck Research Project Participation: Consent Declined")
             text_area = build_text_area (reject_text)
+            finish_button = dialog.add_button("Uninstall",
+                                              hildon.WIZARD_DIALOG_FINISH)
+
         dialog.vbox.pack_start (text_area)
-     
-        finish_button = dialog.add_button("Finish", hildon.WIZARD_DIALOG_FINISH)
+
         reject_button = dialog.add_button("Back", 10)
         reject_button.connect ("clicked", reject_button_clicked, dialog)
 
