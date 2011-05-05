@@ -26,18 +26,18 @@ nm_interfaces_xml = $(foreach filename, \
 	org.freedesktop.Hal.Device.xml \
 	org.freedesktop.DBus.xml \
 	Phone.Net.xml \
-	org.woodchuck.server.xml \
-	org.woodchuck.client.xml \
+	org.woodchuck.xml \
+	org.woodchuck.upcall.xml \
 	, $(srcdir)/$(filename))
 
 nm_interfaces_h = $(patsubst %.xml,%.h,$(nm_interfaces_xml))
 
 nm_server_stubs_xml = $(foreach filename, \
-	org.woodchuck.server.xml \
-	org.woodchuck.client.xml \
+	org.woodchuck.xml \
+	org.woodchuck.upcall.xml \
 	, $(srcdir)/$(filename))
 
-nm_server_stubs_c = $(patsubst %.xml,%-server.h,$(nm_server_stubs_xml))
+nm_server_stubs_c = $(patsubst %.xml,%.server-stubs.h,$(nm_server_stubs_xml))
 
 BUILT_SOURCES = $(nm_interfaces_h) $(nm_server_stubs_c) \
 	marshal.h marshal.c
@@ -101,7 +101,7 @@ xml-to-h: $(patsubst %.xml,%.h,$(wildcard $(srcdir)/*.xml))
 %.h: %.xml
 	dbus-binding-tool --mode=glib-client "$<" > "$@"
 
-%-server.h: %.xml
+%.server-stubs.h: %.xml
 	echo "$*"
 	dbus-binding-tool --mode=glib-server \
 	  --prefix=$$(echo "$*" | sed 's/.*[/]//; s/[.]/_/g') \

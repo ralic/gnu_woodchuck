@@ -57,30 +57,30 @@ extern GType murmeltier_get_type (void);
 
 /* The server stub file can only be included after declaring the
    prototypes for the callback functions.  */
-static gboolean org_woodchuck_server_principal_register
+static gboolean org_woodchuck_principal_register
   (Murmeltier *mt,
    GValueArray *human_readable_name, char *bus_name, GValue *execve,
    char **uuid, GError **error);
-static gboolean org_woodchuck_server_principal_remove
+static gboolean org_woodchuck_principal_remove
   (Murmeltier *mt, char *uuid, GError **error);
-static gboolean org_woodchuck_server_job_submit
+static gboolean org_woodchuck_job_submit
   (Murmeltier *mt,
    char *principal_uuid, char *url, char *location, char *cookie,
    gboolean wakeup, uint64_t trigger_target, uint64_t trigger_earliest,
    uint64_t trigger_latest, uint32_t period, uint32_t request_type,
    uint32_t priority, uint64_t expected_size, char **job_uuid, GError **error);
-static gboolean org_woodchuck_server_job_evaluate
+static gboolean org_woodchuck_job_evaluate
   (Murmeltier *mt,
    char *principal_uuid, uint32_t request_type, uint32_t priority,
    uint64_t expected_size, uint32_t *desirability, GError **error);
-static gboolean org_woodchuck_server_feedback_subscribe
+static gboolean org_woodchuck_feedback_subscribe
   (Murmeltier *mt, char *principal_uuid, char **handle, GError **error);
-static gboolean org_woodchuck_server_feedback_unsubscribe
+static gboolean org_woodchuck_feedback_unsubscribe
   (Murmeltier *mt, char *handle, GError **error);
-static gboolean org_woodchuck_server_feedback_ack
+static gboolean org_woodchuck_feedback_ack
   (Murmeltier *mt, char *job_uuid, uint32_t instance, GError **error);
 
-#include "org.woodchuck.server-server.h"
+#include "org.woodchuck.server-stubs.h"
 
 G_DEFINE_TYPE (Murmeltier, murmeltier, G_TYPE_OBJECT);
 
@@ -105,7 +105,7 @@ murmeltier_class_init (MurmeltierClass *klass)
     }
 
   dbus_g_object_type_install_info
-    (MURMELTIER_TYPE, &dbus_glib_org_woodchuck_server_object_info);
+    (MURMELTIER_TYPE, &dbus_glib_org_woodchuck_object_info);
 }
 
 static void
@@ -148,7 +148,8 @@ connection_dump (NCNetworkConnection *nc)
 static gboolean
 connections_dump (gpointer user_data)
 {
-  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+  Murmeltier *mt = MURMELTIER (user_data);
+  NCNetworkMonitor *m = mt->nm;
 
   GList *e = nc_network_monitor_connections (m);
   while (e)
@@ -258,8 +259,9 @@ murmeltier_init (Murmeltier *mt)
 
 /* The server stub file can only be included after declaring the
    prototypes for the callback functions.  */
+
 static gboolean
-org_woodchuck_server_principal_register
+org_woodchuck_principal_register
   (Murmeltier *mt,
    GValueArray *human_readable_name, char *bus_name, GValue *execve,
    char **uuid, GError **error)
@@ -268,14 +270,16 @@ org_woodchuck_server_principal_register
 }
 
 static gboolean
-org_woodchuck_server_principal_remove
+org_woodchuck_principal_remove
   (Murmeltier *mt, char *uuid, GError **error)
 {
-  return false;
+  debug (0, "principal_remove: %s", uuid);
+
+  return true;
 }
 
 static gboolean
-org_woodchuck_server_job_submit
+org_woodchuck_job_submit
   (Murmeltier *mt,
    char *principal_uuid, char *url, char *location, char *cookie,
    gboolean wakeup, uint64_t trigger_target, uint64_t trigger_earliest,
@@ -286,7 +290,7 @@ org_woodchuck_server_job_submit
 }
 
 static gboolean
-org_woodchuck_server_job_evaluate
+org_woodchuck_job_evaluate
   (Murmeltier *mt,
    char *principal_uuid, uint32_t request_type, uint32_t priority,
    uint64_t expected_size, uint32_t *desirability, GError **error)
@@ -295,20 +299,20 @@ org_woodchuck_server_job_evaluate
 }
 
 static gboolean
-org_woodchuck_server_feedback_subscribe
+org_woodchuck_feedback_subscribe
   (Murmeltier *mt, char *principal_uuid, char **handle, GError **error)
 {
   return false;
 }
 static gboolean
-org_woodchuck_server_feedback_unsubscribe
+org_woodchuck_feedback_unsubscribe
   (Murmeltier *mt, char *handle, GError **error)
 {
   return false;
 }
 
 static gboolean
-org_woodchuck_server_feedback_ack
+org_woodchuck_feedback_ack
   (Murmeltier *mt, char *job_uuid, uint32_t instance, GError **error)
 {
   return false;
@@ -318,7 +322,6 @@ int
 main (int argc, char *argv[])
 {
   g_type_init();
-  // dbus_g_thread_init ();
 
   Murmeltier *mt = MURMELTIER (g_object_new (MURMELTIER_TYPE, NULL));
   if (! mt)

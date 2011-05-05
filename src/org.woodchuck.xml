@@ -1,8 +1,8 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
-  <interface name="org.woodchuck.server">
+  <interface name="org.woodchuck">
     <!-- Register a new principal.  -->
-    <method name="PrincipalRegister">
+    <method name="principal_register">
       <!-- The human readable name of the application / component.
 	   This will be displayed to user.  Typically, this will
 	   consist of a single element, however, multiple elements are
@@ -19,7 +19,7 @@
       <arg name="UUID" type="s" direction="out"/>
     </method>
 
-    <method name="PrincipalRemove">
+    <method name="principal_remove">
       <!-- The principal to remove.  All associated schedules will also
       be removed.  -->
       <arg name="UUID" type="s"/>
@@ -27,7 +27,7 @@
 
 
     <!-- Submit a job for exection.  -->
-    <method name="JobSubmit">
+    <method name="job_submit">
       <arg name="PrincipalUUID" type="s"/>
 
       <!-- The URL of the object to download.  May be NULL, in which
@@ -79,7 +79,7 @@
     </method>
 
     <!-- Evaluate the desirability of executing a job now.  -->
-    <method name="JobEvaluate">
+    <method name="job_evaluate">
       <!-- Not required.  -->
       <arg name="PrincipalUUID" type="s"/>
 
@@ -109,7 +109,7 @@
 	 completed jobs belonging to the indicated principal to the
 	 caller.  Feedback is sent as jobs complete or until
 	 FeedbackUnsubscribe is called.  -->
-    <method name="FeedbackSubscribe">
+    <method name="feedback_subscribe">
       <arg name="PrincipalUUID" type="s"/>
 
       <arg name="Handle" type="s" direction="out"/>
@@ -117,12 +117,12 @@
 
     <!-- Request that Woodchuck stop sending feedback for the given
 	 subscription (as returned by FeedbackSubscribe). -->
-    <method name="FeedbackUnsubscribe">
+    <method name="feedback_unsubscribe">
       <arg name="Handle" type="s"/>
     </method>
 
     <!-- Ack the feedback with the provided UUID.  -->
-    <method name="FeedbackAck">
+    <method name="feedback_ack">
       <arg name="JobUUID" type="s"/>
       <arg name="JobInstance" type="u"/>
     </method>
