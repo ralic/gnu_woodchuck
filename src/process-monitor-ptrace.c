@@ -2973,6 +2973,13 @@ process_monitor (void *arg)
 		    }
 		}
 
+	      if (tcb)
+		/* Patch the thread.  */
+		{
+		  if (! thread_apply_patches (tcb))
+		    continue;
+		}
+
 	      if (! tcb)
 		goto out;
 	    }
@@ -3095,9 +3102,11 @@ process_monitor (void *arg)
 	g_dir_close (d);
       }
 
-      if (tcb->trace_options == 0 && signo == SIGSTOP)
-	/* This is a running thread that we have manually attached to.
-	   The thread is now running.  */
+      if (tcb->trace_options == 0)
+	/* We have not yet set the standard options on this thread.
+	   In this case, this is most likely the first time that we
+	   have captured this thread.  Set the options, scan for any
+	   siblings if necessary and patch the binary.  */
 	{
 	  if (ptrace (PTRACE_SETOPTIONS, tid, 0, ptrace_options) == -1)
 	    {
