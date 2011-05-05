@@ -21,6 +21,7 @@
 #include <error.h>
 #include <unistd.h>
 #include <fcntl.h>
+#include <sys/utsname.h>
 #include <glib.h>
 #include <dbus/dbus-glib.h>
 #include <dbus/dbus-glib-bindings.h>
@@ -1384,8 +1385,16 @@ main (int argc, char *argv[])
   g_type_init ();
   g_thread_init (NULL);
 
-  debug (0, DEBUG_BOLD ("STARTING (%d)"), getpid ());
-  debug (0, "smart-storage-logger compiled on %s %s", __DATE__, __TIME__);
+  {
+    struct utsname utsname;
+    memset (&utsname, 0, sizeof (utsname));
+    uname (&utsname);
+
+    debug (0, DEBUG_BOLD ("STARTING (%d, %s;%s;%s;%s)"),
+	   getpid (), utsname.sysname, utsname.release, utsname.version,
+	   utsname.machine);
+    debug (0, "smart-storage-logger compiled on %s %s", __DATE__, __TIME__);
+  }
 
 #if HAVE_MAEMO
   {
