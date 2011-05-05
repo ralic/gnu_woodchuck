@@ -1314,7 +1314,7 @@ unix_signal_handler (WCSignalHandler *sh, struct signalfd_siginfo *si,
     }
   if (si->ssi_signo == SIGUSR2)
     {
-      output_debug = MIN (0, output_debug - 1);
+      output_debug = MAX (0, output_debug - 1);
       debug (0, "Got SIGUSR1.  Lowered output_debug to %d", output_debug);
     }
 }
