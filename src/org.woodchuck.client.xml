@@ -1,9 +1,9 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
-  <interface name="org.walfield.NetCzar.client">
-    <!-- Upcall from NetCzar indicating that a job has completed.
-	 After processing, the application should acknowledge the
-	 feedback using FeedbackACK, otherwise, it will be resent.
+  <interface name="org.woodchuck.client">
+    <!-- Upcall from Woodchuck indicating that a job has completed.
+         After processing, the application should acknowledge the
+         feedback using FeedbackACK, otherwise, it will be resent.
 	 -->
     <method name="Feedback">
       <arg name="JobUUID" type="s"/>

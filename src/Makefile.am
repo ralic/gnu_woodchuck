@@ -1,4 +1,4 @@
-bin_PROGRAMS = netczar smart-storage-logger smart-storage-logger-recover \
+bin_PROGRAMS = murmeltier smart-storage-logger smart-storage-logger-recover \
 	process-tracer ssl-tail
 bin_SCRIPTS = smart-storage-logger-consent
 
@@ -26,15 +26,15 @@ nm_interfaces_xml = $(foreach filename, \
 	org.freedesktop.Hal.Device.xml \
 	org.freedesktop.DBus.xml \
 	Phone.Net.xml \
-	org.walfield.NetCzar.xml \
-	org.walfield.NetCzar.client.xml \
+	org.woodchuck.server.xml \
+	org.woodchuck.client.xml \
 	, $(srcdir)/$(filename))
 
 nm_interfaces_h = $(patsubst %.xml,%.h,$(nm_interfaces_xml))
 
 nm_server_stubs_xml = $(foreach filename, \
-	org.walfield.NetCzar.xml \
-	org.walfield.NetCzar.client.xml \
+	org.woodchuck.server.xml \
+	org.woodchuck.client.xml \
 	, $(srcdir)/$(filename))
 
 nm_server_stubs_c = $(patsubst %.xml,%-server.h,$(nm_server_stubs_xml))
@@ -66,9 +66,9 @@ common_sources = $(nm_interfaces_h) marshal.h marshal.c \
 	process-monitor-ptrace.h process-monitor-ptrace.c \
 	shutdown-monitor.h shutdown-monitor.c
 
-netczar_SOURCES = $(common_sources) netczar.c \
-	org.walfield.NetCzar-server.h
-netczar_LDADD = $(BASE_LIBS)
+murmeltier_SOURCES = $(common_sources) murmeltier.c \
+	org.woodchuck.murmeltier-server.h
+murmeltier_LDADD = $(BASE_LIBS)
 
 smart_storage_logger_SOURCES = $(common_sources) \
 	smart-storage-logger.c \

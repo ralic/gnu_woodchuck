@@ -1,6 +1,6 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
-  <interface name="org.walfield.NetCzar">
+  <interface name="org.woodchuck.server">
     <!-- Register a new principal.  -->
     <method name="PrincipalRegister">
       <!-- The human readable name of the application / component.
@@ -39,7 +39,7 @@
 	   interpreted as a directory and the file is named after the
 	   url.  -->
       <arg name="location" type="s"/>
-      <!-- Uninterpretted by NetCzar.  This is passed back to the
+      <!-- Uninterpretted by Woodchuck.  This is passed back to the
 	   Feeback upcall. -->
       <arg name="cookie" type="s"/>
 
@@ -105,7 +105,7 @@
     </method>
 
 
-    <!-- Request that NetCzar start sending feedback for unacked,
+    <!-- Request that Woodchuck start sending feedback for unacked,
 	 completed jobs belonging to the indicated principal to the
 	 caller.  Feedback is sent as jobs complete or until
 	 FeedbackUnsubscribe is called.  -->
@@ -115,7 +115,7 @@
       <arg name="Handle" type="s" direction="out"/>
     </method>
 
-    <!-- Request that NetCzar stop sending feedback for the given
+    <!-- Request that Woodchuck stop sending feedback for the given
 	 subscription (as returned by FeedbackSubscribe). -->
     <method name="FeedbackUnsubscribe">
       <arg name="Handle" type="s"/>

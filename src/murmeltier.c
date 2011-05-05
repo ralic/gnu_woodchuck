@@ -1,3 +1,20 @@
+/* murmeltier.c - A network and storage manager implementation.
+   Copyright (C) 2011 Neal H. Walfield <neal@walfield.org>
+
+   Smart storage is free software; you can redistribute it and/or
+   modify it under the terms of the GNU General Public License as
+   published by the Free Software Foundation; either version 3, or (at
+   your option) any later version.
+
+   Smart storage is distributed in the hope that it will be useful,
+   but WITHOUT ANY WARRANTY; without even the implied warranty of
+   MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+   General Public License for more details.
+
+   You should have received a copy of the GNU General Public License
+   along with this program; if not, write to the Free Software
+   Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111, USA. */
+
 #include "config.h"
 #include "network-monitor.h"
 
@@ -10,24 +27,24 @@
 #include "debug.h"
 #include "util.h"
 
-typedef struct _NetCzar NetCzar;
-typedef struct _NetCzarClass NetCzarClass;
+typedef struct _Murmeltier Murmeltier;
+typedef struct _MurmeltierClass MurmeltierClass;
 
-#define NETCZAR_TYPE (netczar_get_type ())
-#define NETCZAR(obj) (G_TYPE_CHECK_INSTANCE_CAST ((obj), NETCZAR_TYPE, NetCzar))
-#define NETCZAR_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST ((klass), NETCZAR_TYPE, NetCzarClass))
-#define IS_NETCZAR(obj) (G_TYPE_CHECK_INSTANCE_TYPE ((obj), NETCZAR_TYPE))
-#define IS_NETCZAR_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass), NETCZAR_TYPE))
-#define NETCZAR_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS ((obj), NETCZAR_TYPE, NetCzarClass))
+#define MURMELTIER_TYPE (murmeltier_get_type ())
+#define MURMELTIER(obj) (G_TYPE_CHECK_INSTANCE_CAST ((obj), MURMELTIER_TYPE, Murmeltier))
+#define MURMELTIER_CLASS(klass) (G_TYPE_CHECK_CLASS_CAST ((klass), MURMELTIER_TYPE, MurmeltierClass))
+#define IS_MURMELTIER(obj) (G_TYPE_CHECK_INSTANCE_TYPE ((obj), MURMELTIER_TYPE))
+#define IS_MURMELTIER_CLASS(klass) (G_TYPE_CHECK_CLASS_TYPE ((klass), MURMELTIER_TYPE))
+#define MURMELTIER_GET_CLASS(obj) (G_TYPE_INSTANCE_GET_CLASS ((obj), MURMELTIER_TYPE, MurmeltierClass))
 
-struct _NetCzarClass
+struct _MurmeltierClass
 {
   GObjectClass parent;
 
   DBusGConnection *session_bus;
 };
 
-struct _NetCzar
+struct _Murmeltier
 {
   GObject parent;
 
@@ -36,41 +53,41 @@ struct _NetCzar
   sqlite3 *connectivity_db;
 };
 
-extern GType netczar_get_type (void);
+extern GType murmeltier_get_type (void);
 
 /* The server stub file can only be included after declaring the
    prototypes for the callback functions.  */
-static gboolean org_walfield_NetCzar_principal_register
-  (NetCzar *nc,
+static gboolean org_woodchuck_server_principal_register
+  (Murmeltier *mt,
    GValueArray *human_readable_name, char *bus_name, GValue *execve,
    char **uuid, GError **error);
-static gboolean org_walfield_NetCzar_principal_remove
-  (NetCzar *nc, char *uuid, GError **error);
-static gboolean org_walfield_NetCzar_job_submit
-  (NetCzar *nc,
+static gboolean org_woodchuck_server_principal_remove
+  (Murmeltier *mt, char *uuid, GError **error);
+static gboolean org_woodchuck_server_job_submit
+  (Murmeltier *mt,
    char *principal_uuid, char *url, char *location, char *cookie,
    gboolean wakeup, uint64_t trigger_target, uint64_t trigger_earliest,
    uint64_t trigger_latest, uint32_t period, uint32_t request_type,
    uint32_t priority, uint64_t expected_size, char **job_uuid, GError **error);
-static gboolean org_walfield_NetCzar_job_evaluate
-  (NetCzar *nc,
+static gboolean org_woodchuck_server_job_evaluate
+  (Murmeltier *mt,
    char *principal_uuid, uint32_t request_type, uint32_t priority,
    uint64_t expected_size, uint32_t *desirability, GError **error);
-static gboolean org_walfield_NetCzar_feedback_subscribe
-  (NetCzar *nc, char *principal_uuid, char **handle, GError **error);
-static gboolean org_walfield_NetCzar_feedback_unsubscribe
-  (NetCzar *nc, char *handle, GError **error);
-static gboolean org_walfield_NetCzar_feedback_ack
-  (NetCzar *nc, char *job_uuid, uint32_t instance, GError **error);
+static gboolean org_woodchuck_server_feedback_subscribe
+  (Murmeltier *mt, char *principal_uuid, char **handle, GError **error);
+static gboolean org_woodchuck_server_feedback_unsubscribe
+  (Murmeltier *mt, char *handle, GError **error);
+static gboolean org_woodchuck_server_feedback_ack
+  (Murmeltier *mt, char *job_uuid, uint32_t instance, GError **error);
 
-#include "org.walfield.NetCzar-server.h"
+#include "org.woodchuck.server-server.h"
 
-G_DEFINE_TYPE (NetCzar, netczar, G_TYPE_OBJECT);
+G_DEFINE_TYPE (Murmeltier, murmeltier, G_TYPE_OBJECT);
 
 static void
-netczar_class_init (NetCzarClass *klass)
+murmeltier_class_init (MurmeltierClass *klass)
 {
-  netczar_parent_class = g_type_class_peek_parent (klass);
+  murmeltier_parent_class = g_type_class_peek_parent (klass);
 
   GObjectClass *object_class;
 
@@ -88,7 +105,7 @@ netczar_class_init (NetCzarClass *klass)
     }
 
   dbus_g_object_type_install_info
-    (NETCZAR_TYPE, &dbus_glib_org_walfield_NetCzar_object_info);
+    (MURMELTIER_TYPE, &dbus_glib_org_woodchuck_server_object_info);
 }
 
 static void
@@ -177,29 +194,29 @@ default_connection_changed (NCNetworkMonitor *nm,
 }
 
 static void
-netczar_init (NetCzar *nc)
+murmeltier_init (Murmeltier *mt)
 {
-  NetCzarClass *klass = NETCZAR_GET_CLASS (nc);
+  MurmeltierClass *klass = MURMELTIER_GET_CLASS (mt);
 
   const char *filename = "connectivity.db";
 
 
   /* Initialize the network monitor.  */
-  nc->nm = nc_network_monitor_new ();
+  mt->nm = nc_network_monitor_new ();
 
-  g_signal_connect (G_OBJECT (nc->nm), "new-connection",
-		    G_CALLBACK (new_connection), nc);
-  g_signal_connect (G_OBJECT (nc->nm), "disconnected",
-		    G_CALLBACK (disconnected), nc);
-  g_signal_connect (G_OBJECT (nc->nm), "default-connection-changed",
-		    G_CALLBACK (default_connection_changed), nc);
+  g_signal_connect (G_OBJECT (mt->nm), "new-connection",
+		    G_CALLBACK (new_connection), mt);
+  g_signal_connect (G_OBJECT (mt->nm), "disconnected",
+		    G_CALLBACK (disconnected), mt);
+  g_signal_connect (G_OBJECT (mt->nm), "default-connection-changed",
+		    G_CALLBACK (default_connection_changed), mt);
 
-  g_timeout_add_seconds (5 * 60, connections_dump, nc);
+  g_timeout_add_seconds (5 * 60, connections_dump, mt);
 
   /* Register with dbus.  */
   dbus_g_connection_register_g_object (klass->session_bus,
-				       "/org/walfield/NetCzar",
-				       G_OBJECT (nc));
+				       "/org/woodchuck",
+				       G_OBJECT (mt));
 
   DBusGProxy *dbus_proxy
     = dbus_g_proxy_new_for_name (klass->session_bus,
@@ -207,7 +224,7 @@ netczar_init (NetCzar *nc)
 				 DBUS_PATH_DBUS,
 				 DBUS_INTERFACE_DBUS);
 
-  char *bus_name = "org.walfield.NetCzar";
+  char *bus_name = "org.woodchuck";
   guint ret;
   GError *error = NULL;
   if (! org_freedesktop_DBus_request_name (dbus_proxy, bus_name,
@@ -242,8 +259,8 @@ netczar_init (NetCzar *nc)
 /* The server stub file can only be included after declaring the
    prototypes for the callback functions.  */
 static gboolean
-org_walfield_NetCzar_principal_register
-  (NetCzar *nc,
+org_woodchuck_server_principal_register
+  (Murmeltier *mt,
    GValueArray *human_readable_name, char *bus_name, GValue *execve,
    char **uuid, GError **error)
 {
@@ -251,15 +268,15 @@ org_walfield_NetCzar_principal_register
 }
 
 static gboolean
-org_walfield_NetCzar_principal_remove
-  (NetCzar *nc, char *uuid, GError **error)
+org_woodchuck_server_principal_remove
+  (Murmeltier *mt, char *uuid, GError **error)
 {
   return false;
 }
 
 static gboolean
-org_walfield_NetCzar_job_submit
-  (NetCzar *nc,
+org_woodchuck_server_job_submit
+  (Murmeltier *mt,
    char *principal_uuid, char *url, char *location, char *cookie,
    gboolean wakeup, uint64_t trigger_target, uint64_t trigger_earliest,
    uint64_t trigger_latest, uint32_t period, uint32_t request_type,
@@ -269,8 +286,8 @@ org_walfield_NetCzar_job_submit
 }
 
 static gboolean
-org_walfield_NetCzar_job_evaluate
-  (NetCzar *nc,
+org_woodchuck_server_job_evaluate
+  (Murmeltier *mt,
    char *principal_uuid, uint32_t request_type, uint32_t priority,
    uint64_t expected_size, uint32_t *desirability, GError **error)
 {
@@ -278,21 +295,21 @@ org_walfield_NetCzar_job_evaluate
 }
 
 static gboolean
-org_walfield_NetCzar_feedback_subscribe
-  (NetCzar *nc, char *principal_uuid, char **handle, GError **error)
+org_woodchuck_server_feedback_subscribe
+  (Murmeltier *mt, char *principal_uuid, char **handle, GError **error)
 {
   return false;
 }
 static gboolean
-org_walfield_NetCzar_feedback_unsubscribe
-  (NetCzar *nc, char *handle, GError **error)
+org_woodchuck_server_feedback_unsubscribe
+  (Murmeltier *mt, char *handle, GError **error)
 {
   return false;
 }
 
 static gboolean
-org_walfield_NetCzar_feedback_ack
-  (NetCzar *nc, char *job_uuid, uint32_t instance, GError **error)
+org_woodchuck_server_feedback_ack
+  (Murmeltier *mt, char *job_uuid, uint32_t instance, GError **error)
 {
   return false;
 }
@@ -303,8 +320,8 @@ main (int argc, char *argv[])
   g_type_init();
   // dbus_g_thread_init ();
 
-  NetCzar *nc = NETCZAR (g_object_new (NETCZAR_TYPE, NULL));
-  if (! nc)
+  Murmeltier *mt = MURMELTIER (g_object_new (MURMELTIER_TYPE, NULL));
+  if (! mt)
     {
       debug (0, "Failed to allocate memory.");
       abort ();
