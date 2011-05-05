@@ -552,12 +552,15 @@ nm_connection_dump (NCNetworkConnection *nc, const char *state)
   g_string_free (stats, true);
 }
 
-static void
+static int
 nm_connections_dump (NCNetworkMonitor *m, const char *state)
 {
   GList *e = nc_network_monitor_connections (m);
+  int conns = 0;
   while (e)
     {
+      conns ++;
+
       NCNetworkConnection *c = e->data;
       GList *n = e->next;
       g_list_free_1 (e);
@@ -565,18 +568,33 @@ nm_connections_dump (NCNetworkMonitor *m, const char *state)
 
       nm_connection_dump (c, state);
     }
+
+  return conns;
 }
+
+static guint nm_connections_stat_cb_id;
 
 static gboolean
 nm_connections_stat_cb (gpointer user_data)
 {
   NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
-  nm_connections_dump (m, "STATS");
+  if (nm_connections_dump (m, "STATS") == 0)
+    {
+      nm_connections_stat_cb_id = 0;
+      /* Don't run again.  */
+      return FALSE;
+    }
 
+  return TRUE;
+}
+
+static gboolean
+nm_network_scan_cb (gpointer user_data)
+{
   if (now () - last_scan[0] >= SCAN_INTERVAL_MAX)
     nm_scan_queue (false);
 
-  return true;
+  return TRUE;
 }
 
 /* A new connection has been established.  */
@@ -585,6 +603,10 @@ nm_new_connection (NCNetworkMonitor *nm, NCNetworkConnection *nc,
 		   gpointer user_data)
 {
   nm_connection_dump (nc, "ESTABLISHED");
+
+  if (nm_connections_stat_cb_id == 0)
+    nm_connections_stat_cb_id
+      = g_timeout_add_seconds (5 * 60, nm_connections_stat_cb, nm);
 }
 
 /* An existing connection has been brought down.  */
@@ -868,7 +890,9 @@ nm_init (void)
   g_signal_connect (G_OBJECT (nm), "cell-info-changed",
 		    G_CALLBACK (nm_cell_info_changed), NULL);
 
-  g_timeout_add_seconds (5 * 60, nm_connections_stat_cb, nm);
+  nm_connections_stat_cb_id
+    = g_timeout_add_seconds (5 * 60, nm_connections_stat_cb, nm);
+  g_timeout_add_seconds (30 * 60, nm_network_scan_cb, nm);
 }
 
 static
