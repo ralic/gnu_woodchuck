@@ -248,9 +248,10 @@ struct load
 
 /* Thread and process management.  */
 
-#define TID_FMT "%d %s;%s;%s"
-#define TID_PRINTF(tcb) \
-  (tcb)->tid, (tcb)->pcb->exe, (tcb)->pcb->arg0, (tcb)->pcb->arg1 
+#define TCB_FMT "%d(%d) %s;%s;%s"
+#define TCB_PRINTF(tcb) \
+  (tcb)->tid, (tcb)->pcb->group_leader.tid, \
+    (tcb)->pcb->exe, (tcb)->pcb->arg0, (tcb)->pcb->arg1 
 
 /* A thread's control block.  One for each linux thread that we
    trace.  */
@@ -271,6 +272,7 @@ struct tcb
      need to know what the last event was.  On entry, we set this to
      the system call number and on exit we reset this to -1.  */
   long current_syscall;
+  long previous_syscall;
 
   /* When a file is unlinked, we only want to generate an event if the
      unlink was successful.  We only know this on syscall exit.  At
@@ -2106,7 +2108,11 @@ static bool
 thread_fixup_and_advance (struct tcb *tcb, REGS_STRUCT *regs)
 {
   if (! pcb_patched (tcb->pcb))
-    return false;
+    {
+      debug (4, "Thread "TCB_FMT" not patched, not fixing up.",
+	     TCB_PRINTF (tcb));
+      return false;
+    }
 
   uintptr_t IP = regs->REGS_IP;
   bool fixed = false;
@@ -2735,8 +2741,20 @@ process_monitor (void *arg)
 
   struct tcb *tcb = NULL;
   bool quit_raised_output_debug = false;
+
+  /* Periodically print out detailed information of what is going
+     on.  */
+#define DEBUG_PROBE_FREQ 10000
+  int debug_probe = 0;
+  int output_debug_saved = 0;
   while (! (quit && tcb_count == 0))
     {
+      if (debug_probe == DEBUG_PROBE_FREQ)
+	{
+	  output_debug = output_debug_saved;
+	  debug_probe = 0;
+	}
+
       if (quit && now () - quit > 10000)
 	/* If we don't manage to exit in about 10 seconds, something is
 	   likely wrong.  Increase the debugging output.  */
@@ -2785,6 +2803,14 @@ process_monitor (void *arg)
 	 will wake up immediately.  */
       int status = 0;
       pid_t tid = waitpid (-1, &status, __WALL|__WCLONE);
+
+      if (++ debug_probe == DEBUG_PROBE_FREQ)
+	/* Enable a debug probe.  */
+	{
+	  output_debug_saved = output_debug;
+	  output_debug = 5;
+	}
+
       if (tid == signal_process_pid || process_monitor_commands)
 	{
 	  debug (4, "signal from signal process");
@@ -3082,8 +3108,8 @@ process_monitor (void *arg)
 
 	    buffer[ret] = 0;
 
-	    debug (4, TID_FMT": Open at %s: %s -> %s",
-		   TID_PRINTF (tcb),
+	    debug (4, TCB_FMT": Open at %s: %s -> %s",
+		   TCB_PRINTF (tcb),
 		   op == WC_PROCESS_CLOSE_CB ? "exit" : "attach", e, buffer);
 
 	    if (process_monitor_filename_whitelisted (buffer))
@@ -3187,15 +3213,21 @@ process_monitor (void *arg)
 	  goto out;
 	}
 
-      /* We are interested in system calls and events, not signals.  A
-	 system call is indicated by setting the signal to
-	 0x80|SIGTRAP.  If this is not the case, just forward the
-	 signal to the process.  */
-      if (! ((signo == (0x80 | SIGTRAP) || event || signo == SIGTRAP)))
+      /* We are interested in:
+
+	  - system calls (<= 0x80|SIGTRAP)
+	  - ptrace events
+	  - SIGTRAP (due to breakpoints that we set)
+
+	 If none of these are the case, just forward the signal to the
+	 process.  */
+      if (! (signo == (0x80 | SIGTRAP) || event || signo == SIGTRAP))
 	/* Ignore.  Not our signal.  */
 	{
-	  debug (4, "%d: ignoring and forwarding signal '%s' (%d) ",
-		 tid, strsignal (signo), signo);
+	  debug (4, TCB_FMT": ignoring and forwarding signal '%s' (%d)"
+		 " (options: %d)",
+		 TCB_PRINTF (tcb), strsignal (signo), signo,
+		 tcb->trace_options);
 	  goto out;
 	}
 
@@ -3342,14 +3374,28 @@ process_monitor (void *arg)
 
       ptrace_op = PTRACE_SYSCALL;
 
+      debug (5, TCB_FMT": Need fixup? %d = SIGTRAP (%d)?",
+	     TCB_PRINTF (tcb), WSTOPSIG (status), SIGTRAP);
       if (WSTOPSIG (status) == SIGTRAP)
 	/* See if we inserted a break point.  If so, try to advance
 	   the thread.  If that works, just continue the thread.  It
 	   will be back in a moment...  */
-	if (thread_fixup_and_advance (tcb, &regs))
-	  goto out;
+	{
+	  if (thread_fixup_and_advance (tcb, &regs))
+	    {
+	      debug (5, TCB_FMT": Thread fixed up.  Resuming.",
+		     TCB_PRINTF (tcb));
+	      goto out;
+	    }
+	  else
+	    {
+	      debug (5, TCB_FMT": Thread not fixed up.  Continuing normally.",
+		     TCB_PRINTF (tcb));
+	      goto out;
+	    }
+	}
 
-      bool syscall_entry = tcb->current_syscall == -1;
+      bool syscall_entry;
 #ifdef __x86_64__
       /* On x86-64, RAX is set to -ENOSYS on system call entry.  How
 	 do we distinguish this from a system call that returns
@@ -3359,11 +3405,14 @@ process_monitor (void *arg)
       /* ip is set to 0 on system call entry, 1 on exit.  */
       syscall_entry = regs.ARM_ip == 0;
 #else
-# error syscall_entry handling fragile.
+# error syscall_entry handling
 #endif
       long syscall;
       if (syscall_entry)
-	syscall = tcb->current_syscall = SYSCALL;
+	{
+	  tcb->previous_syscall = tcb->current_syscall;
+	  syscall = tcb->current_syscall = SYSCALL;
+	}
       else
 	{
 	  /* It would be nice to have:
@@ -3380,7 +3429,6 @@ process_monitor (void *arg)
 	    }
 
 	  syscall = tcb->current_syscall;
-	  tcb->current_syscall = -1;
 	}
 
       /* Given a file description, return the absolute filename
@@ -3405,9 +3453,10 @@ process_monitor (void *arg)
 	  return false;
       }
 
-      debug (4, "%d: %s (%ld) %s",
+      debug (4, "%d: %s (%ld) %s (previous: %s (%ld))",
 	     (int) tid, syscall_str (syscall), syscall,
-	     syscall_entry ? "entry" : "exit");
+	     syscall_entry ? "entry" : "exit",
+	     syscall_str (tcb->previous_syscall), tcb->previous_syscall);
       debug (5, REGS_FMT, REGS_PRINTF (&regs));
 
       switch (syscall)

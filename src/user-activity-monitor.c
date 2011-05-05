@@ -107,14 +107,14 @@ idle_changed (DBusGProxy *proxy, gboolean idle, gpointer user_data)
 {
   WCUserActivityMonitor *m = WC_USER_ACTIVITY_MONITOR (user_data);
 
-  debug (3, "System idle hint: %s -> %s",
+  debug (4, "System idle hint: %s -> %s",
 	 wc_user_activity_status_string (m->idle),
 	 idle ? "idle" : "active");
 
   if ((idle && m->idle == WC_USER_IDLE)
       || (! idle && m->idle == WC_USER_ACTIVE))
     {
-      debug (3, "Ignoring gratuitous idle hint change.");
+      debug (5, "Ignoring gratuitous idle hint change.");
       return;
     }
 
