@@ -3012,7 +3012,7 @@ process_monitor (void *arg)
 	}
 
       /* If the process has been fixed up, then let it run.
-	 Otherwise, default to stopping it at the next signal.  */
+	 Otherwise, default to stopping it at the next signal/syscall.  */
       ptrace_op = pcb_patched (tcb->pcb) ? PTRACE_CONT : PTRACE_SYSCALL;
 
       /* See if the child exited.  */
@@ -3231,9 +3231,7 @@ process_monitor (void *arg)
 	  goto out;
 	}
 
-      /* When we resume the process, forward it the signal.  */
-      signo = 0;
-
+      /* ptrace event.  */
       if (event)
 	{
 	  unsigned long msg = -1;
@@ -3254,7 +3252,7 @@ process_monitor (void *arg)
 	      memset (&tcb->pcb->lib_base, 0, sizeof (tcb->pcb->lib_base));
 	      ptrace_op = PTRACE_SYSCALL;
 
-	      goto out;
+	      break;
 
 	    case PTRACE_EVENT_CLONE:
 	    case PTRACE_EVENT_FORK:
@@ -3293,8 +3291,8 @@ process_monitor (void *arg)
 		      }
 		  }
 
-		goto out;
 	      }
+	      break;
 
 	    case PTRACE_EVENT_EXIT:
 	      assert (tcb->pcb->tcbs);
@@ -3302,18 +3300,20 @@ process_monitor (void *arg)
 		/* The process is about to exit.  For each open file
 		   descriptor, emit a close event.  */
 		open_fds_iterate (WC_PROCESS_CLOSE_CB);
-	      goto out;
+	      break;
 
 	    default:
 	      debug (0, "Unknown event %d, ignoring.", event);
-	      goto out;
+	      break;
 	    }
+
+	  /* Resume the process.  */
+	  signo = 0;
+	  goto out;
 	}
 
-      /* It has got to be a system call.  To determine which one, we
-	 need the system call number.  If it is one we are interested
-	 in examining, we also need its arguments.  Just get the
-	 thread's register file and be done with it.  */
+      /* It is either a breakpoint or a system call.  In both cases,
+	 we need to examine the register file.  */
 
 #ifdef __x86_64__
 # define SYSCALL (regs.orig_rax)
@@ -3372,28 +3372,33 @@ process_monitor (void *arg)
 	  goto out;
 	}
 
-      ptrace_op = PTRACE_SYSCALL;
-
-      debug (5, TCB_FMT": Need fixup? %d = SIGTRAP (%d)?",
-	     TCB_PRINTF (tcb), WSTOPSIG (status), SIGTRAP);
-      if (WSTOPSIG (status) == SIGTRAP)
-	/* See if we inserted a break point.  If so, try to advance
-	   the thread.  If that works, just continue the thread.  It
-	   will be back in a moment...  */
+      if (signo == SIGTRAP)
+	/* It's a breakpoint.  See if it is breakpoint we inserted.
+	   If so, try to advance the thread.  If that worked, just
+	   fixup the thread.  It will be back in a moment...  */
 	{
 	  if (thread_fixup_and_advance (tcb, &regs))
 	    {
 	      debug (5, TCB_FMT": Thread fixed up.  Resuming.",
 		     TCB_PRINTF (tcb));
+	      signo = 0;
+	      ptrace_op = PTRACE_SYSCALL;
 	      goto out;
 	    }
 	  else
 	    {
-	      debug (5, TCB_FMT": Thread not fixed up.  Continuing normally.",
+	      debug (5, TCB_FMT": Thread not fixed up.  Forwarding SIGTRAP.",
 		     TCB_PRINTF (tcb));
 	      goto out;
 	    }
 	}
+
+
+      /* It's a system call.  (signo == 0x80|SIGTRAP).  */
+
+      /* Don't forward SIGTRAP to the process.  Transparently resume
+	 it.  */
+      signo = 0;
 
       bool syscall_entry;
 #ifdef __x86_64__
@@ -3412,6 +3417,8 @@ process_monitor (void *arg)
 	{
 	  tcb->previous_syscall = tcb->current_syscall;
 	  syscall = tcb->current_syscall = SYSCALL;
+	  /* We also want to intercept the system call exit.  */
+	  ptrace_op = PTRACE_SYSCALL;
 	}
       else
 	{
@@ -3803,12 +3810,6 @@ process_monitor (void *arg)
 
 	  break;
 	}
-
-      if (pcb_patched (tcb->pcb) && ! syscall_entry)
-	/* The process is patched and we've processed the system call
-	   entry and exit.  We don't intercept system calls
-	   anymore.  */
-	ptrace_op = PTRACE_CONT;
 
     out:
       load_shed_maybe ();
