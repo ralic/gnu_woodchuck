@@ -233,7 +233,7 @@ battery_properties_modified_cb (DBusGProxy *proxy,
 
   int i;
   for (i = 0;
-       (b->properties_reread == 0 || output_debug >= 2) && i < properties->len;
+       (b->properties_reread == 0 || OUTPUT_DEBUG >= 2) && i < properties->len;
        i ++)
     {
       GValueArray *strct = g_ptr_array_index (properties, i);

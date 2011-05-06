@@ -695,9 +695,11 @@ pcb_free (struct pcb *pcb)
       {
 	pid_t tid = (int) (uintptr_t) key;
 	struct tcb *tcb = value;
-	debug (1, "%d(%d): %s;%s;%s",
-	       tid, tcb->pcb->group_leader.tid,
-	       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
+
+	debug (0, "Still need to detach from "TCB_FMT, TCB_PRINTF (tcb));
+
+	if (tid != tcb->tid)
+	  debug (0, TCB_FMT": Unexpected tid %d?!?", TCB_PRINTF (tcb), tid);
 	assert (tid == tcb->tid);
 
 	count ++;
@@ -744,7 +746,7 @@ pcb_read_exe (struct pcb *pcb)
   int fd = open (cmdline, O_RDONLY);
   char buffer[512];
   if (fd < 0)
-    debug (0, "Error opening %s: %m\n", cmdline);
+    debug (0, "Error opening %s: %m", cmdline);
   else
     {
       int length = read (fd, buffer, sizeof (buffer));
@@ -913,8 +915,8 @@ tcb_mem_read (struct tcb *tcb, uintptr_t addr, char *buffer, int size,
 	      goto do_retry;
 	    }
 
-	  debug (0, "Error reading from process %d's memory: %m",
-		 tcb->pcb->group_leader.tid);
+	  debug (0, TCB_FMT": Error reading from process's memory: %m",
+		 TCB_PRINTF (tcb));
 
 	  if (buffer == b)
 	    /* We didn't manage to read anything...  */
@@ -964,8 +966,8 @@ thread_check (struct tcb *tcb, uintptr_t addr, const char *values[],
   char real[bytes];
   if (! tcb_mem_read (tcb, addr, real, bytes, false))
     {
-      debug (0, "Failed to read from process %d's memory: %m",
-	     (int) tcb->pcb->group_leader.tid);
+      debug (0, TCB_FMT": Failed to read from process's memory: %m",
+	     TCB_PRINTF (tcb));
       return -errno;
     }
 
@@ -1021,9 +1023,9 @@ thread_mem_update (struct tcb *tcb, uintptr_t addr,
 	  value.word = ptrace (PTRACE_PEEKDATA, tcb->tid, a);
 	  if (errno)
 	    {
-	      debug (0, "Failed to read process %d's memory, "
+	      debug (0, TCB_FMT": Failed to read thread's memory, "
 		     "location %"PRIxPTR": %m",
-		     tcb->tid, a);
+		     TCB_PRINTF (tcb), a);
 	      return false;
 	    }
 	}
@@ -1040,9 +1042,9 @@ thread_mem_update (struct tcb *tcb, uintptr_t addr,
 
       if (ptrace (PTRACE_POKEDATA, tcb->tid, a, value.word) < 0)
 	{
-	  debug (0, "Failed to write to process %d's memory, "
+	  debug (0, TCB_FMT": Failed to write to thread's memory, "
 		 "location %"PRIxPTR": %m",
-		 tcb->tid, a);
+		 TCB_PRINTF (tcb), a);
 	  return false;
 	}
 
@@ -1053,8 +1055,8 @@ thread_mem_update (struct tcb *tcb, uintptr_t addr,
     {
       GString *s = g_string_new ("");
       g_string_append_printf
-	(s, "%d: Patched address 0x%"PRIxPTR" to contain:",
-	 tcb->tid, addr);
+	(s, TCB_FMT": Patched address 0x%"PRIxPTR" to contain:",
+	 TCB_PRINTF (tcb), addr);
 
       int i;
       for (i = 0; i < bytes; i ++)
@@ -1387,8 +1389,8 @@ thread_revert_patches (struct tcb *tcb)
 		  {
 		    GString *s = g_string_new ("");
 		    g_string_append_printf
-		      (s, "%d: Reverting patch at %"PRIxPTR" to contain:",
-		       tcb->tid, addr);
+		      (s, TCB_FMT": Reverting patch at %"PRIxPTR" to contain:",
+		       TCB_PRINTF (tcb), addr);
 
 		    int i;
 		    for (i = 0; i < p->ins_len; i ++)
@@ -1407,10 +1409,9 @@ thread_revert_patches (struct tcb *tcb)
 	  }
 
 	if (bad)
-	  debug (0, DEBUG_BOLD ("Patched process %d missing "
-				"%d of %d patches for %s."),
-		 tcb->pcb->group_leader.tid, bad, lib->patch_count,
-		 lib->filename);
+	  debug (0, TCB_FMT": Patched process missing "
+		 "%d of %d patches for %s.",
+		 TCB_PRINTF (tcb), bad, lib->patch_count, lib->filename);
 
 	tcb->pcb->lib_base[i] = 0;
       }
@@ -1448,8 +1449,9 @@ thread_apply_patches (struct tcb *tcb)
 		uintptr_t addr = base + p->base_offset;
 		if (! thread_instruction_is (tcb, addr, ins_breakpoint))
 		  {
-		    debug (0, "Bad patch at %"PRIxPTR" "
+		    debug (0, TCB_FMT": Bad patch at %"PRIxPTR" "
 			   "in lib %s, offset %"PRIxPTR,
+			   TCB_PRINTF (tcb),
 			   addr, lib->filename, p->base_offset);
 		    bad ++;
 		  }
@@ -1462,15 +1464,14 @@ thread_apply_patches (struct tcb *tcb)
       }
 
     if (bad)
-      debug (0, DEBUG_BOLD ("%d: %d of %d locations incorrectly patched"),
-	     tcb->pcb->group_leader.tid, bad, total);
+      debug (0, TCB_FMT": %d of %d locations incorrectly patched",
+	     TCB_PRINTF (tcb), bad, total);
     return ret;
   }
 
   if (fully_patched ())
     {
-      debug (4, "Process %d already fully patched.",
-	     tcb->pcb->group_leader.tid);
+      debug (4, TCB_FMT": Process already fully patched.", TCB_PRINTF (tcb));
       return true;
     }
 
@@ -1482,22 +1483,21 @@ thread_apply_patches (struct tcb *tcb)
 
     uintptr_t map_length = map_end - map_start;
 
-    debug (4, DEBUG_BOLD ("Scanning %s (%d(%d) %s;%s;%s): "
-			  "%"PRIxPTR"-%"PRIxPTR" (0x%"PRIxPTR" bytes)"),
-	   lib->filename, tcb->tid, tcb->pcb->group_leader.tid,
-	   tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+    debug (4, "Scanning %s ("TCB_FMT"): "
+	   "%"PRIxPTR"-%"PRIxPTR" (0x%"PRIxPTR" bytes)",
+	   lib->filename, TCB_PRINTF (tcb),
 	   map_start, map_end, map_length);
 
     char *map = g_malloc (map_length);
     char *end = tcb_mem_read (tcb, map_start, map, map_length, false);
     if ((uintptr_t) end + 1 - (uintptr_t) map != map_length)
-      debug (0, DEBUG_BOLD ("Reading library %s from process %d: "
-			    "read %"PRIdPTR" bytes, expected %"PRIdPTR),
-	     lib->filename, tcb->pcb->group_leader.tid,
+      debug (0, TCB_FMT": Reading library %s: "
+	     "read %"PRIdPTR" bytes, expected %"PRIdPTR,
+	     TCB_PRINTF (tcb), lib->filename,
 	     (uintptr_t) end + 1 - (uintptr_t) map, map_length);
     if (! end)
       {
-	debug (0, "tcb_mem_read failed.");
+	debug (0, TCB_FMT": tcb_mem_read failed.", TCB_PRINTF (tcb));
 	return false;
       }
     map_length = (uintptr_t) end - (uintptr_t) map + 1;
@@ -1544,9 +1544,9 @@ thread_apply_patches (struct tcb *tcb)
 					   &mov_info))
 		    {
 		      already_patched_count ++;
-		      debug (0, "Found breakpointed syscall num load at "
-			     "0x%"PRIxPTR,
-			     off  - j * INSTRUCTION_STEP);
+		      debug (0, TCB_FMT": Found breakpointed syscall num "
+			     "load at 0x%"PRIxPTR,
+			     TCB_PRINTF (tcb), off  - j * INSTRUCTION_STEP);
 
 		      mov = j;
 		      break;
@@ -1566,16 +1566,16 @@ thread_apply_patches (struct tcb *tcb)
 	    sigs[mov][errno_check][0] ++;
 
 	    if (mov == 0 || errno_check == 0)
-	      debug (4, "Partial syscall signature match at 0x%"PRIxPTR" "
-		     "mov: %d, errno check: %d",
-		     off, mov, errno_check);
+	      debug (4, TCB_FMT": Partial syscall signature match at "
+		     "0x%"PRIxPTR" mov: %d, errno check: %d",
+		     TCB_PRINTF (tcb), off, mov, errno_check);
 
 	    /* System call instruction.  Print the context.  */
-	    debug (5, "Candidate syscall at %"PRIxPTR": "
+	    debug (5, TCB_FMT": Candidate syscall at %"PRIxPTR": "
 		   "%08"PRIx32" %08"PRIx32" %08"PRIx32" "
 		   "%08"PRIx32" *%08"PRIx32"* %08"PRIx32" "
 		   "%08"PRIx32" %08"PRIx32" %08"PRIx32"%s%s",
-		   off,
+		   TCB_PRINTF (tcb), off,
 		   * (uint32_t *) &map[off - 4 * sizeof (uint32_t)],
 		   * (uint32_t *) &map[off - 3 * sizeof (uint32_t)],
 		   * (uint32_t *) &map[off - 2 * sizeof (uint32_t)],
@@ -1626,7 +1626,8 @@ thread_apply_patches (struct tcb *tcb)
 	  }
       }
 
-    debug (3, "%d system call sites in %s.", syscall_count, lib->filename);
+    debug (3, TCB_FMT": %d system call sites in %s.",
+	   TCB_PRINTF (tcb), syscall_count, lib->filename);
     int i;
     for (i = 0; i < 2; i ++)
       {
@@ -1807,22 +1808,19 @@ thread_apply_patches (struct tcb *tcb)
 	    if (*map_end - *map_start != lib->size)
 	      /* Wrong library.  */
 	      {
-		debug (0, "%d(%d) %s;%s;%s: "
-		       "Found library %s at 0x%"PRIxPTR"-0x%"PRIxPTR", "
-		       "but wrong size "
+		debug (0, TCB_FMT":Found library %s at "
+		       "0x%"PRIxPTR"-0x%"PRIxPTR", but wrong size "
 		       "(expected 0x%"PRIxPTR", got 0x%"PRIxPTR").",
-		       tcb->tid, tcb->pcb->group_leader.tid,
-		       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
-		       lib->filename, *map_start, *map_end,
+		       TCB_PRINTF (tcb), lib->filename, *map_start, *map_end,
 		       lib->size, *map_end - *map_start);
 		ret = -1;
 		continue;
 	      }
 	  }
 
-	debug (3, "%d: Found library %s at "
+	debug (3, TCB_FMT": Found library %s at "
 	       "0x%"PRIxPTR"-0x%"PRIxPTR" (0x%"PRIxPTR")",
-	       tcb->tid, lib->filename,
+	       TCB_PRINTF (tcb), lib->filename,
 	       *map_start, *map_end, *map_end - *map_start);
 
 	return 1;
@@ -1934,9 +1932,7 @@ thread_apply_patches (struct tcb *tcb)
 
     if (suspend)
       {
-	debug (0, "Suspending %d(%d) %s;%s;%s.",
-	       tcb->tid, tcb->pcb->group_leader.tid,
-	       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
+	debug (0, "Suspending "TCB_FMT, TCB_PRINTF (tcb));
 
 	pending_thread_apply_patches
 	  = g_slist_prepend (pending_thread_apply_patches, tcb);
@@ -1978,9 +1974,8 @@ thread_apply_patches (struct tcb *tcb)
 		case 2:
 		  /* Patched instruction.  */
 		  already_patched ++;
-		  debug (0, "%d(%d) already patched at 0x%"PRIxPTR,
-			 tcb->tid, tcb->pcb->group_leader.tid,
-			 lib_base[i] + p->base_offset);
+		  debug (0, TCB_FMT" already patched at 0x%"PRIxPTR,
+			 TCB_PRINTF (tcb), lib_base[i] + p->base_offset);
 		}
 	    }
 
@@ -1988,13 +1983,13 @@ thread_apply_patches (struct tcb *tcb)
 	}
 
     if (already_patched)
-      debug (0, DEBUG_BOLD ("%d of %d locations already patched."),
-	     already_patched, total);
+      debug (0, TCB_FMT": %d of %d locations already patched.",
+	     TCB_PRINTF (tcb), already_patched, total);
     if (bad)
       {
-	debug (0, DEBUG_BOLD ("%d of %d locations contain unexpected values.  "
-			      "Not patching."),
-	       bad, total);
+	debug (0, TCB_FMT": %d of %d locations contain unexpected values.  "
+	       "Not patching.",
+	       TCB_PRINTF (tcb), bad, total);
 	return true;
       }
 
@@ -2051,10 +2046,8 @@ thread_apply_patches (struct tcb *tcb)
 
 
     debug (already_patched == 0 ? 3 : 0,
-	   "Patched %d %s;%s;%s: applied %d of %d (total: %d) patches",
-	   tcb->pcb->group_leader.tid,
-	   tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
-	   count, total - already_patched, total);
+	   "Patched "TCB_FMT": applied %d of %d (total: %d) patches",
+	   TCB_PRINTF (tcb), count, total - already_patched, total);
 
     if (did_scan)
       {
@@ -2124,9 +2117,9 @@ thread_fixup_and_advance (struct tcb *tcb, REGS_STRUCT *regs)
       /* The address is coverd by this library.  */
       {
 	struct library_patch *lib = &library_patches[i];
-	debug (4, "Thread %d: IP %"PRIxPTR" covered by library %s "
+	debug (4, TCB_FMT": IP %"PRIxPTR" covered by library %s "
 	       "(=> offset: %"PRIxPTR")",
-	       tcb->tid, IP, lib->filename, IP - tcb->pcb->lib_base[i]);
+	       TCB_PRINTF (tcb), IP, lib->filename, IP - tcb->pcb->lib_base[i]);
 
 	int j;
 	for (j = 0; j < lib->patch_count; j ++)
@@ -2140,14 +2133,15 @@ thread_fixup_and_advance (struct tcb *tcb, REGS_STRUCT *regs)
 		regs->REGS_SYSCALL = (uintptr_t) p->syscall;
 
 		if (ptrace (PTRACE_SETREGS, tcb->tid, 0, (void *) regs) < 0)
-		  debug (0, "Failed to update thread %d's register set: %m",
-			 tcb->tid);
+		  debug (0, TCB_FMT": Failed to update thread's register "
+			 "set: %m",
+			 TCB_PRINTF (tcb));
 		else
 		  {
 		    fixed = true;
-		    debug (4, "Thread %d: Fixed up thread "
+		    debug (4, TCB_FMT": Fixed up thread "
 			   "(%s, syscall %s (%ld)).",
-			   tcb->tid, lib->filename,
+			   TCB_PRINTF (tcb), lib->filename,
 			   syscall_str (p->syscall), p->syscall);
 		  }
 
@@ -2160,12 +2154,12 @@ thread_fixup_and_advance (struct tcb *tcb, REGS_STRUCT *regs)
       }
 
   if (i == LIBRARY_COUNT)
-    debug (4, "Thread %d: IP %"PRIxPTR" not covered by any library.",
-	   (int) tcb->tid, (uintptr_t) regs->REGS_IP);
+    debug (4, TCB_FMT": IP %"PRIxPTR" not covered by any library.",
+	   TCB_PRINTF (tcb), (uintptr_t) regs->REGS_IP);
 
   if (! fixed)
-    debug (4, "Thread %d: IP: %"PRIxPTR".  No fix up applied.",
-	   (int) tcb->tid, (uintptr_t) regs->REGS_IP);
+    debug (4, TCB_FMT": IP: %"PRIxPTR".  No fix up applied.",
+	   TCB_PRINTF (tcb), (uintptr_t) regs->REGS_IP);
 
   return fixed;
 }
@@ -2174,9 +2168,9 @@ thread_fixup_and_advance (struct tcb *tcb, REGS_STRUCT *regs)
 static void
 thread_detach (struct tcb *tcb)
 {
-  debug (4, "Detaching %d", (int) tcb->tid);
+  debug (4, TCB_FMT": Detaching.", TCB_PRINTF (tcb));
   if (ptrace (PTRACE_DETACH, tcb->tid, 0, SIGCONT) < 0)
-    debug (0, "Detach from %d failed: %m", tcb->tid);
+    debug (0, TCB_FMT": ptrace_(DETACH) failed: %m", TCB_PRINTF (tcb));
 }
 
 /* Free a TCB data structure.  The thread must already be detached,
@@ -2186,9 +2180,7 @@ thread_detach (struct tcb *tcb)
 static void
 thread_untrace (struct tcb *tcb, bool need_detach)
 {
-  debug (3, "thread_untrace (%d(%d) %s;%s;%s)",
-	 tcb->tid, tcb->pcb->group_leader.tid,
-	 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
+  debug (3, "thread_untrace ("TCB_FMT")", TCB_PRINTF (tcb));
 
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
@@ -2197,8 +2189,8 @@ thread_untrace (struct tcb *tcb, bool need_detach)
 
   if (! g_hash_table_remove (tcbs, (gpointer) (uintptr_t) tcb->tid))
     {
-      debug (0, "Failed to remove tcb for %d from TCBS hash table?!?",
-	     (int) tcb->tid);
+      debug (0, TCB_FMT": Failed to remove tcb from TCBS hash table?!?",
+	     TCB_PRINTF (tcb));
       assert (0 == 1);
     }
 
@@ -2222,7 +2214,6 @@ thread_untrace (struct tcb *tcb, bool need_detach)
 
   /* After calling pcb_free, TCB may be freed.  Copy some data.  */
   pid_t tid = tcb->tid;
-  pid_t pid = tcb->pcb->group_leader.tid;
   bool need_free = (tcb != &tcb->pcb->group_leader);
 
   tcb_count --;
@@ -2236,8 +2227,9 @@ thread_untrace (struct tcb *tcb, bool need_detach)
 	   We have to do this before we PTRACE_DETACH from the
 	   thread.  */
 	{
-	  debug (3, "Reverting patches on process %d (last thread %d, quit)",
-		 pid, tid);
+	  debug (3, TCB_FMT": Reverting patches on process "
+		 "(last thread %d, quit)",
+		 TCB_PRINTF (tcb), tid);
 	  thread_revert_patches (tcb);
 	}
       pcb_free (tcb->pcb);
@@ -2364,14 +2356,14 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
     {
       if (ptrace (PTRACE_ATTACH, tid) == -1)
 	{
-	  debug (0, "Error attaching to %d: %m", tid);
+	  debug (0, TCB_FMT": Error attaching to thread: %m",
+		 TCB_PRINTF (tcb));
 	  thread_untrace (tcb, false);
 	  return NULL;
 	}
     }
 
-  debug (3, "Now tracing thread %d (%s;%s;%s).  Process: %d",
-	 tid, pcb->exe, pcb->arg0, pcb->arg1, pcb->group_leader.tid);
+  debug (3, "Now tracing "TCB_FMT, TCB_PRINTF (tcb));
 
   debug (4, "%d processes being traced (%d threads)",
 	 pcb_count, tcb_count);
@@ -2450,7 +2442,8 @@ process_untrace (pid_t pid)
 	if (tcb->suspended <= 0
 	    && (tkill (tcb->tid, SIGSTOP) < 0 || tkill (tcb->tid, SIGCONT) < 0))
 	  {
-	    debug (0, "tkill (%d, SIGSTOP): %m", tcb->tid);
+	    debug (0, TCB_FMT": tkill (%d, SIGSTOP): %m",
+		   TCB_PRINTF (tcb), tcb->tid);
 	    dofree = g_slist_prepend (dofree, tcb);
 	  }
 	tcb->stop_tracing = true;
@@ -2629,7 +2622,7 @@ load_shed_maybe (void)
     /* A load of less than 3k callbacks per second is fine.  */
     return;
 
-  debug (0, DEBUG_BOLD ("Need to shed some load: %d callbacks/s."),
+  debug (1, "High load: %d callbacks/s.",
 	 (int) (global.callbacks / (global.time / 1000)));
 
   GSList *candidates = NULL;
@@ -2686,17 +2679,20 @@ load_shed_maybe (void)
   }
   candidates = g_slist_sort (candidates, compare);
 
+  GSList *l;
+  for (l = candidates; l; l = l->next)
+    {
+      struct tcb *tcb = l->data;
+      debug (1, TCB_FMT": Generating %d callbacks per second",
+	     TCB_PRINTF (tcb), summarize (&tcb->load).callbacks_per_sec);
+    }
+
+  /* Suspend the process generating the highest number of callbacks.  */
   struct tcb *tcb = candidates->data;
-  debug (0, DEBUG_BOLD ("Suspending thread %d (process %d: %s;%s;%s): "
-			"%d callbacks per second"),
-	 tcb->tid, tcb->pcb->group_leader.tid,
-	 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
-	 summarize (&tcb->load).callbacks_per_sec);
-
-  g_slist_free (candidates);
-
   // tcb->suspended = -n;
   suspended_tcbs = g_slist_prepend (suspended_tcbs, tcb);
+
+  g_slist_free (candidates);
 
   return;
 }
@@ -2770,8 +2766,7 @@ process_monitor (void *arg)
 	  {
 	    pid_t tid = (int) (uintptr_t) key;
 	    struct tcb *tcb = value;
-	    debug (1, "%d: %s;%s;%s",
-		   tid, tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
+	    debug (1, TCB_FMT, TCB_PRINTF (tcb));
 	    assert (tid == tcb->tid);
 
 	    if (tcb->suspended > 0)
@@ -2780,7 +2775,8 @@ process_monitor (void *arg)
 	    else if (tkill (tid, SIGSTOP) < 0 || tkill (tid, SIGCONT) < 0)
 	      /* Failed to send it a signal.  Assume it is dead.  */
 	      {
-		debug (0, "tkill (%d, SIGSTOP): %m", tid);
+		debug (0, TCB_FMT": tkill (%d, SIGSTOP): %m",
+		       TCB_PRINTF (tcb), tid);
 		thread_untrace (tcb, false);
 	      }
 	  }
@@ -2857,8 +2853,7 @@ process_monitor (void *arg)
 		  {
 		    pid_t tid = (int) (uintptr_t) key;
 		    struct tcb *tcb = value;
-		    debug (1, "%d: %s;%s;%s",
-			   tid, tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1);
+		    debug (1, TCB_FMT, TCB_PRINTF (tcb));
 		    assert (tid == tcb->tid);
 
 		    if (tcb->suspended > 0)
@@ -2869,7 +2864,8 @@ process_monitor (void *arg)
 		      /* Failed to send a signal.  Assume it is
 			 dead.  */
 		      {
-			debug (0, "tkill (%d, SIGSTOP): %m", tid);
+			debug (0, TCB_FMT": tkill (%d, SIGSTOP): %m",
+			       TCB_PRINTF (tcb), tid);
 			thread_untrace (tcb, false);
 		      }
 		  }
@@ -3019,10 +3015,8 @@ process_monitor (void *arg)
       if (WIFEXITED (status))
 	{
 	  signal_state (4);
-	  debug (3, "%d(%d) %s;%s;%s exited: %d.",
-		 (int) tid, (int) tcb->pcb->group_leader.tid,
-		 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
-		 WEXITSTATUS (status));
+	  debug (3, TCB_FMT" exited: %d.",
+		 TCB_PRINTF (tcb), WEXITSTATUS (status));
 	  thread_untrace (tcb, false);
 	  tcb = NULL;
 	  continue;
@@ -3030,9 +3024,8 @@ process_monitor (void *arg)
 
       if (WIFSIGNALED (status))
 	{
-	  debug (3, "%d(%d) %s;%s;%s exited due to signal: %s (%d).",
-		 (int) tid, (int) tcb->pcb->group_leader.tid,
-		 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+	  debug (3, TCB_FMT" exited due to signal: %s (%d).",
+		 TCB_PRINTF (tcb),
 		 strsignal (WTERMSIG (status)), WTERMSIG (status));
 	  thread_untrace (tcb, false);
 	  tcb = NULL;
@@ -3047,7 +3040,7 @@ process_monitor (void *arg)
       if (! WIFSTOPPED (status))
 	/* Ignore.  Not stopped.  */
 	{
-	  debug (4, "%d: Not stopped.", (int) tid);
+	  debug (4, TCB_FMT": Not stopped.", TCB_PRINTF (tcb));
 	  goto out;
 	}
 
@@ -3057,7 +3050,7 @@ process_monitor (void *arg)
 	/* We are trying to exit or we want to detach from this
 	   process.  */
 	{
-	  debug (4, "Detaching %d", (int) tid);
+	  debug (4, TCB_FMT": Untracing.", TCB_PRINTF (tcb));
 	  /* Revert any patches before resuming the first thread in
 	     the process.  */
 	  thread_revert_patches (tcb);
@@ -3069,7 +3062,8 @@ process_monitor (void *arg)
       if (tcb->suspended < 0)
 	/* Suspend pending.  Do it now.  */
 	{
-	  debug (4, "Detaching %d", (int) tid);
+	  debug (3, TCB_FMT": Detaching due to pending suspend.",
+		 TCB_PRINTF (tcb));
 	  thread_detach (tcb);
 	  tcb->suspended = -tcb->suspended;
 	  continue;
@@ -3136,7 +3130,8 @@ process_monitor (void *arg)
 	{
 	  if (ptrace (PTRACE_SETOPTIONS, tid, 0, ptrace_options) == -1)
 	    {
-	      debug (0, "Failed to set trace options on thread %d: %m", tid);
+	      debug (0, TCB_FMT": Failed to set trace options: %m",
+		     TCB_PRINTF (tcb));
 	      thread_untrace (tcb, true);
 	      tcb = NULL;
 	      continue;
@@ -3189,7 +3184,7 @@ process_monitor (void *arg)
 				    added_one = true;
 				}
 			      else if (tid2 != tid)
-				debug (4, "Already monitoring %d", tid2);
+				debug (5, "Already monitoring %d", tid2);
 			    }
 			}
 
@@ -3236,7 +3231,8 @@ process_monitor (void *arg)
 	{
 	  unsigned long msg = -1;
 	  if (ptrace (PTRACE_GETEVENTMSG, tid, 0, (uintptr_t) &msg) < 0)
-	    debug (0, "PTRACE_GETEVENTMSG(%d): %m", tid);
+	    debug (0, TCB_FMT": PTRACE_GETEVENTMSG(%d): %m",
+		   TCB_PRINTF (tcb), tid);
 
 	  switch (event)
 	    {
@@ -3245,7 +3241,7 @@ process_monitor (void *arg)
 		 options are cleared on exec, e.g., SIGTRAP is sent
 		 without the high-bit set.  If we do set it, the
 		 options are inherited.  */
-	      debug (4, "%d: exec'd", tid);
+	      debug (4, TCB_FMT": exec'd", TCB_PRINTF (tcb));
 	      pcb_read_exe (tcb->pcb);
 
 	      /* It has a new memory image.  We need to fix it up.  */
@@ -3259,7 +3255,8 @@ process_monitor (void *arg)
 	      {
 		/* Get the name of the new child.  */
 		pid_t child = (pid_t) msg;
-		debug (3, "New thread %d", (int) child);
+		debug (3, TCB_FMT": New thread created: %d",
+		       TCB_PRINTF (tcb), (int) child);
 		if (child)
 		  {
 		    /* Set up its TCB.  (If TCB2 is NULL, it exited
@@ -3368,7 +3365,8 @@ process_monitor (void *arg)
 
       if (ptrace (PTRACE_GETREGS, tid, 0, &regs) < 0)
 	{
-	  debug (0, "%d: Failed to get thread's registers: %m", (int) tid);
+	  debug (0, TCB_FMT": Failed to get thread's registers: %m",
+		 TCB_PRINTF (tcb));
 	  goto out;
 	}
 
@@ -3430,9 +3428,9 @@ process_monitor (void *arg)
 	     the syscall number of syscall exit!  */
 	  if (SYSCALL != tcb->current_syscall)
 	    {
-	      debug (4, "%d: warning syscall %ld entry "
+	      debug (4, TCB_FMT": warning syscall %ld entry "
 		     "followed by syscall %ld!?!",
-		     (int) tid, tcb->current_syscall, (long) SYSCALL);
+		     TCB_PRINTF (tcb), tcb->current_syscall, (long) SYSCALL);
 	    }
 
 	  syscall = tcb->current_syscall;
@@ -3460,8 +3458,8 @@ process_monitor (void *arg)
 	  return false;
       }
 
-      debug (4, "%d: %s (%ld) %s (previous: %s (%ld))",
-	     (int) tid, syscall_str (syscall), syscall,
+      debug (4, TCB_FMT": %s (%ld) %s (previous: %s (%ld))",
+	     TCB_PRINTF (tcb), syscall_str (syscall), syscall,
 	     syscall_entry ? "entry" : "exit",
 	     syscall_str (tcb->previous_syscall), tcb->previous_syscall);
       debug (5, REGS_FMT, REGS_PRINTF (&regs));
@@ -3499,8 +3497,9 @@ process_monitor (void *arg)
 	    int unhandled
 	      = flags & ~(O_RDONLY|O_WRONLY|O_RDWR|O_CREAT|O_EXCL|O_TRUNC
 			  |O_NONBLOCK|O_LARGEFILE|O_DIRECTORY);
-	    debug (4, "%s (%"PRIxPTR", %s%s%s%s%s%s%s%s (%x; %x unknown), "
-		   "%x) -> %d",
+	    debug (4, TCB_FMT": %s (%"PRIxPTR", %s%s%s%s%s%s%s%s"
+		   " (%x; %x unknown), %x) -> %d",
+		   TCB_PRINTF (tcb),
 		   syscall_str (syscall),
 		   /* filename, flags, mode.  */
 		   filename,
@@ -3528,7 +3527,8 @@ process_monitor (void *arg)
 		  end[1] = 0;
 		else
 		  {
-		    debug (0, "tcb_mem_read failed.");
+		    debug (0, TCB_FMT": tcb_mem_read failed.",
+			   TCB_PRINTF (tcb));
 		    buffer[0] = 0;
 		  }
 
@@ -3538,9 +3538,8 @@ process_monitor (void *arg)
 
 	    if (lookup_fd (tid, fd, buffer, sizeof (buffer)))
 	      {
-		debug (4, "%d: %s;%s;%s: %s (%s, %c%c) -> %d",
-		       (int) tid,
-		       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+		debug (4, TCB_FMT": %s (%s, %c%c) -> %d",
+		       TCB_PRINTF (tcb),
 		       syscall_str (syscall),
 		       buffer,
 		       ((flags & O_RDONLY) == O_RDONLY) || (flags & O_RDWR)
@@ -3583,9 +3582,8 @@ process_monitor (void *arg)
 		 valid file descriptor will fail.  Don't save and wait
 		 for the exit.  Marshall now.  */
 	      {
-		debug (4, "%d: %s;%s;%s: close (%d) -> %s",
-		       (int) tid,
-		       tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+		debug (4, TCB_FMT": close (%d) -> %s",
+		       TCB_PRINTF (tcb),
 		       /* fd.  */
 		       fd, buffer);
 
@@ -3593,8 +3591,8 @@ process_monitor (void *arg)
 		for (i = 0; i < LIBRARY_COUNT; i ++)
 		  if (fd == tcb->pcb->lib_fd[i])
 		    {
-		      debug (4, "lib %s closed",
-			     library_patches[i].filename);
+		      debug (4, TCB_FMT": lib %s closed",
+			     TCB_PRINTF (tcb), library_patches[i].filename);
 		      tcb->pcb->lib_fd[i] = -1;
 		    }
 
@@ -3611,10 +3609,8 @@ process_monitor (void *arg)
 		  }
 	      }
 	    else
-	      debug (0, "%d: %s;%s;%s: close (%d)",
-		     (int) tid,
-		     tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
-		     fd);
+	      debug (0, TCB_FMT": close (%d)",
+		     TCB_PRINTF (tcb), fd);
 	  }
 
 	  break;
@@ -3643,11 +3639,9 @@ process_monitor (void *arg)
 		      lib = &library_patches[i];
 		}
 
-	      debug (4, "%d: %s;%s;%s: "
-		     "mmap (%"PRIxPTR", %x,%s%s%s (0x%x), 0x%x, "
+	      debug (4, TCB_FMT": mmap (%"PRIxPTR", %x,%s%s%s (0x%x), 0x%x, "
 		     "%d (= %s), %"PRIxPTR") -> %"PRIxPTR,
-		     tid,
-		     tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+		     TCB_PRINTF (tcb),
 		     addr, (int) length,
 		     prot & PROT_READ ? " READ" : "",
 		     prot & PROT_WRITE ? " WRITE" : "",
@@ -3669,9 +3663,9 @@ process_monitor (void *arg)
 	       Why?  Unknown.  We (try to) patch it once this
 	       occurs.  */
 	    {
-	      debug (4, "munmap (0x%"PRIxPTR", 0x%"PRIxPTR" "
+	      debug (4, TCB_FMT": munmap (0x%"PRIxPTR", 0x%"PRIxPTR" "
 		     "(=> 0x%"PRIxPTR") => %"PRIdPTR,
-		     (uintptr_t) ARG1, (uintptr_t) ARG2,
+		     TCB_PRINTF (tcb), (uintptr_t) ARG1, (uintptr_t) ARG2,
 		     (uintptr_t) (ARG1 + ARG2), (uintptr_t) RET);
 	      if (RET == 0 && ! pcb_patched (tcb->pcb))
 		if (! thread_apply_patches (tcb))
@@ -3722,12 +3716,10 @@ process_monitor (void *arg)
 		    }
 		}
 	      else
-		debug (0, "tcb_mem_read failed.");
+		debug (0, TCB_FMT": tcb_mem_read failed.", TCB_PRINTF (tcb));
 
-	      debug (4, "%d: %s;%s;%s: %s (%s)",
-		     (int) tcb->tid,
-		     tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
-		     syscall_str (syscall), tcb->saved_src);
+	      debug (4, TCB_FMT": %s (%s)",
+		     TCB_PRINTF (tcb), syscall_str (syscall), tcb->saved_src);
 	    }
 	  else if (syscall == __NR_unlink
 		   || syscall == __NR_unlinkat
@@ -3735,9 +3727,8 @@ process_monitor (void *arg)
 	    {
 	      assert (! syscall_entry);
 
-	      debug (4, "%d: %s;%s;%s: %s (%s) -> %d",
-		     (int) tcb->tid,
-		     tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+	      debug (4, TCB_FMT": %s (%s) -> %d",
+		     TCB_PRINTF (tcb),
 		     syscall_str (syscall), tcb->saved_src, (int) RET);
 
 	      if ((int) RET >= 0
@@ -3787,11 +3778,11 @@ process_monitor (void *arg)
 		      g_free (p);
 		    }
 		  else
-		    debug (0, "tcb_mem_read failed.");
+		    debug (0, TCB_FMT": tcb_mem_read failed.",
+			   TCB_PRINTF (tcb));
 
-		  debug (4, "%d: %s;%s;%s: %s (%s, %s) -> %d",
-			 tcb->tid,
-			 tcb->pcb->exe, tcb->pcb->arg0, tcb->pcb->arg1,
+		  debug (4, TCB_FMT": %s (%s, %s) -> %d",
+			 TCB_PRINTF (tcb),
 			 syscall_str (syscall), src, dest, (int) RET);
 
 		  if (process_monitor_filename_whitelisted (src)
@@ -3824,7 +3815,7 @@ process_monitor (void *arg)
 	  /* The process likely disappeared, perhaps violently.  */
 	  if (tcb)
 	    {
-	      debug (4, "Detaching %d", (int) tid);
+	      debug (4, TCB_FMT": Detaching.", TCB_PRINTF (tcb));
 	      thread_untrace (tcb, true);
 	      tcb = NULL;
 	    }

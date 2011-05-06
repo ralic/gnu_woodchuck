@@ -276,8 +276,6 @@ uuid (void)
   if (my_uuid)
     /* Got it!  */
     {
-      debug (0, "UUID is %s", my_uuid);
-
       sqlite3_close (db);
       free (filename);
       return my_uuid;
@@ -301,9 +299,7 @@ uuid (void)
       pclose (input);
     }
   else
-    debug (0, "Running (...) | md5sum: %m");
-
-  debug (0, "uuid first phase: %s", uuid.str);
+    debug (3, "Running (...) | md5sum: %m");
 
   void inplode (char in[32], char out[16])
   {
@@ -366,8 +362,6 @@ uuid (void)
   explode (uuid.str, result);
   my_uuid = strdup (result);
 
-  debug (0, "uuid final: %s", my_uuid);
-
   /* Save the UUID.  */
   sqlite3_exec_printf (db,
 		       "insert into uuid values (%Q);",
@@ -381,8 +375,6 @@ uuid (void)
 
   sqlite3_close (db);
   free (filename);
-
-  debug (0, "Generated UUID %s", my_uuid);
 
   return my_uuid;
 }
@@ -485,8 +477,6 @@ wget_output_cb (GIOChannel *source, GIOCondition condition, gpointer user_data)
   char *p = obstack_next_free (&s->wget_output);
   bool copy = false;
 
-  debug (0, "Space for %d bytes.", room);
-
   if (room == 0)
     /* We cannot write directly to the obstack.  We need to copy the
        data.  */
@@ -500,7 +490,6 @@ wget_output_cb (GIOChannel *source, GIOCondition condition, gpointer user_data)
   if (condition == G_IO_IN)
     {
       r = read (fileno (s->wget), p, room);
-      debug (0, "Read %d bytes.", (int) r);
       if (r > 0)
 	/* Read data.  */
 	{
@@ -546,13 +535,13 @@ wget_output_cb (GIOChannel *source, GIOCondition condition, gpointer user_data)
      -1.  Instead, we grok the output.  */
   int wget_status = pclose (s->wget);
   s->wget = NULL;
-  debug (1, "wget returned %d (exit code: %d) (%s, %d)",
+  debug (3, "wget returned %d (exit code: %d) (%s, %d)",
 	 wget_status, WEXITSTATUS (wget_status),
 	 s->wget_output_str, (int) strlen (s->wget_output_str));
 
   if (strstr (s->wget_output_str, "\nDanke\n"))
     /* We got the expected server response.  */
-    debug (1, "got expected server response.");
+    debug (3, "got expected server response.");
   else
     /* Assume an error occured.  */
     goto out;
@@ -602,7 +591,7 @@ upload (void)
 {
   if (uploading)
     {
-      debug (0, "Upload in progress.  Ignoring upload request.");
+      debug (3, "Upload in progress.  Ignoring upload request.");
       return;
     }
 
@@ -672,7 +661,7 @@ upload (void)
 	      errmsg = NULL;
 	    }
 
-	  debug (0, "%s.%s: %"PRId64" records need synchronization",
+	  debug (3, "%s.%s: %"PRId64" records need synchronization",
 		 d->filename, t->table, t->stake - t->through);
 
 	  char *name = sanitize_strings (dbname, t->table);
@@ -721,7 +710,7 @@ upload (void)
     }
 
   uint64_t end = now ();
-  debug (0, "Prepare took "TIME_FMT"; flush took: "TIME_FMT,
+  debug (3, "Prepare took "TIME_FMT"; flush took: "TIME_FMT,
 	 TIME_PRINTF (mid - start),
 	 TIME_PRINTF (end - mid));
 
@@ -733,7 +722,7 @@ upload (void)
 	    " --ca-certificate="PKGDATADIR"/ssl-receiver.cert"
 	    " https://hssl.cs.jhu.edu:9321/%s 2>&1",
 	    s->upload_temp_filename, my_uuid);
-  debug (0, "Executing %s", cmd);
+  debug (3, "Executing %s", cmd);
   s->wget = popen (cmd, "r");
   free (cmd);
 
@@ -783,7 +772,7 @@ upload_schedule (gpointer user_data)
 {
   uint64_t n = now ();
 
-  debug (1, "Acceptable connection for "TIME_FMT"; inactive for "TIME_FMT"; "
+  debug (4, "Acceptable connection for "TIME_FMT"; inactive for "TIME_FMT"; "
 	 "last upload "TIME_FMT" ago; last upload try "TIME_FMT" ago",
 	 TIME_PRINTF (n - connected),
 	 TIME_PRINTF (inactive == 0 ? 0 : (n - inactive)),
@@ -800,7 +789,7 @@ upload_schedule (gpointer user_data)
     /* We must not be uploading, be connected and the user must be
        idle.  */
     {
-      debug (1, "Upload predicates not satisfied "
+      debug (3, "Upload predicates not satisfied "
 	     "(uploading: %s; connected: %"PRId64"; inactive: %"PRId64").",
 	     uploading ? "true" : "false", connected, inactive);
       return FALSE;
@@ -814,7 +803,7 @@ upload_schedule (gpointer user_data)
        long enough, the data is old enough and we have not tried too
        recently.  Time to do an upload!  */
     {
-      debug (1, "Starting upload.");
+      debug (3, "Starting upload.");
 
       upload ();
       return FALSE;
@@ -831,7 +820,7 @@ upload_schedule (gpointer user_data)
   int64_t timeout = MAX5 (connect_timeout, inactivity_timeout,
 			  age_timeout, retry_timeout, 1000);
 
-  debug (1, "Timeout: "TIME_FMT" (connection: "TIME_FMT";"
+  debug (3, "Timeout: "TIME_FMT" (connection: "TIME_FMT";"
 	 " inactivity: "TIME_FMT"; next upload: "TIME_FMT";"
 	 " next try: "TIME_FMT")",
 	 TIME_PRINTF (timeout),
@@ -856,7 +845,6 @@ default_connection_changed (NCNetworkMonitor *nm,
       uint32_t m = nc_network_connection_mediums (new_default);
       if (m & (NC_CONNECTION_MEDIUM_ETHERNET | NC_CONNECTION_MEDIUM_WIFI))
 	{
-	  debug (1, "Connected");
 	  connected = now ();
 	  upload_schedule (NULL);
 	}
@@ -885,7 +873,7 @@ logger_uploader_init (void)
      is okay: the defaults are reasonable.  */
   int callback (void *cookie, int argc, char **argv, char **names)
   {
-    debug (0, "last_upload: %s; last_upload_try: %s", argv[0], argv[1]);
+    debug (3, "last_upload: %s; last_upload_try: %s", argv[0], argv[1]);
     if (argv[0])
       last_upload = atoll (argv[0]) * 1000;
 

@@ -16,7 +16,8 @@ static char *debug_output_filename;
 #endif
 
 #if !defined(DEBUG_ELIDE)
-int output_debug = 3;
+int output_debug_global = 3;
+__thread int output_debug = 3;
 #endif
 
 void

@@ -22,15 +22,28 @@
 #endif
 
 #ifndef do_debug
+#ifndef MAX
+# define MAX(x, y)				\
+  ({						\
+    typeof (x) max_x = (x);			\
+    typeof (x) max_y = (y);			\
+    if (max_x < max_y)				\
+      max_x = max_y;				\
+    max_x;					\
+  })
+#endif
+
 # ifndef DEBUG_COND
-extern int output_debug;
+extern int output_debug_global;
+extern __thread int output_debug;
+#  define OUTPUT_DEBUG MAX (output_debug, output_debug_global)
 #  ifdef DEBUG_ELIDE
 /* We elide some code at compile time.  */
 #   define DEBUG_COND(level)				\
-  ((level) <= output_debug && (level) < DEBUG_ELIDE)
+  ((level) <= OUTPUT_DEBUG && (level) < DEBUG_ELIDE)
 #  else
 /* The default DEBUG_COND is LEVEL <= output_debug.  */
-#   define DEBUG_COND(level) ((level) <= output_debug)
+#   define DEBUG_COND(level) ((level) <= OUTPUT_DEBUG)
 #  endif /* DEBUG_ELIDE.  */
 # endif /* DEBUG_COND.  */
 
@@ -67,8 +80,8 @@ extern const char *debug_init_ ();
     debug_init_ ();							\
   else									\
     {									\
-      extern int output_debug __attribute__ ((weak));			\
-      if (&output_debug)						\
+      extern int output_debug_global __attribute__ ((weak));		\
+      if (&output_debug_global)						\
 	fprintf (stderr, "%s debugging disabled but not everywhere.",	\
 		 __FILE__);						\
     }

@@ -522,11 +522,13 @@ start (gpointer user_data)
     {
       if (error->domain == DBUS_GERROR
 	  && error->code == DBUS_GERROR_REMOTE_EXCEPTION)
-        g_printerr ("Caught remote method exception %s: %s",
-	            dbus_g_error_get_name (error),
-	            error->message);
+        debug (0, "Call org.freedesktop.NetworkManager.get_devices: "
+	       "Caught remote method exception %s: %s",
+	       dbus_g_error_get_name (error),
+	       error->message);
       else
-        g_printerr ("Error: %s\n", error->message);
+        debug (0, "org.freedesktop.NetworkManager.get_devices: %s",
+	       error->message);
       g_error_free (error);
     }
   else
