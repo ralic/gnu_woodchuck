@@ -314,6 +314,7 @@ static const char *arg0_blacklist[] =
     "/usr/bin/osso-connectivity-ui-conndlgs",
     "/usr/bin/hildon-application-manager",
     "/usr/bin/osso-xterm",
+    "/usr/bin/osso_calculator",
 #else
     /* Standard program in a GNOME session we can ignore (at least in
        Debian).  */
