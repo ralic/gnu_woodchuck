@@ -1,5 +1,5 @@
 /* network-monitor-icd2.c - ICD2 network monitor backend.
-   Copyright 2010 Neal H. Walfield <neal@walfield.org>
+   Copyright 2010, 2011 Neal H. Walfield <neal@walfield.org>
 
    This file is part of Netczar.
 
@@ -416,6 +416,8 @@ icd2_state_sig_cb (DBusGProxy *proxy,
     m->addrinfo_req_source = g_idle_add (addrinfo_req, m);
 }
 
+static void cell_info_changed (NCNetworkMonitor *m, struct nm_cell *proposed);
+
 static void
 gprs_detached (DBusGProxy *proxy, gpointer user_data)
 {
@@ -431,6 +433,31 @@ gprs_detached (DBusGProxy *proxy, gpointer user_data)
     }
   else
     debug (1, DEBUG_BOLD ("GPRS DETACHED: no tether connection"));
+
+  struct nm_cell proposed = m->cell_info;
+  proposed.gprs_availability = -1;
+  cell_info_changed (m, &proposed);
+}
+
+static void
+gprs_suspended (DBusGProxy *proxy, guint reason, char *reason_str,
+		gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+
+  struct nm_cell proposed = m->cell_info;
+  proposed.gprs_availability = reason;
+  cell_info_changed (m, &proposed);
+}
+
+static void
+gprs_available (DBusGProxy *proxy, gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+
+  struct nm_cell proposed = m->cell_info;
+  proposed.gprs_availability = 0;
+  cell_info_changed (m, &proposed);
 }
 
 /* This is emitted periodically when there is a GPRS connection.  */
@@ -516,6 +543,13 @@ gprs_status (DBusGProxy *proxy, GHashTable *conns, gpointer user_data)
 	     connection_state_to_str (tether->state));
 
       connection_state_set (tether, CONNECTION_STATE_CONNECTED, false);
+    }
+
+  if (m->cell_info.gprs_availability == -1)
+    {
+      struct nm_cell proposed = m->cell_info;
+      proposed.gprs_availability = -1;
+      cell_info_changed (m, &proposed);
     }
 }
 
@@ -816,6 +850,8 @@ cell_info_changed (NCNetworkMonitor *m, struct nm_cell *proposed)
     changes |= NM_CELL_SIGNAL_STRENGTH_DBM;
   if (strcmp (m->cell_info.operator, proposed->operator) != 0)
     changes |= NM_CELL_OPERATOR;
+  if (m->cell_info.gprs_availability != proposed->gprs_availability)
+    changes |= NM_CELL_GPRS_AVAILABILITY;
 
   if (! changes)
     return;
@@ -1077,6 +1113,25 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
   dbus_g_proxy_connect_signal (m->gprs_proxy, "Detached",
 			       G_CALLBACK (gprs_detached), m, NULL);
 
+  /* com.nokia.csd.GPRS.Suspended */
+  dbus_g_object_register_marshaller
+    (g_cclosure_user_marshal_VOID__UINT_STRING, G_TYPE_NONE,
+     G_TYPE_UINT, G_TYPE_STRING, G_TYPE_INVALID);
+
+  dbus_g_proxy_add_signal
+    (m->gprs_proxy, "Suspended", G_TYPE_UINT, G_TYPE_STRING, G_TYPE_INVALID);
+  dbus_g_proxy_connect_signal (m->gprs_proxy, "Suspended",
+			       G_CALLBACK (gprs_suspended), m, NULL);
+
+  /* com.nokia.csd.GPRS.Available */
+  dbus_g_object_register_marshaller
+    (g_cclosure_marshal_VOID__VOID, G_TYPE_NONE, G_TYPE_INVALID);
+
+  dbus_g_proxy_add_signal
+    (m->gprs_proxy, "Available", G_TYPE_INVALID);
+  dbus_g_proxy_connect_signal (m->gprs_proxy, "Available",
+			       G_CALLBACK (gprs_available), m, NULL);
+
   /* com.nokia.csd.GPRS.Status.  */
   GType Sssssbtt = dbus_g_type_get_struct ("GValueArray",
 					   G_TYPE_STRING, G_TYPE_STRING,
@@ -1207,6 +1262,7 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
      m, NULL);
 
 
+  m->cell_info.gprs_availability = -1;
   nm_cell_info (m, NULL);
 
   /* Query devices and extant connections the next time things are

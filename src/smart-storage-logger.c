@@ -703,7 +703,8 @@ nm_cell_info_changed (NCNetworkMonitor *nm, GSList *cells, gpointer user_data)
 	     " %snetwork type: %d%s;"
 	     " %ssignal strength normalized: %d%s;"
 	     " %ssignal strength dbm: %d%s;"
-	     " %soperator: %s%s",
+	     " %soperator: %s%s;"
+	     " %sgprs availability: %d%s",
 	     X(CONNECTED, connected),
 	     X(LAC, lac),
 	     X(CELL_ID, cell_id),
@@ -712,7 +713,8 @@ nm_cell_info_changed (NCNetworkMonitor *nm, GSList *cells, gpointer user_data)
 	     X(NETWORK_TYPE, network_type),
 	     X(SIGNAL_STRENGTH_NORMALIZED, signal_strength_normalized),
 	     X(SIGNAL_STRENGTH_DBM, signal_strength_dbm),
-	     X(OPERATOR, operator));
+	     X(OPERATOR, operator),
+	     X(GPRS_AVAILABILITY, gprs_availability));
 #undef X_
 #undef X
 
@@ -725,20 +727,21 @@ nm_cell_info_changed (NCNetworkMonitor *nm, GSList *cells, gpointer user_data)
 
 	 "insert into cell_info"
 	 " ("SQL_TIME_COLS", cell_id, connected, signal_strength_normalized, "
-	 "  signal_strength_dbm)"
+	 "  signal_strength_dbm, gprs_availability)"
 	 " values"
 	 " ("TM_FMT","
 	 "  (select OID from cells"
 	 "    where lac = X(%"PRId16") and cell_id = X(%"PRId32")"
 	 "     and network = %"PRId32" and country = %"PRId32
 	 "     and network_type = %d and operator = '%q'),"
-	 "  '%s', %d, %d);",
+	 "  '%s', %d, %d, %d);",
 	 c->lac, c->cell_id, c->network, c->country, c->network_type,
 	 c->operator,
 
 	 TM_PRINTF (tm), c->lac, c->cell_id, c->network, c->country,
 	 c->network_type, c->operator, c->connected ? "connected" : "neighbor",
-	 c->signal_strength_normalized, c->signal_strength_dbm);
+	 c->signal_strength_normalized, c->signal_strength_dbm,
+	 c->gprs_availability);
     }
 }
 
@@ -855,7 +858,7 @@ nm_init (void)
 		      " (OID INTEGER PRIMARY KEY AUTOINCREMENT,"
 		      "  "SQL_TIME_COLS", cell_id, connected,"
 		      "  network_type, signal_strength_normalized,"
-		      "  signal_strength_dbm);",
+		      "  signal_strength_dbm, gprs_availability);",
 		      NULL, NULL, &errmsg);
   if (errmsg)
     {

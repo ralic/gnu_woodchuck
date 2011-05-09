@@ -1,5 +1,5 @@
 /* network-monitor.h - Network monitor interface.
-   Copyright 2010 Neal H. Walfield <neal@walfield.org>
+   Copyright 2010, 2011 Neal H. Walfield <neal@walfield.org>
 
    This file is part of Netczar.
 
@@ -71,6 +71,7 @@ enum
     NM_CELL_SIGNAL_STRENGTH_NORMALIZED = 1 << 6,
     NM_CELL_SIGNAL_STRENGTH_DBM = 1 << 7,
     NM_CELL_OPERATOR = 1 << 8,
+    NM_CELL_GPRS_AVAILABILITY = 1 << 9,
   };
 
 struct nm_cell
@@ -92,6 +93,9 @@ struct nm_cell
   int signal_strength_normalized;
   /* The absolute signal strength, in dbm.  */
   int signal_strength_dbm;
+
+  /* GPRS availability: -1, unknown; 0: available; >0: suspended.  */
+  int gprs_availability;
 
   char operator[64];
 };
