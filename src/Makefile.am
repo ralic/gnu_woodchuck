@@ -1,12 +1,14 @@
 bin_PROGRAMS = murmeltier smart-storage-logger smart-storage-logger-recover \
-	process-tracer ssl-tail
+	process-tracer ssl-tail gwoodchuck
 bin_SCRIPTS = smart-storage-logger-consent
+
+lib_LTLIBRARIES = libgwoodchuck-0.0.la
 
 %: %.py
 	cp "$<" "$@"
 
 AM_CFLAGS = -Wall -g -O2 -std=gnu99 $(BASE_CFLAGS)
-AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -DPKGDATADIR=\"$(pkgdatadir)\"
+AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -DPKGDATADIR=\"$(pkgdatadir)\" -I$(top_srcdir)/include
 nm_interfaces_xml = $(foreach filename, \
 	org.freedesktop.DBus.Properties.xml \
 	org.freedesktop.NetworkManager.Device.xml \
@@ -27,13 +29,15 @@ nm_interfaces_xml = $(foreach filename, \
 	org.freedesktop.DBus.xml \
 	Phone.Net.xml \
 	org.woodchuck.xml \
+	org.woodchuck.manager.xml \
+	org.woodchuck.stream.xml \
+	org.woodchuck.object.xml \
 	org.woodchuck.upcall.xml \
 	, $(srcdir)/$(filename))
 
 nm_interfaces_h = $(patsubst %.xml,%.h,$(nm_interfaces_xml))
 
 nm_server_stubs_xml = $(foreach filename, \
-	org.woodchuck.xml \
 	org.woodchuck.upcall.xml \
 	, $(srcdir)/$(filename))
 
@@ -56,6 +60,7 @@ EXTRA_DIST = marshal.list network-monitor-icd2.c network-monitor-nm.c
 common_sources = $(nm_interfaces_h) marshal.h marshal.c \
 	debug.h debug.c \
 	files.h files.c \
+	dotdir.h dotdir.c \
 	sqlq.h sqlq.c \
 	signal-handler.h signal-handler.c \
 	network-monitor.h network-monitor.c \
@@ -67,6 +72,7 @@ common_sources = $(nm_interfaces_h) marshal.h marshal.c \
 	shutdown-monitor.h shutdown-monitor.c
 
 murmeltier_SOURCES = $(common_sources) murmeltier.c \
+	murmeltier-dbus-server.h murmeltier-dbus-server.c \
 	org.woodchuck.murmeltier-server.h
 murmeltier_LDADD = $(BASE_LIBS)
 
@@ -94,6 +100,14 @@ process_tracer_SOURCES = process-monitor-ptrace.c process-monitor-ptrace.h \
 ssl_tail_SOURCES = ssl-tail.c files.h files.c debug.h util.h
 ssl_tail_CPPFLAGS = $(AM_CPPFLAGS)
 ssl_tail_LDADD = $(BASE_LIBS)
+
+gwoodchuck_SOURCES = gwoodchuck.c
+gwoodchuck_CPPFLAGS = $(AM_CPPFLAGS) $(DBUS_CFLAGS) $(GLIB_CFLAGS) \
+	-DGWOODCHUCK_TEST
+gwoodchuck_LDADD = $(DBUS_LIBS) $(GLIB_LIBS)
+
+libgwoodchuck_0_0_la_SOURCES = gwoodchuck.c
+libgwoodchuck_0_0_la_CPPFLAGS = $(AM_CPPFLAGS) $(DBUS_CFLAGS) $(GLIB_CFLAGS)
 
 .PHONEY: xml-to-h
 xml-to-h: $(patsubst %.xml,%.h,$(wildcard $(srcdir)/*.xml))

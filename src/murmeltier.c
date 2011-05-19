@@ -18,15 +18,30 @@
 #include "config.h"
 #include "network-monitor.h"
 
+#include <assert.h>
 #include <stdio.h>
+#include <error.h>
 #include <glib.h>
+#include <dbus/dbus.h>
 #include <dbus/dbus-glib.h>
 #include <dbus/dbus-glib-bindings.h>
 #include <sqlite3.h>
 
+#include "murmeltier-dbus-server.h"
+
 #include "debug.h"
 #include "util.h"
-
+#include "dotdir.h"
+
+#define G_MURMELTIER_ERROR murmeltier_error_quark ()
+static GQuark
+murmeltier_error_quark (void)
+{
+  return g_quark_from_static_string ("murmeltier");
+}
+
+static sqlite3 *db = NULL;
+
 typedef struct _Murmeltier Murmeltier;
 typedef struct _MurmeltierClass MurmeltierClass;
 
@@ -40,8 +55,6 @@ typedef struct _MurmeltierClass MurmeltierClass;
 struct _MurmeltierClass
 {
   GObjectClass parent;
-
-  DBusGConnection *session_bus;
 };
 
 struct _Murmeltier
@@ -55,57 +68,18 @@ struct _Murmeltier
 
 extern GType murmeltier_get_type (void);
 
-/* The server stub file can only be included after declaring the
-   prototypes for the callback functions.  */
-static gboolean org_woodchuck_principal_register
-  (Murmeltier *mt,
-   GValueArray *human_readable_name, char *bus_name, GValue *execve,
-   char **uuid, GError **error);
-static gboolean org_woodchuck_principal_remove
-  (Murmeltier *mt, char *uuid, GError **error);
-static gboolean org_woodchuck_job_submit
-  (Murmeltier *mt,
-   char *principal_uuid, char *url, char *location, char *cookie,
-   gboolean wakeup, uint64_t trigger_target, uint64_t trigger_earliest,
-   uint64_t trigger_latest, uint32_t period, uint32_t request_type,
-   uint32_t priority, uint64_t expected_size, char **job_uuid, GError **error);
-static gboolean org_woodchuck_job_evaluate
-  (Murmeltier *mt,
-   char *principal_uuid, uint32_t request_type, uint32_t priority,
-   uint64_t expected_size, uint32_t *desirability, GError **error);
-static gboolean org_woodchuck_feedback_subscribe
-  (Murmeltier *mt, char *principal_uuid, char **handle, GError **error);
-static gboolean org_woodchuck_feedback_unsubscribe
-  (Murmeltier *mt, char *handle, GError **error);
-static gboolean org_woodchuck_feedback_ack
-  (Murmeltier *mt, char *job_uuid, uint32_t instance, GError **error);
-
-#include "org.woodchuck.server-stubs.h"
-
 G_DEFINE_TYPE (Murmeltier, murmeltier, G_TYPE_OBJECT);
 
 static void
 murmeltier_class_init (MurmeltierClass *klass)
 {
+#if 0
   murmeltier_parent_class = g_type_class_peek_parent (klass);
 
   GObjectClass *object_class;
 
   object_class = G_OBJECT_CLASS (klass);
-
-  GError *error = NULL;
-
-  /* Init the DBus connection, per-klass */
-  klass->session_bus = dbus_g_bus_get (DBUS_BUS_SESSION, &error);
-  if (klass->session_bus == NULL)
-    {
-      debug (0, "Unable to connect to session bus: %s", error->message);
-      g_error_free (error);
-      return;
-    }
-
-  dbus_g_object_type_install_info
-    (MURMELTIER_TYPE, &dbus_glib_org_woodchuck_object_info);
+#endif
 }
 
 static void
@@ -197,10 +171,7 @@ default_connection_changed (NCNetworkMonitor *nm,
 static void
 murmeltier_init (Murmeltier *mt)
 {
-  MurmeltierClass *klass = MURMELTIER_GET_CLASS (mt);
-
-  const char *filename = "connectivity.db";
-
+  // MurmeltierClass *klass = MURMELTIER_GET_CLASS (mt);
 
   /* Initialize the network monitor.  */
   mt->nm = nc_network_monitor_new ();
@@ -213,115 +184,1341 @@ murmeltier_init (Murmeltier *mt)
 		    G_CALLBACK (default_connection_changed), mt);
 
   g_timeout_add_seconds (5 * 60, connections_dump, mt);
+}
+
+static enum woodchuck_error
+object_register (const char *parent, const char *parent_table,
+		 const char *object_table, GHashTable *properties,
+		 char *acceptable_properties[], char *required_properties[],
+		 gboolean only_if_cookie_unique,
+		 char **uuid, GError **error)
+{
+  enum woodchuck_error ret = 0;
+  gboolean abort_transaction = FALSE;
 
-  /* Register with dbus.  */
-  dbus_g_connection_register_g_object (klass->session_bus,
-				       "/org/woodchuck",
-				       G_OBJECT (mt));
+  GString *keys = g_string_new ("");
+  GString *values = g_string_new ("");
 
-  DBusGProxy *dbus_proxy
-    = dbus_g_proxy_new_for_name (klass->session_bus,
-				 DBUS_SERVICE_DBUS,
-				 DBUS_PATH_DBUS,
-				 DBUS_INTERFACE_DBUS);
+  int required_properties_count = 0;
+  for (; required_properties[required_properties_count];
+       required_properties_count ++)
+    ;
 
-  char *bus_name = "org.woodchuck";
-  guint ret;
-  GError *error = NULL;
-  if (! org_freedesktop_DBus_request_name (dbus_proxy, bus_name,
-					   DBUS_NAME_FLAG_DO_NOT_QUEUE, &ret,
-					   &error))
+  bool have_required_property[required_properties_count];
+  memset (have_required_property, 0, sizeof (have_required_property));
+
+  char *unknown_property = NULL;
+  char *bad_type = NULL;
+
+  GPtrArray *versions = NULL;
+
+  const char *cookie = NULL;
+
+  debug (0, "Parent: '%s' (%p)", parent, parent);
+  debug (0, "Properties:");
+  void iter (gpointer keyp, gpointer valuep, gpointer user_data)
+  {
+    char *key = keyp;
+    GValue *value = valuep;
+
+    int i;
+    for (i = 0; acceptable_properties[i]; i ++)
+      if (strcmp (key, acceptable_properties[i]) == 0)
+	break;
+
+    if (! acceptable_properties[i])
+      {
+	unknown_property = key;
+	return;
+      }
+
+    for (i = 0; required_properties[i]; i ++)
+      if (strcmp (key, required_properties[i]) == 0)
+	{
+	  have_required_property[i] = true;
+	  break;
+	}
+
+    if (! unknown_property && ! bad_type)
+      {
+	if (strcmp (key, "Versions") == 0)
+	  {
+	    static GType astub;
+	    if (! astub)
+	      astub = dbus_g_type_get_collection
+		("GPtrArray",
+		 dbus_g_type_get_struct ("GValueArray",
+					 G_TYPE_STRING, G_TYPE_UINT64,
+					 G_TYPE_UINT, G_TYPE_BOOLEAN,
+					 G_TYPE_INVALID));
+
+	    if (! G_VALUE_HOLDS (value, astub))
+	      {
+		debug (0, "Versions does not have type astub.");
+		bad_type = key;
+	      }
+	    else if (versions)
+	      {
+		bad_type = key;
+		debug (0, "Versions key passed multiple times.");
+	      }
+	    else
+	      versions = g_value_get_boxed (value);
+	  }
+	else
+	  {
+	    g_string_append_printf (keys, ", %s", key);
+
+	    if (G_VALUE_HOLDS_STRING (value))
+	      {
+		char *escaped
+		  = sqlite3_mprintf ("%Q", g_value_get_string (value));
+		g_string_append_printf (values, ", %s", escaped);
+		sqlite3_free (escaped);
+	      }
+	    else if (G_VALUE_HOLDS_UINT (value))
+	      g_string_append_printf (values, ", %d", g_value_get_uint (value));
+	    else
+	      bad_type = key;
+	  }
+      }
+
+    if (only_if_cookie_unique && ! cookie && strcmp (key, "Cookie") == 0
+	&& G_VALUE_HOLDS_STRING (value))
+      cookie = g_value_get_string (value);
+  }
+  g_hash_table_foreach (properties, iter, NULL);
+
+  if (unknown_property)
     {
-      debug (0, DEBUG_BOLD ("Unable to register service: %s"), error->message);
-      g_error_free (error);
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Unknown property: %s", unknown_property);
+      ret = WOODCHUCK_ERROR_INVALID_ARGS;
+      goto out;
     }
-  switch (ret)
+  if (bad_type)
     {
-    case DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER:
-      debug (0, "Acquired %s", bus_name);
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Argument has unsupported type: %s", bad_type);
+      ret = WOODCHUCK_ERROR_INVALID_ARGS;
+      goto out;
+    }
+  GString *s = NULL;
+  int i;
+  for (i = 0; required_properties[i]; i ++)
+    if (! have_required_property[i])
+      {
+	if (! s)
+	  s = g_string_new ("");
+	else
+	  g_string_append_printf (s, ", ");
+	g_string_append_printf (s, "%s", required_properties[i]);
+      }
+  if (s)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Missing required properties: %s", s->str);
+      g_string_free (s, TRUE);
+
+      ret = WOODCHUCK_ERROR_INVALID_ARGS;
+      goto out;
+    }
+
+  if (only_if_cookie_unique)
+    {
+      if (! cookie)
+	{
+	  g_set_error (error, G_MURMELTIER_ERROR, 0,
+		       "Cookie NULL not unique.");
+	  ret = WOODCHUCK_ERROR_OBJECT_EXISTS;
+	  goto out;
+	}
+
+      GString *uuid_other = NULL;
+      int unique_callback (void *cookie, int argc, char **argv, char **names)
+      {
+	if (! uuid_other)
+	  {
+	    uuid_other = g_string_new ("");
+	    g_string_append_printf (uuid_other, "%s", argv[0]);
+	  }
+	else
+	  g_string_append_printf (uuid_other, ", %s", argv[0]);
+	return 0;
+      }
+
+      char *errmsg = NULL;
+      int err = sqlite3_exec_printf
+	(db,
+	 "select uuid from %s where cookie = '%s';",
+	 unique_callback, NULL, &errmsg, object_table, cookie);
+      if (errmsg)
+	{
+	  g_set_error (error, G_MURMELTIER_ERROR, 0,
+		       "Internal error at %s:%d: %s",
+		       __FILE__, __LINE__, errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+
+	  ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+	  goto out;
+	}
+
+      if (uuid_other)
+	{
+	  g_set_error (error, G_MURMELTIER_ERROR, 0,
+		       "Cookie '%s' not unique.  Other %s with cookie: %s",
+		       cookie, object_table, uuid_other->str);
+	  g_string_free (uuid_other, TRUE);
+	  ret = WOODCHUCK_ERROR_OBJECT_EXISTS;
+	  goto out;
+	}
+    }
+
+  char *errmsg = NULL;
+  int err = sqlite3_exec (db, "begin transaction", NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+      goto out;
+    }
+  abort_transaction = TRUE;
+
+  *uuid = NULL;
+  int uuid_callback (void *cookie, int argc, char **argv, char **names)
+  {
+    assert (! *uuid);
+    *uuid = g_strdup (argv[0]);
+    return 0;
+  }
+
+ retry:
+  err = sqlite3_exec_printf
+    (db,
+     "insert or abort into %s"
+     " (uuid, parent_uuid%s) values (lower(hex(randomblob(16))), %Q%s);"
+     "select uuid from %s where ROWID = last_insert_rowid ();",
+     uuid_callback, NULL, &errmsg,
+     object_table, keys->str, parent ?: "", values->str, object_table);
+  if (errmsg)
+    {
+      if (err == SQLITE_ABORT)
+	/* UUID already exists.  */
+	{
+	  debug (0, "UUID conflict.  Trying again: %s", errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+	  goto retry;
+	}
+
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+      goto out;
+    }
+
+  debug (0, "UUID is: %s", *uuid);
+
+  if (versions)
+    {
+      GString *sql = g_string_new ("");
+
+      int i;
+      for (i = 0; i < versions->len; i ++)
+	{
+	  GValueArray *strct = g_ptr_array_index (versions, i);
+
+	  const char *url
+	    = g_value_get_string (g_value_array_get_nth (strct, 0));
+	  char *url_escaped = sqlite3_mprintf ("%Q", url);
+
+	  uint64_t expected_size
+	    = g_value_get_uint64 (g_value_array_get_nth (strct, 1));
+	  uint32_t utility
+	    = g_value_get_uint (g_value_array_get_nth (strct, 2));
+	  gboolean use_simple_downloader
+	    = g_value_get_boolean (g_value_array_get_nth (strct, 3));
+
+	  g_string_append_printf
+	    (sql,
+	     "insert into object_versions"
+	     " (uuid, version, parent_uuid,"
+	     "  url, expected_size, utility, use_simple_downloader)"
+	     " values"
+	     " ('%s', %d, '%s', %s, %"PRId64", %d, %d);\n",
+	     *uuid, i, parent, url_escaped, expected_size,
+	     utility, use_simple_downloader);
+
+	  sqlite3_free (url_escaped);
+	}
+
+      sqlite3_exec_printf (db, "%s", NULL, NULL, &errmsg, sql->str);
+      g_string_free (sql, TRUE);
+      if (errmsg)
+	{
+	  g_set_error (error, G_MURMELTIER_ERROR, 0,
+		       "Internal error at %s:%d: %s",
+		       __FILE__, __LINE__, errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+
+	  ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+	  goto out;
+	}
+    }
+
+  sqlite3_exec (db, "end transaction", NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      if (! ret)
+	g_set_error (error, G_MURMELTIER_ERROR, 0,
+		     "Internal error at %s:%d: %s",
+		     __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      if (! ret)
+	ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+    }
+
+  abort_transaction = false;
+
+  assert (*uuid);
+ out:
+  if (abort_transaction)
+    {
+      err = sqlite3_exec (db, "abort transaction", NULL, NULL, &errmsg);
+      if (errmsg)
+	{
+	  if (! ret)
+	    g_set_error (error, G_MURMELTIER_ERROR, 0,
+			 "Internal error at %s:%d: %s",
+			 __FILE__, __LINE__, errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+
+	  if (! ret)
+	    ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+	}
+    }
+
+  g_string_free (keys, TRUE);
+  g_string_free (values, TRUE);
+
+  return ret;
+}
+
+static int
+list_callback (void *cookie, int argc, char **argv, char **names)
+{
+  GPtrArray *list = cookie;
+
+  GPtrArray *strct = g_ptr_array_new ();
+
+  debug (5, "Object %d: %d args", list->len, argc);
+
+  int i;
+  for (i = 0; i < argc; i ++)
+    {
+      if (strcmp (names[i], "parent_uuid") == 0 && argv[i][0] == 0)
+	g_ptr_array_add (strct, NULL);
+      else
+	g_ptr_array_add (strct, g_strdup (argv[i]));
+
+      debug (5, "Object %d: index %d: %s", list->len, i, argv[i]);
+    }
+
+  g_ptr_array_add (list, strct);
+
+  return 0;
+}
+
+static enum woodchuck_error
+lookup_by (const char *table,
+	   const char *column, const char *value, const char *parent_uuid,
+	   gboolean recursive,
+	   const char *properties,
+	   GPtrArray **objects, GError **error)
+{
+  *objects = g_ptr_array_new ();
+
+  char *errmsg = NULL;
+  if (! recursive)
+    sqlite3_exec_printf
+      (db,
+       "select %s from %s where %s = %Q and parent_uuid = %Q;",
+       list_callback, *objects, &errmsg,
+       properties, table, column, value, parent_uuid ?: "");
+  else if (! parent_uuid && recursive)
+    sqlite3_exec_printf
+      (db,
+       "select %s from %s where %s = %Q;",
+       list_callback, *objects, &errmsg,
+       properties, table, column, value);
+  else
+#warning Implement lookup_by not recursive.
+    return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      return WOODCHUCK_ERROR_INTERNAL_ERROR;
+    }
+
+  return 0;
+}
+
+static int
+abort_if_too_many_callback (void *cookie, int argc, char **argv, char **names)
+{
+  int *count = cookie;
+  if (count == 0)
+    return 1;
+
+  -- *count;
+  return 0;
+}
+
+static enum woodchuck_error
+object_delete (const char *uuid,
+	       const char *table, const char *secondary_tables[],
+	       const char *child_tables[],
+	       bool only_if_no_descendents,
+	       GError **error)
+{
+  if (only_if_no_descendents)
+    {
+      /* First verify that the object exists.  Then check that it has
+	 no descendents.  */
+
+      /* Create the sql for determining whether the object exists and
+	 whether it has any children.  */
+      GString *sql = g_string_new ("");
+
+      char *escaped = sqlite3_mprintf ("%Q", uuid);
+      g_string_append_printf (sql, "begin transaction;"
+			      "select uuid from %s where uuid = %s;",
+			      table, escaped);
+
+      int i;
+      for (i = 0; child_tables && child_tables[i]; i ++)
+	g_string_append_printf (sql, 
+				"select uuid from %s where parent_uuid = %s;",
+				child_tables[i], escaped);
+
+      sqlite3_free (escaped);
+
+      g_string_append_printf (sql, "end transaction;");
+
+      /* If the object exists and has no children, exactly one row
+	 will be returned.  If no rows are returned, then the object
+	 does not exist.  If more than 1 row is returned, the object
+	 has descendents.  */
+      int count = 1;
+      char *errmsg = NULL;
+      int err = sqlite3_exec (db, sql->str,
+			      abort_if_too_many_callback, &count, &errmsg);
+      g_string_free (sql, TRUE);
+
+      int ret = 0;
+      if (err == SQLITE_ABORT)
+	{
+	  if (errmsg)
+	    {
+	      sqlite3_free (errmsg);
+	      errmsg = NULL;
+	    }
+
+	  g_set_error (error, G_MURMELTIER_ERROR, 0,
+		       "%s has descendents, not removing.", uuid);
+	  ret = WOODCHUCK_ERROR_GENERIC;
+	}
+      else if (count == 1)
+	ret = WOODCHUCK_ERROR_NO_SUCH_OBJECT;
+      else if (errmsg)
+	{
+	  g_set_error (error, G_MURMELTIER_ERROR, 0,
+		       "Internal error at %s:%d: %s",
+		       __FILE__, __LINE__, errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+
+	  ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+	}
+
+      if (ret)
+	/* Something went wrong.  Abort.  */
+	{
+	  sqlite3_exec (db, "abort transaction;",
+			NULL, NULL, NULL);
+	  return ret;
+	}
+
+
+      /* Do the deletion.  */
+      sql = g_string_new ("");
+
+      escaped = sqlite3_mprintf ("%Q", uuid);
+      g_string_append_printf (sql, "begin transaction;"
+			      "delete from %s where uuid = %s;",
+			      table, escaped);
+
+      for (i = 0; secondary_tables && secondary_tables[i]; i ++)
+	g_string_append_printf (sql,
+				"delete from %s where uuid = %s;",
+				secondary_tables[i], escaped);
+
+      for (i = 0; child_tables && child_tables[i]; i ++)
+	g_string_append_printf (sql,
+				"delete from %s where parent_uuid = %s;",
+				child_tables[i], escaped);
+
+      sqlite3_free (escaped);
+
+      g_string_append_printf (sql, "end transaction;");
+
+
+      int total_changes = sqlite3_total_changes (db);
+      err = sqlite3_exec (db, sql->str, NULL, NULL, &errmsg);
+      g_string_free (sql, TRUE);
+      if (errmsg)
+	{
+	  g_set_error (error, G_MURMELTIER_ERROR, 0,
+		       "Internal error at %s:%d: %s",
+		       __FILE__, __LINE__, errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+	  return WOODCHUCK_ERROR_INTERNAL_ERROR;
+	}
+
+      int deleted_rows = sqlite3_total_changes (db) - total_changes;
+      if (deleted_rows == 0)
+	{
+	  debug (0, "Expected to delete a row, but deleted %d. "
+		 "DB inconsistent?",
+		 deleted_rows);
+	}
+
+      return 0;
+    }
+  else
+    {
+      if (strcmp (table, "managers") == 0)
+#warning Implement object_delete recursive for managers
+	return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+
+      /* Create the sql.  */
+      GString *sql = g_string_new ("begin transaction;");
+
+      char *escaped = sqlite3_mprintf ("%Q", uuid);
+
+      g_string_append_printf (sql, 
+			      "delete from %s where uuid = %s;",
+			      table, escaped);
+
+      int i;
+      for (i = 0; secondary_tables && secondary_tables[i]; i ++)
+	g_string_append_printf (sql, 
+				"delete from %s where uuid = %s;",
+				secondary_tables[i], escaped);
+      for (i = 0; child_tables && child_tables[i]; i ++)
+	g_string_append_printf (sql, 
+				"delete from %s where parent_uuid = %s;",
+				child_tables[i], escaped);
+
+      sqlite3_free (escaped);
+
+      g_string_append_printf (sql, "end transaction;");
+
+      int total_changes = sqlite3_total_changes (db);
+      char *errmsg = NULL;
+      sqlite3_exec_printf (db, sql->str, NULL, NULL, &errmsg);
+      g_string_free (sql, TRUE);
+
+      if (errmsg)
+	{
+	  g_set_error (error, G_MURMELTIER_ERROR, 0,
+		       "Internal error at %s:%d: %s",
+		       __FILE__, __LINE__, errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+	  return WOODCHUCK_ERROR_INTERNAL_ERROR;
+	}
+
+      assert (total_changes != -1);
+
+      int deleted_rows = sqlite3_total_changes (db) - total_changes;
+      debug (0, "Removing %s removed %d objects.",
+	     uuid, deleted_rows);
+      if (deleted_rows == 0)
+	{
+	  g_set_error (error, G_MURMELTIER_ERROR, 0,
+		       "Object '%s' does not exist", uuid);
+	  return WOODCHUCK_ERROR_GENERIC;
+	}
+
+      return 0;
+    }
+}
+
+enum woodchuck_error
+woodchuck_manager_register (GHashTable *properties,
+			    gboolean only_if_cookie_unique,
+			    char **uuid, GError **error)
+{
+  return woodchuck_manager_manager_register
+    (NULL, properties, only_if_cookie_unique, uuid, error);
+}
+
+
+enum woodchuck_error
+woodchuck_list_managers (gboolean recursive,
+			 GPtrArray **managers, GError **error)
+{
+  return woodchuck_manager_list_managers (NULL, recursive, managers, error);
+}
+
+enum woodchuck_error
+woodchuck_lookup_manager_by_cookie (const char *cookie, gboolean recursive,
+				    GPtrArray **managers, GError **error)
+{
+  return lookup_by ("managers", "Cookie", cookie, NULL, recursive,
+		    "uuid, HumanReadableName, parent_uuid",
+		    managers, error);
+}
+
+enum woodchuck_error
+woodchuck_download_desirability_version
+  (uint32_t request_type,
+   struct woodchuck_download_desirability_version *versions, int version_count,
+   uint32_t *desirability, uint32_t *version, GError **error)
+{
+#warning Implement woodchuck_download_desirability_version
+  return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+}
+
+enum woodchuck_error
+woodchuck_manager_manager_register (const char *manager, GHashTable *properties,
+				    gboolean only_if_cookie_unique,
+				    char **uuid, GError **error)
+{
+  char *acceptable_properties[] = { "HumanReadableName", "DBusServiceName",
+				    "DBusObject", "Cookie", "Priority",
+				    NULL };
+  char *required_properties[] = { "HumanReadableName", NULL };
+  return object_register (manager, "managers", "managers", properties,
+			  acceptable_properties, required_properties,
+			  only_if_cookie_unique, uuid, error);
+}
+
+enum woodchuck_error
+woodchuck_manager_delete (const char *manager, bool only_if_no_descendents,
+			  GError **error)
+{
+  const char *child_tables[] = { "managers", "streams", "stream_updates",
+				 NULL };
+  return object_delete (manager, "managers", NULL, child_tables,
+			only_if_no_descendents, error);
+}
+
+enum woodchuck_error
+woodchuck_manager_list_managers
+ (const char *manager, gboolean recursive, GPtrArray **managers, GError **error)
+{
+  *managers = g_ptr_array_new ();
+
+  debug (0, "manager: %s, recursive: %d", manager, recursive);
+
+  char *errmsg = NULL;
+  int err;
+  if (recursive && ! manager)
+    /* List everything.  */
+    err = sqlite3_exec
+      (db,
+       "select uuid, cookie, human_readable_name, parent_uuid from managers;",
+       list_callback, *managers, &errmsg);
+  else if (recursive)
+    /* List only those that are descended from MANAGER.  */
+    {
+      int i = 0;
+      for (;;)
+	{
+	  err = sqlite3_exec_printf
+	    (db,
+	     "select uuid, cookie, human_readable_name, parent_uuid"
+	     " from managers where parent_uuid = %Q;",
+	     list_callback, *managers, &errmsg, manager);
+	  if (errmsg)
+	    break;
+
+	  debug (0, "Processed %d of %d managers", i, (*managers)->len);
+
+	  if (i >= (*managers)->len)
+	    break;
+	  GPtrArray *strct = g_ptr_array_index ((*managers), i);
+	  debug (0, "%d fields", strct->len);
+	  manager = g_ptr_array_index (strct, 0);
+	  i ++;
+	}
+    }
+  else
+    /* List only those that are an immediate descendent of MANAGER.  */
+    err = sqlite3_exec_printf
+      (db,
+       "select uuid, cookie, human_readable_name, parent_uuid"
+       " from managers where parent_uuid = %Q;",
+       list_callback, *managers, &errmsg,
+       manager ?: "");
+
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      return WOODCHUCK_ERROR_INTERNAL_ERROR;
+    }
+
+  return 0;
+}
+
+enum woodchuck_error
+woodchuck_manager_lookup_manager_by_cookie
+  (const char *manager, const char *cookie, gboolean recursive,
+   GPtrArray **managers, GError **error)
+{
+  return lookup_by ("managers", "Cookie", cookie, manager, recursive,
+		    "uuid, HumanReadableName, parent_uuid",
+		    managers, error);
+}
+
+enum woodchuck_error
+woodchuck_manager_stream_register (const char *manager, GHashTable *properties,
+				   gboolean only_if_cookie_unique,
+				   char **uuid, GError **error)
+{
+  char *acceptable_properties[]
+    = { "HumanReadableName", "Cookie", "Priority", "Freshness",
+	"ObjectsMostlyInline", NULL };
+  char *required_properties[] = { "HumanReadableName", NULL };
+  return object_register (manager, "managers", "streams", properties,
+			  acceptable_properties, required_properties,
+			  only_if_cookie_unique, uuid, error);
+}
+
+enum woodchuck_error
+woodchuck_manager_list_streams
+  (const char *manager, GPtrArray **list, GError **error)
+{
+  *list = g_ptr_array_new ();
+
+  char *errmsg = NULL;
+  int err;
+  err = sqlite3_exec_printf
+    (db,
+     "select uuid, cookie, human_readable_name from streams"
+     " where parent_uuid=%Q;",
+     list_callback, *list, &errmsg, manager);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      return WOODCHUCK_ERROR_INTERNAL_ERROR;
+    }
+
+  return 0;
+}
+
+enum woodchuck_error
+woodchuck_manager_lookup_stream_by_cookie
+  (const char *manager, const char *cookie, GPtrArray **list, GError **error)
+{
+  return lookup_by ("streams", "Cookie", cookie, manager, FALSE,
+		    "uuid, HumanReadableName",
+		    list, error);
+}
+
+
+enum woodchuck_error
+woodchuck_manager_feedback_subscribe
+  (const char *manager, bool descendents_too, char **handle, GError **error)
+{
+#warning Implement woodchuck_manager_feedback_subscribe
+  return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+}
+
+enum woodchuck_error
+woodchuck_manager_feedback_unsubscribe
+  (const char *manager, const char *handle, GError **error)
+{
+#warning Implement woodchuck_manager_feedback_unsubscribe
+  return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+}
+
+enum woodchuck_error
+woodchuck_manager_feedback_ack
+  (const char *manager, const char *object_uuid, uint32_t instance,
+   GError **error)
+{
+#warning Implement woodchuck_manager_feedback_ack
+  return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+}
+
+enum woodchuck_error
+woodchuck_stream_delete (const char *stream, bool only_if_empty,
+			 GError **error)
+{
+  const char *child_tables[] = { "objects", "object_versions",
+				 "object_instance_status",
+				 "object_instance_files",
+				 "object_use",
+				 NULL };
+  const char *secondary_tables[] = { "stream_updates", NULL };
+  return object_delete (stream, "streams", secondary_tables, child_tables,
+			only_if_empty, error);
+}
+
+enum woodchuck_error
+woodchuck_stream_object_register (const char *stream, GHashTable *properties,
+				  gboolean only_if_cookie_unique,
+				  char **uuid, GError **error)
+{
+  char *acceptable_properties[]
+    = { "HumanReadableName", "Cookie", "Versions", "Filename", "Wakeup",
+	"TriggerTarget", "TriggerEarliest", "TriggerLatest",
+	"Period", "Priority", NULL };
+  char *required_properties[] = { "HumanReadableName", NULL };
+  return object_register (stream, "streams", "objects", properties,
+			  acceptable_properties, required_properties,
+			  only_if_cookie_unique, uuid, error);
+}
+
+enum woodchuck_error
+woodchuck_stream_list_objects (const char *stream,
+			       GPtrArray **list, GError **error)
+{
+  *list = g_ptr_array_new ();
+
+  char *errmsg = NULL;
+  int err;
+  err = sqlite3_exec_printf
+    (db,
+     "select uuid, cookie, human_readable_name from objects"
+     " where parent_uuid=%Q;",
+     list_callback, *list, &errmsg, stream);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      return WOODCHUCK_ERROR_INTERNAL_ERROR;
+    }
+
+  return 0;
+}
+
+enum woodchuck_error
+woodchuck_stream_update_status
+  (const char *stream_raw, uint32_t status, uint32_t indicator,
+   uint64_t transferred_up, uint64_t transferred_down,
+   uint64_t download_time, uint32_t download_duration, 
+   uint32_t new_objects, uint32_t updated_objects,
+   uint32_t objects_inline, GError **error)
+{
+  char *stream = sqlite3_mprintf ("%Q", stream_raw);
+  char *manager = NULL;
+
+  int instance = -1;
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    assert (instance == -1);
+    assert (manager == NULL);
+    instance = argv[0] ? atoi (argv[0]) : 0;
+    manager = g_strdup (argv[1]);
+    return 0;
+  }
+
+  enum woodchuck_error ret = 0;
+
+  char *errmsg = NULL;
+  int err = sqlite3_exec_printf
+    (db, "select instance, parent_uuid from streams where uuid = %s;",
+     callback, NULL, &errmsg, stream);
+  if (errmsg)
+    {
+      debug (0, "%d: %s", err, errmsg);
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+      goto out;
+    }
+
+  if (instance == -1)
+    {
+      ret = WOODCHUCK_ERROR_NO_SUCH_OBJECT;
+      goto out;
+    }
+
+  err = sqlite3_exec_printf
+    (db,
+     "begin transaction;\n"
+     "insert into stream_updates"
+     " (uuid, instance, parent_uuid,"
+     "  status, indicator, transferred_up, transferred_down,"
+     "  download_time, download_duration,"
+     "  new_objects, updated_objects, objects_inline)"
+     " values"
+     " (%s, %d, '%s',"
+     "  %"PRId32", %"PRId32", %"PRId64", %"PRId64", %"PRId64", %"PRId32","
+     "  %"PRId32", %"PRId32", %"PRId32");\n"
+     "update streams set instance = %d where uuid = %s;\n"
+     "end transaction;",
+     NULL, NULL, &errmsg,
+     stream, instance, manager, status, indicator,
+     transferred_up, transferred_down, download_time, download_duration,
+     new_objects, updated_objects, objects_inline,
+     instance + 1, stream);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      sqlite3_exec (db, "abort transaction;\n", NULL, NULL, NULL);
+
+      ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+      goto out;
+    }
+
+ out:
+  sqlite3_free (stream);
+  g_free (manager);
+
+  return ret;
+}
+
+enum woodchuck_error
+woodchuck_object_delete (const char *object, GError **error)
+{
+  const char *secondary_tables[] = { "object_versions",
+				     "object_instance_status",
+				     "object_instance_files",
+				     "object_use",
+				     NULL };
+  return object_delete (object, "objects", secondary_tables, NULL, TRUE, error);
+}
+
+enum woodchuck_error
+woodchuck_object_download (const char *object, uint32_t request_type,
+			   GError **error)
+{
+#warning Implement woodchuck_object_download
+  return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+}
+
+enum woodchuck_error
+woodchuck_stream_lookup_object_by_cookie
+  (const char *stream, const char *cookie, GPtrArray **list, GError **error)
+{
+  return lookup_by ("objects", "Cookie", cookie, stream, FALSE,
+		    "uuid, HumanReadableName",
+		    list, error);
+}
+
+enum woodchuck_error
+woodchuck_object_download_status
+  (const char *object_raw, uint32_t status, uint32_t indicator,
+   uint64_t transferred_up, uint64_t transferred_down,
+   uint64_t download_time, uint32_t download_duration, uint64_t object_size,
+   struct woodchuck_object_download_status_files *files, int files_count,
+   GError **error)
+{
+  char *object = sqlite3_mprintf ("%Q", object_raw);
+  char *stream = NULL;
+
+  int instance = -1;
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    assert (instance == -1);
+    assert (stream == NULL);
+    instance = argv[0] ? atoi (argv[0]) : 0;
+    stream = g_strdup (argv[1]);
+    return 0;
+  }
+
+  enum woodchuck_error ret = 0;
+
+  char *errmsg = NULL;
+  int err = sqlite3_exec_printf
+    (db, "select instance, parent_uuid from objects where uuid = %s;",
+     callback, NULL, &errmsg, object);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+      goto out;
+    }
+
+  if (instance == -1)
+    {
+      ret = WOODCHUCK_ERROR_NO_SUCH_OBJECT;
+      goto out;
+    }
+
+  GString *sql = NULL;
+
+  if (files_count > 0)
+    {
+      sql = g_string_new ("");
+      int i;
+      for (i = 0; i < files_count; i ++)
+	{
+	  char *filename_escaped = sqlite3_mprintf ("%Q", files[i].filename);
+	  g_string_append_printf
+	    (sql,
+	     "insert into object_instance_files"
+	     " (uuid, instance, parent_uuid,"
+	     "  filename, dedicated, deletion_policy)"
+	     " values (%s, %d, '%s', %s, %d, %d);\n",
+	     object, instance, stream,
+	     filename_escaped, files[i].dedicated, files[i].deletion_policy);
+	  sqlite3_free (filename_escaped);
+	}
+    }
+
+  err = sqlite3_exec_printf
+    (db,
+     "begin transaction;\n"
+     "insert into object_instance_status"
+     " (uuid, instance, parent_uuid,"
+     "  status, transferred_up, transferred_down,"
+     "  download_time, download_duration, object_size, indicator)"
+     " values"
+     "  (%s, %d, '%s',"
+     "   %"PRId32", %"PRId64", %"PRId64", %"PRId64", %"PRId32","
+     "   %"PRId64", %"PRId32");\n"
+     "%s"
+     "update objects set instance = %d where uuid = %s;"
+     "end transaction;",
+     NULL, NULL, &errmsg,
+     object, instance, stream, status, transferred_up, transferred_down,
+     download_time, download_duration, object_size, indicator,
+     sql ? sql->str : "", instance + 1, object);
+  if (sql)
+    g_string_free (sql, TRUE);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      sqlite3_exec (db, "abort transaction;\n", NULL, NULL, NULL);
+
+      ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+      goto out;
+    }
+
+ out:
+  sqlite3_free (object);
+  g_free (stream);
+
+  return ret;
+}
+
+enum woodchuck_error
+woodchuck_object_use (const char *object_raw, uint64_t start, uint64_t end,
+		      uint64_t use_mask, GError **error)
+{
+  char *object = sqlite3_mprintf ("%Q", object_raw);
+  char *stream = NULL;
+
+  int instance = -1;
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    assert (instance == -1);
+    assert (stream == NULL);
+    instance = argv[0] ? atoi (argv[0]) : 0;
+    stream = g_strdup (argv[1]);
+    return 0;
+  }
+
+  enum woodchuck_error ret = 0;
+
+  char *errmsg = NULL;
+  int err = sqlite3_exec_printf
+    (db, "select instance, parent_uuid from objects where uuid = %s;",
+     callback, NULL, &errmsg, object);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+      goto out;
+    }
+
+  if (instance == -1)
+    {
+      ret = WOODCHUCK_ERROR_NO_SUCH_OBJECT;
+      goto out;
+    }
+
+  err = sqlite3_exec_printf
+    (db,
+     "insert into object_use"
+     " (uuid, instance, parent_uuid, reported, start, end, use_mask)"
+     " values"
+     " (%s, %d, '%s', 1, %"PRId64", %"PRId64", %"PRId64");",
+     NULL, NULL, &errmsg,
+     object, instance, stream, start, end, use_mask);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+      goto out;
+    }
+
+ out:
+  sqlite3_free (object);
+  g_free (stream);
+
+  return ret;
+}
+
+enum woodchuck_error
+woodchuck_object_files_deleted (const char *object_raw,
+				uint32_t update, uint64_t arg,
+				GError **error)
+{
+  char *object = sqlite3_mprintf ("%Q", object_raw);
+  char *stream = NULL;
+
+  int instance = -1;
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    assert (instance == -1);
+    assert (stream == NULL);
+    instance = argv[0] ? atoi (argv[0]) : 0;
+    stream = g_strdup (argv[1]);
+    return 0;
+  }
+
+  enum woodchuck_error ret = 0;
+
+  char *errmsg = NULL;
+  int err = sqlite3_exec_printf
+    (db, "select instance, parent_uuid from objects where uuid = %s;",
+     callback, NULL, &errmsg, object);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+      goto out;
+    }
+
+  if (instance == -1)
+    {
+      ret = WOODCHUCK_ERROR_NO_SUCH_OBJECT;
+      goto out;
+    }
+
+  char *sql = NULL;
+  switch (update)
+    {
+    case WOODCHUCK_DELETE_DELETED:
+      sql = sqlite3_mprintf ("deleted = 1");
       break;
-    case DBUS_REQUEST_NAME_REPLY_IN_QUEUE:
-      debug (0, "Waiting for bus name %s to become free", bus_name);
-      abort ();
-    case DBUS_REQUEST_NAME_REPLY_EXISTS:
-      debug (0, "Bus name %s already owned.", bus_name);
-      abort ();
-    case DBUS_REQUEST_NAME_REPLY_ALREADY_OWNER:
-      debug (0, "We already own bus name?");
-      abort ();
+      
+    case WOODCHUCK_DELETE_COMPRESSED:
+      sql = sqlite3_mprintf ("compressed_size = %"PRId64, arg);
+      break;
+
+    case WOODCHUCK_DELETE_REFUSED:
+      sql = sqlite3_mprintf ("preserve_until = %"PRId64, time (NULL) + arg);
+      break;
+
     default:
-      debug (0, "Unknown return code: %d", ret);
-      abort ();
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Bad value for Update argument: %d", update);
+      ret = WOODCHUCK_ERROR_INVALID_ARGS;
+      goto out;
     }
 
-  g_object_unref (dbus_proxy);
-}
+  err = sqlite3_exec_printf
+    (db,
+     "update object_instance_status set %s"
+     " where uuid = %s"
+     " and instance"
+     "  = (select max (instance) from object_instance_status where uuid = %s);",
+     NULL, NULL, &errmsg, sql, object, object);
+  sqlite3_free (sql);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
 
-/* The server stub file can only be included after declaring the
-   prototypes for the callback functions.  */
+      ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
+      goto out;
+    }
 
-static gboolean
-org_woodchuck_principal_register
-  (Murmeltier *mt,
-   GValueArray *human_readable_name, char *bus_name, GValue *execve,
-   char **uuid, GError **error)
-{
-  return false;
-}
+ out:
+  sqlite3_free (object);
+  g_free (stream);
 
-static gboolean
-org_woodchuck_principal_remove
-  (Murmeltier *mt, char *uuid, GError **error)
-{
-  debug (0, "principal_remove: %s", uuid);
-
-  return true;
-}
-
-static gboolean
-org_woodchuck_job_submit
-  (Murmeltier *mt,
-   char *principal_uuid, char *url, char *location, char *cookie,
-   gboolean wakeup, uint64_t trigger_target, uint64_t trigger_earliest,
-   uint64_t trigger_latest, uint32_t period, uint32_t request_type,
-   uint32_t priority, uint64_t expected_size, char **job_uuid, GError **error)
-{
-  return false;
-}
-
-static gboolean
-org_woodchuck_job_evaluate
-  (Murmeltier *mt,
-   char *principal_uuid, uint32_t request_type, uint32_t priority,
-   uint64_t expected_size, uint32_t *desirability, GError **error)
-{
-  return false;
-}
-
-static gboolean
-org_woodchuck_feedback_subscribe
-  (Murmeltier *mt, char *principal_uuid, char **handle, GError **error)
-{
-  return false;
-}
-static gboolean
-org_woodchuck_feedback_unsubscribe
-  (Murmeltier *mt, char *handle, GError **error)
-{
-  return false;
-}
-
-static gboolean
-org_woodchuck_feedback_ack
-  (Murmeltier *mt, char *job_uuid, uint32_t instance, GError **error)
-{
-  return false;
+  return ret;
 }
 
 int
 main (int argc, char *argv[])
 {
   g_type_init();
+
+  int err = dotdir_init ("murmeltier");
+  if (err)
+    {
+      debug (0, "dotdir_init ('murmeltier'): %m");
+      return 1;
+    }
+
+  /* Open the DB.  */
+  char *filename = dotdir_filename (NULL, "config.db");
+  err = sqlite3_open (filename, &db);
+  if (err)
+    error (1, 0, "sqlite3_open (%s): %s",
+	   filename, sqlite3_errmsg (db));
+
+  char *errmsg = NULL;
+  err = sqlite3_exec
+    (db,
+     "create table if not exists managers"
+     " (uuid PRIMARY KEY, parent_uuid NOT NULL, HumanReadableName,"
+     "  DBusServiceName, DBusObject, Cookie, Priority);"
+     "create index if not exists managers_cookie_index on managers (cookie);"
+     "create index if not exists managers_parent_uuid_index on managers"
+     " (parent_uuid);"
+
+     "create table if not exists streams"
+     " (uuid PRIMARY KEY, parent_uuid NOT NULL, instance,"
+     "  HumanReadableName, Cookie, Priority, Freshness, ObjectsMostlyInline);"
+     "create index if not exists streams_cookie_index on streams (cookie);"
+     "create index if not exists streams_parent_uuid_index"
+     " on streams (parent_uuid);"
+
+     "create table if not exists stream_updates"
+     " (uuid NOT NULL, instance, parent_uuid NOT NULL,"
+     "  status, indicator, transferred_up, transferred_down,"
+     "  download_time, download_duration,"
+     "  new_objects, updated_objects, objects_inline,"
+     "  UNIQUE (uuid, instance));"
+     "create index if not exists stream_updates_parent_uuid_index"
+     " on stream_updates (parent_uuid);"
+
+     "create table if not exists objects"
+     " (uuid PRIMARY KEY, parent_uuid NOT NULL,"
+     "  Instance DEFAULT 0, HumanReadableName, Cookie, Filename, Wakeup,"
+     "  TriggerTarget, TriggerEarliest, TriggerLatest,"
+     "  DownloadFrequency, Priority);"
+     "create index if not exists objects_cookie_index on objects (cookie);"
+     "create index if not exists objects_parent_uuid_index"
+     " on objects (parent_uuid);"
+
+     /* The available versions of an object.  Columns are as per the
+	org.woodchuck.Object.Versions property.  */
+     "create table if not exists object_versions"
+     " (uuid NOT NULL, version NOT NULL, parent_uuid NOT NULL,"
+     "  url, expected_size, utility, use_simple_downloader,"
+     "  UNIQUE (uuid, version, url));"
+     "create index if not exists object_versions_parent_uuid_index"
+     " on object_versions (parent_uuid);"
+
+     /* An object instance's status.  Columns are as per
+	org.woodchuck.object.DownloadStatus.  */
+     "create table if not exists object_instance_status"
+     " (uuid NOT NULL, instance NOT NULL, parent_uuid NOT NULL,"
+     "  status, transferred_up, transferred_down,"
+     "  download_time, download_duration, object_size, indicator,"
+     "  deleted, preserve_until, compressed_size,"
+     "  UNIQUE (uuid, instance));"
+     "create index if not exists object_status_parent_uuid_index"
+     " on object_instance_status (parent_uuid);"
+
+     "create table if not exists object_instance_files"
+     " (uuid NOT NULL, instance NOT NULL, parent_uuid NOT NULL,"
+     "  filename, dedicated, deletion_policy,"
+     "  UNIQUE (uuid, instance, filename));"
+     "create index if not exists object_instance_files_parent_uuid_index"
+     " on object_instance_files (parent_uuid);"
+
+     "create table if not exists object_use"
+     " (uuid NOT NULL, instance NOT NULL, parent_uuid NOT NULL,"
+     "  reported, start, end, use_mask);"
+     "create index if not exists object_use_parent_uuid_index"
+     " on object_use (parent_uuid);",
+     NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      if (err != SQLITE_ABORT)
+	debug (0, "%d: %s", err, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+      return 1;
+    }
+
+  murmeltier_dbus_server_init ();
 
   Murmeltier *mt = MURMELTIER (g_object_new (MURMELTIER_TYPE, NULL));
   if (! mt)

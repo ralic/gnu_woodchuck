@@ -1,0 +1,195 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <!-- Object: /org/woodchuck/OBJECT_UUID -->
+  <interface name="org.woodchuck.object">
+    <!-- Remove this object.  -->
+    <method name="Delete">
+    </method>
+
+
+    <!-- This object is needed.  -->
+    <method name="Download">
+      <!-- The type of request.
+	   1 - user initiated
+	   2 - background
+      -->
+      <arg name="RequestType" type="u"/>
+    </method>
+
+
+    <!-- Called by the manager when it has downloaded an object
+         (typically in reaction to a org.woodchuck.upcall.Download
+         upcall, but also if the object was simply required).  On
+         success and hard errors, the object's instance will be
+         incremented by 1.  -->
+    <method name="DownloadStatus">
+      <!-- 0: Success.
+
+           Transient errors (will try again later).
+           0x100: Other.
+           0x101: Unable to contact server.
+           0x102: Transfer incomplete.
+
+           Hard errors (give up trying to download this object).
+	   0x200: Other.
+           0x201: File gone.
+      -->
+      <arg name="Status" type="u"/>
+
+      <!-- The type of indicator displayed to the user, if any.  A
+           bitmask of:
+
+             0x1: Audio sound
+	     0x2: Application visual notification
+	     0x4: Desktop visual notification, small, e.g., blinking icon
+	     0x8: Desktop visual notification, large, e.g., system tray
+	          notification
+	     0x10: External visible notification, e.g., an LED
+	     0x20: Vibrate
+
+             0x40: Object-specific notification
+             0x80: Stream-wide notification, i.e., an aggregate
+	           notification for all updates in the stream.
+             0x100: Manager-wide notification, i.e., an aggregate
+	            notification for all updates in the manager.
+
+           0 means that no notification was shown.
+       -->
+      <arg name="Indicator" type="u"/>
+
+      <!-- The approximate number of bytes uploaded.  -->
+      <arg name="TransferredUp" type="t"/>
+      <!-- The approximate number of bytes downloaded.  -->
+      <arg name="TransferredDown" type="t"/>
+
+      <!-- The time at which the download was started (in seconds
+           since the epoch).  Pass 0 if unknown. -->
+      <arg name="DownloadTime" type="t"/>
+      <!-- The time, in seconds, it took to perform the download.
+           Pass 0 if unknown.  -->
+      <arg name="DownloadDuration" type="u"/>
+
+      <!-- The size of the object (in bytes).  -->
+      <arg name="ObjectSize" type="t"/>
+
+      <!-- An array of <FILENAME, DEDICATED, DELETION_POLICY> tuples.
+           FILENAME is the absolute filename of a file that contains
+           data from this object.  DEDICATED indicates whether
+           FILENAME is dedicated to that object (true) or whether it
+           includes other state (false).  DELETION_POLICY indicates if
+           the file is precious and may only be deleted by the user
+           (0), if the file may be deleted by woodchuck without
+           consulting the application (1), or if the application is
+           willing to delete the file (via
+           org.woodchuck.upcall.Delete) (2).
+           -->
+      <arg name="Files" type="a(sbu)"/>
+    </method>
+
+    <method name="Used">
+      <!-- When the user started using the object.  -->
+      <arg name="Start" type="t"/>
+      <!-- When the user stopped using the object.  -->
+      <arg name="End" type="t"/>
+
+      <!-- Bit mask indicating which portions of the object were used.
+           Bit 0 corresponds to the first 1/64 of the object, bit 1 to
+           the second 1/64 of the object, etc.  -->
+      <arg name="UseMask" type="t"/>
+    </method>
+
+    <!-- Call when an objects files have been removed or in response
+	 to org.woodchuck.upcall.ObjectDelete.  -->
+    <method name="FilesDeleted">
+      <!-- Taken from enum woodchuck_delete_response (see
+           <woodchuck/woodchuck.h>):
+
+           0: Files deleted.  ARG is ignored.
+	   1: Deletion refused.  Preserve for at least ARG
+	      seconds before asking again.
+	   2: Files compressed.  ARG is the new size in bytes.
+      -->
+      <arg name="Update" type="u"/>
+
+      <arg name="Arg" type="t"/>
+    </method>
+
+    <!-- The stream this object belongs to.  -->
+    <property name="StreamUUID" type="s" access="read"/>
+
+    <!-- The number of times this object has been downloaded.  -->
+    <property name="Instance" type="u" access="read"/>
+
+    <!-- A human readable name.  -->
+    <property name="HumanReadableName" type="s" access="readwrite"/>
+
+    <!-- Uninterpretted by Woodchuck.  This is passed in any
+         upcalls. -->
+    <property name="Cookie" type="s" access="readwrite"/>
+
+    <!-- An array of <URL, EXPECTED_SIZE, UTILITY,
+         USE_SIMPLE_DOWNLOADER> tuples.  Each tuple designates the
+         same object, but with different quality.
+
+	 The URL is optional.  If specified, woodchuck will use its
+	 simple downloader to automatically fetch the object when
+	 appropriate.  If the URL is NULL, the application will handle
+	 the download and just wants to know when to is convenient to
+	 do so.
+
+         The EXPECTED_SIZE is the expected size, in bytes.
+
+         The UTILITY indicates the utility of this version of the
+         object (the value is relative: a version with twice the
+         utility is considered twice as useful).  If bandwidth is
+         scarce but the object is considered to have a high utility, a
+         lower quality version may be downloaded.  If a version has no
+         utility, then it shouldn't be listed here.  Note that the
+         utility value is local to the object.
+
+         If USE_SIMPLE_DOWNLOADER is true, woodchuck will try to use
+         its internal downloader to fetch the object.  If it is false,
+         it will make an upcall to the manager (see
+         org.woodchuck.upcall).  -->
+    <property name="Versions" type="a(stub)" access="readwrite"/>
+
+    <!-- Where to save the file(s).  If FILENAME ends in a /,
+         interpreted as a directory and the file is named after the
+         URL.  -->
+    <property name="Filename" type="s" access="readwrite"/>
+
+    <!-- Whether to wake up the application when this job completes
+         (i.e., by sending a dbus message) or to wait until the
+         manager subscribes to feedback (see the org.woodchuck.manager
+         interface).  -->
+    <property name="Wakeup" type="s" access="readwrite"/>
+
+    <!-- Approximately when the download should be performed.  (If
+         period is not zero, automatically updated after each
+         download.)
+
+         Seconds since the epoch.  -->
+    <property name="TriggerTarget" type="t" access="readwrite"/>
+    <!-- The earliest time the download may occur.  Seconds prior to
+         TriggerTarget.  -->
+    <property name="TriggerEarliest" type="t" access="readwrite"/>
+    <!-- The latest time the download may occur.  After this time, the
+         download will be reported as having failed.
+         
+         Seconds after TriggerTarget.  -->
+    <property name="TriggerLatest" type="t" access="readwrite"/>
+
+    <!-- The period (in seconds) with which to repeat this download.
+         Set to 0 to indicate that this is a one-shot download.  This
+         is useful for an object which is updated periodically, e.g.,
+         the weather report.  You should not use this for a
+         self-contained stream such as a blog.  Instead, on
+         downloading the feed, register each contained story as an
+         individual object and mark it as downloaded immediately.
+         Default: 0.  -->
+    <property name="DownloadFrequency" type="d" access="readwrite"/>
+
+    <!-- The priority, relative to other objects in the stream.  -->
+    <property name="Priority" type="u" access="readwrite"/>
+  </interface>
+</node>

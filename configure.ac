@@ -2,7 +2,7 @@ AC_PREREQ([2.59])
 AC_INIT(woodchuck, 0.2, neal@walfield.org)
 AC_CONFIG_AUX_DIR([build-aux])
 AM_INIT_AUTOMAKE()
-AC_CONFIG_SRCDIR([src/netczar.c])
+AC_CONFIG_SRCDIR([src/murmeltier.c])
 AC_CONFIG_HEADERS([config.h])
 
 # Checks for programs.
@@ -12,6 +12,7 @@ AC_GNU_SOURCE
 
 AM_PROG_AS
 AC_PROG_RANLIB
+AC_PROG_LIBTOOL
 
 # Check whether we are running on Maemo and which version.
 AC_MSG_CHECKING([for a Maemo environment])
@@ -39,6 +40,16 @@ then
 fi
 AM_CONDITIONAL([MAEMO], [test 0$HAVE_MAEMO_VERSION -gt 0])
 AM_CONDITIONAL([MAEMO5], [test 0$HAVE_MAEMO_VERSION -ge 500])
+
+DBUS_MODULES="dbus-1 dbus-glib-1"
+PKG_CHECK_MODULES(DBUS, $DBUS_MODULES)
+AC_SUBST(DBUS_CFLAGS)
+AC_SUBST(DBUS_LIBS)
+
+GLIB_MODULES="glib-2.0 gobject-2.0"
+PKG_CHECK_MODULES(GLIB, $GLIB_MODULES)
+AC_SUBST(GLIB_CFLAGS)
+AC_SUBST(GLIB_LIBS)
 
 # Modules that we require and can check for using pkg-config.
 BASE_MODULES="dbus-1 glib-2.0 gobject-2.0 gthread-2.0 dbus-glib-1 sqlite3"

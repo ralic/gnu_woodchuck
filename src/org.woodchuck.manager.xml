@@ -1,0 +1,148 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <!-- Object: /org/woodchuck/MANAGER_UUID -->
+  <interface name="org.woodchuck.manager">
+    <!-- Remove this manager and any descendents.  -->
+    <method name="Delete">
+      <!-- If true, fail if this manager has any descendents.  -->
+      <arg name="only_if_no_descendents" type="b"/>
+    </method>
+
+    <!-- Register a new manager, which is subordinate to this one
+         thereby creating a manager hierarchy.  This is useful for
+         separating a program's components.  -->
+    <method name="ManagerRegister">
+      <!-- Dictionary of initial values for the various
+           properties. See the org.woodchuck.manager interface for a
+           list.
+
+           The following properties are required:
+            - HumanReadableName.
+
+           Note: a{ss} is also supported, but then only properties
+           with a string type may be expressed.
+      -->
+      <arg name="properties" type="a{sv}"/>
+
+      <!-- Only succeed if the supplied cookie is unique.  -->
+      <arg name="only_if_cookie_unique" type="b"/>
+
+      <!-- The manager's unique identifier (a 16-character
+           alpha-numeric string).  -->
+      <arg name="UUID" type="s" direction="out"/>
+    </method>
+
+    <!-- Return a list of child managers.  -->
+    <method name="ListManagers">
+      <!-- Whether to list all descendents (true) or just immediate
+           children (false). Argument is optional and defaults to
+           true.  -->
+      <arg name="Recursive" type="b"/>
+
+      <!-- Any array of <UUID, COOKIE, HUMAN_READABLE_NAME, PARENT
+           MANAGER UUID>.  -->
+      <arg name="Managers" type="a(ssss)" direction="out"/>
+    </method>
+
+    <!-- Return a list of managers with the cookie COOKIE.  If
+         RECURSIVE is TRUE, consider any manager that is a descendent
+         of this one.  If RECURSIVE is FALSE, only consider managers
+         whose parent is this one.  -->
+    <method name="LookupManagerByCookie">
+      <arg name="Cookie" type="s"/>
+      <arg name="Recursive" type="b"/>
+
+      <!-- Any array of <UUID, HUMAN_READABLE_NAME, PARENT UUID>.  -->
+      <arg name="Managers" type="a(sss)" direction="out"/>
+    </method>
+
+    <!-- Register a new stream.  -->
+    <method name="StreamRegister">
+      <!-- Dictionary of initial values for the various
+           properties. See the org.woodchuck.stream interface for a
+           list.
+
+           The following properties are required:
+            - HumanReadableName.
+
+           Note: a{ss} is also supported, but then only properties
+           with a string type may be expressed.
+      -->
+      <arg name="properties" type="a{sv}"/>
+
+      <!-- Only succeed if the supplied cookie is unique.  -->
+      <arg name="only_if_cookie_unique" type="b"/>
+
+      <!-- The stream's unique identifier.  -->
+      <arg name="UUID" type="s" direction="out"/>
+    </method>
+
+    <!-- Return a list of streams.  -->
+    <method name="ListStreams">
+      <!-- An array of <UUID, COOKIE, HUMAN_READABLE_NAME>.  -->
+      <arg name="Streams" type="a(sss)" direction="out"/>
+    </method>
+
+    <!-- Return a list of streams with the cookie COOKIE.  -->
+    <method name="LookupStreamByCookie">
+      <arg name="Cookie" type="s"/>
+
+      <!-- Any array of <UUID, HUMAN_READABLE_NAME>.  -->
+      <arg name="Streams" type="a(ss)" direction="out"/>
+    </method>
+
+    <!-- Request that Woodchuck send any unacked feedback belonging to
+         the manager and (optionally) any of its descendents.
+
+         Feedback is sent as jobs complete or until
+         FeedbackUnsubscribe is called.  -->
+    <method name="FeedbackSubscribe">
+      <!-- If true, also send feedback for any descendents.  -->
+      <arg name="DescendentsToo" type="b"/>
+
+      <arg name="Handle" type="s" direction="out"/>
+    </method>
+
+    <!-- Request that Woodchuck stop sending feedback for the given
+         subscription (as returned by FeedbackSubscribe). Any unacked
+         feedback will be reset the next time FeedbackSubscribe is
+         called.  -->
+    <method name="FeedbackUnsubscribe">
+      <arg name="Handle" type="s"/>
+    </method>
+
+    <!-- Ack the feedback with the provided UUID.  -->
+    <method name="FeedbackAck">
+      <arg name="ObjectUUID" type="s"/>
+      <arg name="ObjectInstance" type="u"/>
+    </method>
+
+
+    <!-- This manager's parent manager.  -->
+    <property name="ManagerUUID" type="s" access="read"/>
+
+    <!-- A human readable name for the manager.  When displaying a
+         manager's human readable name, the human readable name of
+         each of its ancestors as well as its own will be concatenated
+         together.  Thus, if the manager's parent is called "Firefox"
+         and it has a child web cache, the human readable name of the
+         child should be "Web Cache," not "Firefox Web Cache."  The
+         latter would result in "Firefox Firefox Web Cache" being
+         displayed to the user.  -->
+    <property name="HumanReadableName" type="s" access="readwrite"/>
+
+    <!-- A free-form string uninterpreted by the server and passed to
+         any manager upcalls.  -->
+    <property name="Cookie" type="s" access="readwrite"/>
+
+    <!-- The DBus service name to send upcalls to.  -->
+    <property name="DBusServiceName" type="s" access="readwrite"/>
+
+    <!-- The DBus object to send upcalls to.  -->
+    <property name="DBusObject" type="s" access="readwrite"/>
+
+    <!-- The priority, relative to other managers with the same parent
+         manager.  -->
+    <property name="Priority" type="u" access="readwrite"/>
+  </interface>
+</node>

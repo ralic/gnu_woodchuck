@@ -6,5 +6,14 @@
       <arg name="propname" direction="in" type="s"/>
       <arg name="value" direction="out" type="v"/>
     </method>
+    <method name="Set">
+      <arg name="interface" direction="in" type="s"/>
+      <arg name="propname" direction="in" type="s"/>
+      <arg name="value" direction="in" type="v"/>
+    </method>
+    <method name="GetAll">
+      <arg name="interface" direction="in" type="s"/>
+      <arg name="props" direction="out" type="a{sv}"/>
+    </method>
   </interface>
 </node>

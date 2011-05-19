@@ -1,0 +1,136 @@
+<!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
+<node>
+  <!-- Object: /org/woodchuck/STREAM_UUID -->
+  <interface name="org.woodchuck.stream">
+    <!-- Remove this stream and any objects it contains.  -->
+    <method name="Delete">
+      <!-- If true, fail if this stream has any objects.  -->
+      <arg name="only_if_empty" type="b"/>
+    </method>
+
+    <!-- Register a new object.  -->
+    <method name="ObjectRegister">
+      <!-- Dictionary of initial values for the various
+           properties. See the org.woodchuck.object interface for a
+           list.
+
+           Note: a{ss} is also supported, but then only properties
+           with a string type may be expressed.
+      -->
+      <arg name="properties" type="a{sv}"/>
+
+      <!-- Only succeed if the supplied cookie is unique.  -->
+      <arg name="only_if_cookie_unique" type="b"/>
+
+      <!-- The stream's unique identifier.  -->
+      <arg name="UUID" type="s" direction="out"/>
+    </method>
+
+    <!-- Return a list of objects in this stream.  -->
+    <method name="ListObjects">
+      <!-- Any array of <UUID, COOKIE, HUMAN_READABLE_NAME>.  -->
+      <arg name="Objects" type="a(sss)" direction="out"/>
+    </method>
+
+    <!-- Return a list of objects with the cookie COOKIE.  -->
+    <method name="LookupObjectByCookie">
+      <arg name="Cookie" type="s"/>
+
+      <!-- Any array of <UUID, HUMAN_READABLE_NAME>.  -->
+      <arg name="Objects" type="a(ss)" direction="out"/>
+    </method>
+
+    <method name="UpdateStatus">
+      <!-- 0: Success.
+
+           Transient errors (will try again later).
+           0x100: Other.
+           0x101: Unable to contact server.
+           0x102: Transfer incomplete.
+
+           Hard errors (give up trying to download this object).
+	   0x200: Other.
+           0x201: File gone.
+      -->
+      <arg name="Status" type="u"/>
+
+      <!-- The type of indicator displayed to the user, if any.  A
+           bitmask of:
+
+             0x1: Audio sound
+	     0x2: Application visual notification
+	     0x4: Desktop visual notification, small, e.g., blinking icon
+	     0x8: Desktop visual notification, large, e.g., system tray
+	          notification
+	     0x10: External visible notification, e.g., an LED
+	     0x20: Vibrate
+
+             0x40: Object-specific notification
+             0x80: Stream-wide notification, i.e., an aggregate
+	           notification for all updates in the stream.
+             0x100: Manager-wide notification, i.e., an aggregate
+	            notification for all updates in the manager.
+
+           0 means that no notification was shown.
+       -->
+      <arg name="Indicator" type="u"/>
+
+      <!-- The approximate number of bytes uploaded.  -->
+      <arg name="TransferredUp" type="t"/>
+      <!-- The approximate number of bytes downloaded.  -->
+      <arg name="TransferredDown" type="t"/>
+
+      <!-- The time at which the download was started (in seconds
+           since the epoch).  Pass 0 if unknown. -->
+      <arg name="DownloadTime" type="t"/>
+      <!-- The time, in seconds, it took to perform the download.
+           Pass 0 if unknown.  -->
+      <arg name="DownloadDuration" type="u"/>
+
+      <!-- The number of new objects discovered.  -->
+      <arg name="NewObjects" type="u"/>
+      <!-- The objects discovered to have changes.  -->
+      <arg name="UpdatedObjects" type="u"/>
+      <!-- The number of inline updates. -->
+      <arg name="ObjectsInline" type="u"/>
+    </method>
+
+
+    <!-- The manager this streams belongs to.  -->
+    <property name="ManagerUUID" type="s" access="read"/>
+
+    <!-- A human readable name for the manager.  When displaying a
+         manager's human readable name, the human readable name of
+         each of its ancestors as well as its own will be concatenated
+         together.  Thus, if the manager's parent is called "Firefox"
+         and it has a child web cache, the human readable name of the
+         child should be "Web Cache," not "Firefox Web Cache."  The
+         latter would result in "Firefox Firefox Web Cache" being
+         displayed to the user.  -->
+    <property name="HumanReadableName" type="s" access="readwrite"/>
+
+    <!-- A free-form string uninterpreted by the server and passed to
+         any manager upcalls.  -->
+    <property name="Cookie" type="s" access="readwrite"/>
+
+    <!-- The priority, relative to other streams managed by the same
+         manager.  -->
+    <property name="Priority" type="u" access="readwrite"/>
+
+    <!-- How often the stream should be updated, in seconds.
+
+         A value of UINT32_MAX is interpretted as meaning that the
+         stream is never updated.  This is useful if only object
+         contents are updated.  In this case there is no need to check
+         for stream updates.  Consider a weather application that
+         shows the weather for a particular city.  If the city is
+         represented as an object, there are no new objects; the
+         single object is updated periodically.  -->
+    <property name="Freshness" type="u" access="readwrite"/>
+
+    <!-- Whether objects are predominantly inline (i.e., delivered
+         with stream updates) or not.  An RSS feed often includes the
+         article text, for instance.  Default: False.  -->
+    <property name="ObjectsMostlyInline" type="b" access="readwrite"/>
+  </interface>
+</node>

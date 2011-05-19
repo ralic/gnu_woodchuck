@@ -1,24 +1,92 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
   <interface name="org.woodchuck.upcall">
-    <!-- Upcall from Woodchuck indicating that a job has completed.
-         After processing, the application should acknowledge the
-         feedback using FeedbackACK, otherwise, it will be resent.
-	 -->
-    <method name="feedback">
-      <arg name="JobUUID" type="s"/>
-      <!-- Each time a job is fired, the instance is incremented.  -->
-      <arg name="JobInstance" type="u"/>
-      <!-- The cookie provided to JobSubmit.  -->
-      <arg name="cookie" type="s"/>
-      <!-- The URL that was requested.  -->
-      <arg name="url" type="s"/>
+    <!-- Upcall from Woodchuck indicating that a download has
+         completed.  After processing, the application should
+         acknowledge the feedback using FeedbackACK, otherwise, it
+         will be resent.  -->
+    <method name="ObjectDownloaded">
+      <arg name="ManagerUUID" type="s"/>
+      <arg name="ManagerCookie" type="s"/>
+
+      <arg name="StreamUUID" type="s"/>
+      <arg name="StreamCookie" type="s"/>
+
+      <arg name="ObjectUUID" type="s"/>
+      <arg name="ObjectCookie" type="s"/>
+
+      <!-- Whether the download was successful or not.  See the status
+           argument of org.woodchuck.object.DownloadStatus for
+           details.  -->
+      <arg name="Status" type="u"/>
+
+      <!-- Each time an attempt to download an object occurs (either
+           successfully or nor), the instance number is incremented.
+           This is the instance number of the feedback.  -->
+      <arg name="Instance" type="u"/>
+
+      <!-- Index and value of the version downloaded from the versions
+           array (at the time of download).  -->
+      <arg name="Version" type="ustub"/>
       <!-- The location of the data.  -->
-      <arg name="filename" type="s"/>
+      <arg name="Filename" type="s"/>
+      <!-- The size (in bytes).  -->
+      <arg name="Size" type="t"/>
+
       <!-- The target time.  -->
-      <arg name="trigger_target" type="t"/>
-      <!-- The time at which the trigger actually fired.  -->
-      <arg name="trigger_fired" type="t"/>
+      <arg name="TriggerTarget" type="t"/>
+      <!-- The time at which the download was attempted.  -->
+      <arg name="TriggerFired" type="t"/>
+    </method>
+
+    <!-- The manager should update the indicated stream.  URL and
+         Filename are the values of the corresponding properties.  -->
+    <method name="StreamUpdate">
+      <arg name="ManagerUUID" type="s"/>
+      <arg name="ManagerCookie" type="s"/>
+
+      <arg name="StreamUUID" type="s"/>
+      <arg name="StreamCookie" type="s"/>
+    </method>
+
+    <!-- The manager should download the indicated object.  URL and
+         Filename are the values of the corresponding properties.  -->
+    <method name="ObjectDownload">
+      <arg name="ManagerUUID" type="s"/>
+      <arg name="ManagerCookie" type="s"/>
+
+      <arg name="StreamUUID" type="s"/>
+      <arg name="StreamCookie" type="s"/>
+
+      <arg name="ObjectUUID" type="s"/>
+      <arg name="ObjectCookie" type="s"/>
+
+      <!-- Copies of the object's properties.  -->
+      <!-- Index and value of the version to download from the
+           versions array (at the time of the upcall).  -->
+      <arg name="Version" type="ustub"/>
+      <arg name="Filename" type="s"/>
+
+      <!-- Target quality from 1 to 5.  -->
+      <arg name="Quality" type="u"/>
+    </method>
+
+    <!-- The manager should delete the files associated with the
+         specified object.  Respond with
+         org.woodchuck.object.FilesDeleted. -->
+    <method name="ObjectDeleteFiles">
+      <arg name="ManagerUUID" type="s"/>
+      <arg name="ManagerCookie" type="s"/>
+
+      <arg name="StreamUUID" type="s"/>
+      <arg name="StreamCookie" type="s"/>
+
+      <arg name="ObjectUUID" type="s"/>
+      <arg name="ObjectCookie" type="s"/>
+
+      <!-- As provided in the org.woodchuck.object.DownloadStatus
+           method.  -->
+      <arg name="Files" type="a(sbu)"/>
     </method>
   </interface>
 </node>
