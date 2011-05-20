@@ -1,3 +1,19 @@
+debug output
+------------
+
+There are 6 debugging levels (0-5).  By default, levels 0-3 are
+logged.  The debugging output level should be choosen as follows:
+
+ 0: should definately be seen
+ 1: warning (something went wrong, but we can continue)
+ 2: high-priority informational (even if --quiet is passed)
+ 3: low-priority informational (default)
+ 4: verbose
+ 5: core dump
+
+dbus interfaces
+---------------
+
 To get an XML description of an interface using introspection:
 
   # dbus-send --system --print-reply \
