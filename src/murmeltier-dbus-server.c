@@ -44,7 +44,9 @@ process_message (DBusConnection *connection, DBusMessage *message,
 {
   DBusMessage *reply = dbus_message_new_method_return (message);
   const char *error_name = NULL;
+  /* The error message in ERROR is preferred to ERROR_MESSAGE.  */
   GError *error = NULL;
+  char *error_message = NULL;
   enum woodchuck_error ret = WOODCHUCK_ERROR_GENERIC;
   char *expected_sig = NULL;
   const char *actual_sig = dbus_message_get_signature (message);
@@ -269,6 +271,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 		  dbus_message_iter_recurse (&dict_entry_iter, &variant_iter);
 
 		  arg_type = dbus_message_iter_get_arg_type (&variant_iter);
+		  debug (0, "Key %s's value has type '%c'", key, arg_type);
 		  switch (arg_type)
 		    {
 		    case DBUS_TYPE_STRING:
@@ -455,7 +458,12 @@ process_message (DBusConnection *connection, DBusMessage *message,
 		  g_value_set_static_string (&values[i], value);
 		}
 	      else
-		goto register_bad_type;
+		{
+		  error_message = g_strdup_printf
+		    ("Property %s has unsupported type %c",
+		     key, arg_type);
+		  goto register_bad_type;
+		}
 
 	      g_hash_table_insert (properties, key, &values[i]);
 
@@ -1055,9 +1063,10 @@ process_message (DBusConnection *connection, DBusMessage *message,
     {
     bad_signature:
       error = g_error_new (DBUS_GERROR, DBUS_GERROR_INVALID_SIGNATURE,
-			   "%s: %s.%s: Expected %s got %s.",
+			   "%s: %s.%s: Expected %s got %s.%s%s",
 			   dbus_message_get_path (message), 
-			   interface_str, method, expected_sig, actual_sig);
+			   interface_str, method, expected_sig, actual_sig,
+			   error_message ? " " : "", error_message ?: "");
       error_name = DBUS_ERROR_INVALID_ARGS;
     }
   if (ret != 0 && ! error)
@@ -1065,7 +1074,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 			 "%s: %s.%s: %s.",
 			 dbus_message_get_path (message), 
 			 interface_str, method,
-			 woodchuck_error_to_error (ret));
+			 error_message ?: woodchuck_error_to_error (ret));
 
   if (ret != 0 && ! error_name)
     error_name = woodchuck_error_to_error_name (ret);
@@ -1087,6 +1096,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
       g_error_free (error);
       error = NULL;
     }
+
+  g_free (error_message);
 
   dbus_connection_send (connection, reply, NULL);
   dbus_message_unref (reply);
