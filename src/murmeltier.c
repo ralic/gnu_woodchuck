@@ -1264,7 +1264,7 @@ woodchuck_object_download_status
 }
 
 enum woodchuck_error
-woodchuck_object_use (const char *object_raw, uint64_t start, uint64_t end,
+woodchuck_object_use (const char *object_raw, uint64_t start, uint64_t duration,
 		      uint64_t use_mask, GError **error)
 {
   char *object = sqlite3_mprintf ("%Q", object_raw);
@@ -1307,11 +1307,11 @@ woodchuck_object_use (const char *object_raw, uint64_t start, uint64_t end,
   err = sqlite3_exec_printf
     (db,
      "insert into object_use"
-     " (uuid, instance, parent_uuid, reported, start, end, use_mask)"
+     " (uuid, instance, parent_uuid, reported, start, duration, use_mask)"
      " values"
      " (%s, %d, '%s', 1, %"PRId64", %"PRId64", %"PRId64");",
      NULL, NULL, &errmsg,
-     object, instance, stream, start, end, use_mask);
+     object, instance, stream, start, duration, use_mask);
   if (errmsg)
     {
       g_set_error (error, G_MURMELTIER_ERROR, 0,
@@ -1505,7 +1505,7 @@ main (int argc, char *argv[])
 
      "create table if not exists object_use"
      " (uuid NOT NULL, instance NOT NULL, parent_uuid NOT NULL,"
-     "  reported, start, end, use_mask);"
+     "  reported, start, duration, use_mask);"
      "create index if not exists object_use_parent_uuid_index"
      " on object_use (parent_uuid);",
      NULL, NULL, &errmsg);

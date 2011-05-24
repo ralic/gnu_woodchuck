@@ -1097,7 +1097,7 @@ gboolean
 gwoodchuck_object_used_full (GWoodchuck *wc,
 			     const char *stream_identifier,
 			     const char *object_identifier,
-			     uint64_t start, uint64_t end,
+			     uint64_t start, uint64_t duration,
 			     uint64_t use_mask,
 			     GError **caller_error)
 {
@@ -1123,7 +1123,8 @@ gwoodchuck_object_used_full (GWoodchuck *wc,
       return FALSE;
     }
 
-  if (! org_woodchuck_object_used (object->proxy, start, end, use_mask, &error))
+  if (! org_woodchuck_object_used (object->proxy, start, duration, use_mask,
+				   &error))
     {
       g_prefix_error (&error, "%s: ", __FUNCTION__);
       g_critical ("%s", error->message);

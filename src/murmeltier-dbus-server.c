@@ -990,7 +990,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
     {
       /* In.  */
       uint64_t start = 0;
-      uint64_t end = 0;
+      uint64_t duration = 0;
       uint64_t use_mask = 0;
 
       expected_sig = "ttt";
@@ -999,7 +999,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
       if (strcmp (expected_sig, actual_sig) != 0
 	  || ! dbus_message_get_args (message, &dbus_error, 
 				      DBUS_TYPE_UINT64, &start,
-				      DBUS_TYPE_UINT64, &end,
+				      DBUS_TYPE_UINT64, &duration,
 				      DBUS_TYPE_UINT64, &use_mask,
 				      DBUS_TYPE_INVALID))
 	{
@@ -1007,7 +1007,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  goto bad_signature;
 	}
 
-      ret = woodchuck_object_use (path, start, end, use_mask, &error);
+      ret = woodchuck_object_use (path, start, duration, use_mask, &error);
     }
   else if (type == object && strcmp (method, "FilesDeleted") == 0)
     {

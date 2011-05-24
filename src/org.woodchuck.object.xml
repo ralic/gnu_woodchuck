@@ -89,8 +89,9 @@
     <method name="Used">
       <!-- When the user started using the object.  -->
       <arg name="Start" type="t"/>
-      <!-- When the user stopped using the object.  -->
-      <arg name="End" type="t"/>
+      <!-- How long the user used the object.  -1 means unknown.  0
+           means instantaneous.  -->
+      <arg name="Duration" type="t"/>
 
       <!-- Bit mask indicating which portions of the object were used.
            Bit 0 corresponds to the first 1/64 of the object, bit 1 to
