@@ -850,7 +850,7 @@ woodchuck_manager_list_managers
     /* List everything.  */
     err = sqlite3_exec
       (db,
-       "select uuid, cookie, human_readable_name, parent_uuid from managers;",
+       "select uuid, Cookie, HumanReadableName, parent_uuid from managers;",
        list_callback, *managers, &errmsg);
   else if (recursive)
     /* List only those that are descended from MANAGER.  */
@@ -860,7 +860,7 @@ woodchuck_manager_list_managers
 	{
 	  err = sqlite3_exec_printf
 	    (db,
-	     "select uuid, cookie, human_readable_name, parent_uuid"
+	     "select uuid, Cookie, HumanReadableName, parent_uuid"
 	     " from managers where parent_uuid = %Q;",
 	     list_callback, *managers, &errmsg, manager);
 	  if (errmsg)
@@ -880,7 +880,7 @@ woodchuck_manager_list_managers
     /* List only those that are an immediate descendent of MANAGER.  */
     err = sqlite3_exec_printf
       (db,
-       "select uuid, cookie, human_readable_name, parent_uuid"
+       "select uuid, Cookie, HumanReadableName, parent_uuid"
        " from managers where parent_uuid = %Q;",
        list_callback, *managers, &errmsg,
        manager ?: "");
@@ -933,7 +933,7 @@ woodchuck_manager_list_streams
   int err;
   err = sqlite3_exec_printf
     (db,
-     "select uuid, cookie, human_readable_name from streams"
+     "select uuid, Cookie, HumanReadablename from streams"
      " where parent_uuid=%Q;",
      list_callback, *list, &errmsg, manager);
   if (errmsg)
@@ -1024,7 +1024,7 @@ woodchuck_stream_list_objects (const char *stream,
   int err;
   err = sqlite3_exec_printf
     (db,
-     "select uuid, cookie, human_readable_name from objects"
+     "select uuid, Cookie, HumanReadableName from objects"
      " where parent_uuid=%Q;",
      list_callback, *list, &errmsg, stream);
   if (errmsg)
