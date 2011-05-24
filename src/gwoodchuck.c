@@ -1150,7 +1150,7 @@ gboolean
 gwoodchuck_object_files_deleted (GWoodchuck *wc,
 				 const char *stream_identifier,
 				 const char *object_identifier,
-				 enum woodchuck_delete_response response,
+				 enum woodchuck_deletion_response response,
 				 uint64_t arg,
 				 GError **caller_error)
 {

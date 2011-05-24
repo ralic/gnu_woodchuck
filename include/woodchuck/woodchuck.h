@@ -138,7 +138,7 @@ enum woodchuck_deletion_policy
     WOODCHUCK_DELETION_POLICY_DELETE_WITH_CONSULTATION = 2,
   };
 
-enum woodchuck_delete_response
+enum woodchuck_deletion_response
   {
     /* Files deleted.  */
     WOODCHUCK_DELETE_DELETED = 0,
