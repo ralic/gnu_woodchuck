@@ -116,7 +116,7 @@
     </method>
 
     <!-- The stream this object belongs to.  -->
-    <property name="StreamUUID" type="s" access="read"/>
+    <property name="ParentUUID" type="s" access="read"/>
 
     <!-- The number of times this object has been downloaded.  -->
     <property name="Instance" type="u" access="read"/>

@@ -119,7 +119,7 @@
 
 
     <!-- This manager's parent manager.  -->
-    <property name="ManagerUUID" type="s" access="read"/>
+    <property name="ParentUUID" type="s" access="read"/>
 
     <!-- A human readable name for the manager.  When displaying a
          manager's human readable name, the human readable name of
