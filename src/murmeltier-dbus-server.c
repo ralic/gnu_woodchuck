@@ -32,6 +32,12 @@
 
 #include "murmeltier-dbus-server.h"
 
+#include "org.woodchuck.xml.h"
+#include "org.woodchuck.manager.xml.h"
+#include "org.woodchuck.stream.xml.h"
+#include "org.woodchuck.object.xml.h"
+#include "org.freedesktop.DBus.Introspectable.xml.h"
+
 static DBusHandlerResult
 process_message (DBusConnection *connection, DBusMessage *message,
 		 gpointer user_data)
@@ -63,6 +69,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
     org_woodchuck_manager,
     org_woodchuck_stream,
     org_woodchuck_object,
+    org_freedesktop_dbus_introspectable
   };
   int interface = 0;
   if (strcmp (interface_str, "org.woodchuck") == 0)
@@ -73,6 +80,9 @@ process_message (DBusConnection *connection, DBusMessage *message,
     interface = org_woodchuck_stream;
   if (strcmp (interface_str, "org.woodchuck.object") == 0)
     interface = org_woodchuck_object;
+  if (strcmp (interface_str, "org.freedesktop.DBus.Introspectable") == 0)
+    interface = org_freedesktop_dbus_introspectable;
+
 
 #define PATH_ROOT "/org/woodchuck"
   if (strncmp (path, PATH_ROOT, sizeof (PATH_ROOT) - 1) != 0)
@@ -96,7 +106,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
     {
       debug (0, "Object type: root");
       type = root;
-      if (interface != org_woodchuck)
+      if (! (interface == org_freedesktop_dbus_introspectable
+	     || interface == org_woodchuck))
 	interface = 0;
     }
   else if (*path == '/')
@@ -107,7 +118,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  debug (0, "Object type: manager");
 	  path += sizeof (PATH_MANAGER) - 1;
 	  type = manager;
-	  if (interface != org_woodchuck_manager)
+	  if (! (interface == org_freedesktop_dbus_introspectable
+		 || interface == org_woodchuck_manager))
 	    interface = 0;
 	}
       else if (strncmp (path, PATH_STREAM, sizeof (PATH_STREAM) - 1) == 0)
@@ -115,7 +127,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  debug (0, "Object type: stream");
 	  path += sizeof (PATH_STREAM) - 1;
 	  type = stream;
-	  if (interface != org_woodchuck_stream)
+	  if (! (interface == org_freedesktop_dbus_introspectable
+		 || interface == org_woodchuck_stream))
 	    interface = 0;
 	}
       if (strncmp (path, PATH_OBJECT, sizeof (PATH_OBJECT) - 1) == 0)
@@ -123,7 +136,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  debug (0, "Object type: object");
 	  path += sizeof (PATH_OBJECT) - 1;
 	  type = object;
-	  if (interface != org_woodchuck_object)
+	  if (! (interface == org_freedesktop_dbus_introspectable
+		 || interface == org_woodchuck_object))
 	    interface = 0;
 	}
     }
@@ -148,10 +162,54 @@ process_message (DBusConnection *connection, DBusMessage *message,
   debug (0, "Object is '%s'", path);
 
   /* Demux and demarshal.  */
-  if ((type == root && strcmp (method, "ManagerRegister") == 0)
-      || (type == manager && strcmp (method, "ManagerRegister") == 0)
-      || (type == manager && strcmp (method, "StreamRegister") == 0)
-      || (type == stream && strcmp (method, "ObjectRegister") == 0))
+  if (interface == org_freedesktop_dbus_introspectable
+      && strcmp (method, "Introspect") == 0)
+    {
+      expected_sig = "";
+      if (strcmp (expected_sig, actual_sig) != 0)
+	goto bad_signature;
+
+#define XML_PREFIX \
+      "<!DOCTYPE node PUBLIC \"-//freedesktop//DTD D-BUS Object Introspection 1.0//EN\" \"http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd\">\n" \
+      "<node>\n"
+#define XML_POSTFIX "</node>\n"
+      const char *xml = NULL;
+      switch (type)
+	{
+	case root:
+	  xml = XML_PREFIX \
+	    ORG_WOODCHUCK_XML \
+	    ORG_FREEDESKTOP_DBUS_INTROSPECTABLE_XML \
+	    XML_POSTFIX;
+	  break;
+	case manager:
+	  xml = XML_PREFIX \
+	    ORG_WOODCHUCK_MANAGER_XML \
+	    ORG_FREEDESKTOP_DBUS_INTROSPECTABLE_XML \
+	    XML_POSTFIX;
+	  break;
+	case stream:
+	  xml = XML_PREFIX \
+	    ORG_WOODCHUCK_STREAM_XML \
+	    ORG_FREEDESKTOP_DBUS_INTROSPECTABLE_XML \
+	    XML_POSTFIX;
+	  break;
+	case object:
+	  xml = XML_PREFIX \
+	    ORG_WOODCHUCK_OBJECT_XML \
+	    ORG_FREEDESKTOP_DBUS_INTROSPECTABLE_XML \
+	    XML_POSTFIX;
+	  break;
+	}
+
+      dbus_message_append_args (reply, DBUS_TYPE_STRING, &xml,
+				DBUS_TYPE_INVALID);
+      ret = 0;
+    }
+  else if ((type == root && strcmp (method, "ManagerRegister") == 0)
+	   || (type == manager && strcmp (method, "ManagerRegister") == 0)
+	   || (type == manager && strcmp (method, "StreamRegister") == 0)
+	   || (type == stream && strcmp (method, "ObjectRegister") == 0))
     /* Single argument: a property dictionary.  */
     {
       /* In reality, we accept either a{sv}b or a{ss}b.  The main reason

@@ -44,7 +44,12 @@ nm_server_stubs_xml = $(foreach filename, \
 nm_server_stubs_c = $(patsubst %.xml,%.server-stubs.h,$(nm_server_stubs_xml))
 
 BUILT_SOURCES = $(nm_interfaces_h) $(nm_server_stubs_c) \
-	marshal.h marshal.c
+	marshal.h marshal.c \
+	org.woodchuck.xml.h \
+	org.woodchuck.manager.xml.h \
+	org.woodchuck.stream.xml.h \
+	org.woodchuck.object.xml.h \
+	org.freedesktop.DBus.Introspectable.xml.h
 
 # network-monitor-*.c are #included from network-monitor.c, as
 # appropriate.
@@ -56,6 +61,38 @@ EXTRA_DIST = marshal.list network-monitor-icd2.c network-monitor-nm.c
 %.c: %.list
 	$(GLIB_GENMARSHAL) --body $< > $@~ \
 	  && (if cmp -s $@ $@~; then rm $@~; else mv $@~ $@; fi)
+
+# Extract each interface and save it as a CPP define named after the
+# interface (uppercase and dots replaced by underscores) and _XML
+# appeneded.  Be careful to escape \s and "s.
+%.xml.h: %.xml
+	gawk 'function escape(s) { \
+	        return gensub (/([\\"])/, "\\\\\\1", "g", s); \
+	      } \
+	      BEGIN { print "/* Automatically generated from $<. */"; } \
+	      { \
+	        while (1) { \
+	          if (! in_interface && match($$0, /<interface +name=["]([^"]+)["]>/, matches)) \
+	            { \
+	              gsub (/[.]/, "_", matches[1]); \
+	              printf ("#define %s_XML ", toupper (matches[1])); \
+	              \
+	              if (match (substr($$0, RSTART), /[^ \t]/)) \
+	                $$0=substr($$0, RSTART); \
+	              in_interface=1; \
+	            } \
+	          if (in_interface && match ($$0, /<[/]interface>/)) \
+	            { \
+	              in_interface=0; \
+	              print "\"" escape(substr($$0, 0, RSTART+RLENGTH-1)) "\\n\""; \
+	              $$0=substr($$0, RSTART+RLENGTH); \
+	              continue; \
+	            } \
+	          if (in_interface) \
+	            print "\"" escape($$0) "\\n\" \\"; \
+	          break; \
+	        } \
+	      }' "$<" > "$@"
 
 common_sources = $(nm_interfaces_h) marshal.h marshal.c \
 	debug.h debug.c \
@@ -73,6 +110,10 @@ common_sources = $(nm_interfaces_h) marshal.h marshal.c \
 
 murmeltier_SOURCES = $(common_sources) murmeltier.c \
 	murmeltier-dbus-server.h murmeltier-dbus-server.c \
+	org.woodchuck.xml.h \
+	org.woodchuck.manager.xml.h \
+	org.woodchuck.stream.xml.h \
+	org.woodchuck.object.xml.h \
 	org.woodchuck.murmeltier-server.h
 murmeltier_LDADD = $(BASE_LIBS)
 
