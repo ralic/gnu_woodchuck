@@ -1007,7 +1007,7 @@ woodchuck_stream_object_register (const char *stream, GHashTable *properties,
   char *acceptable_properties[]
     = { "HumanReadableName", "Cookie", "Versions", "Filename", "Wakeup",
 	"TriggerTarget", "TriggerEarliest", "TriggerLatest",
-	"Period", "Priority", NULL };
+	"DownloadFrequency", "Priority", NULL };
   char *required_properties[] = { "HumanReadableName", NULL };
   return object_register (stream, "streams", "objects", properties,
 			  acceptable_properties, required_properties,
