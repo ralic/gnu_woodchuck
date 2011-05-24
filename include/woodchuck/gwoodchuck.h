@@ -207,11 +207,12 @@ extern gboolean gwoodchuck_stream_update_failed (GWoodchuck *wc,
 						 uint32_t transferred,
 						 GError **error);
 
-/* Delete the stream identified by STREAM_IDENTIFIER including any
-   objects it contains.  */
-extern gboolean gwoodchuck_stream_delete (GWoodchuck *wc,
-					  const char *stream_identifier,
-					  GError **error);
+/* Unregister the stream identified by STREAM_IDENTIFIER including any
+   objects it contains.  (This does not actually remove any files,
+   only metadata stored on the woodchuck server.)  */
+extern gboolean gwoodchuck_stream_unregister (GWoodchuck *wc,
+					      const char *stream_identifier,
+					      GError **error);
 
 /* Register an object.
 
@@ -239,11 +240,12 @@ extern gboolean gwoodchuck_object_register (GWoodchuck *wc,
 					    uint32_t download_frequency,
 					    GError **error);
 
-/* Delete the specified object.  */
-extern gboolean gwoodchuck_object_delete (GWoodchuck *wc,
-					  const char *stream_identifier,
-					  const char *object_identifier,
-					  GError **error);
+/* Unregister the object.  (This does not actually remove any files,
+   only metadata stored on the woodchuck server.)  */
+extern gboolean gwoodchuck_object_unregister (GWoodchuck *wc,
+					      const char *stream_identifier,
+					      const char *object_identifier,
+					      GError **error);
 
 /* Mark the object as having been downloaded.  If the object is not
    know, it is registered (using OBJECT_IDENTIFIER as the human

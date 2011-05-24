@@ -2,8 +2,9 @@
 <node>
   <!-- Object: /org/woodchuck/OBJECT_UUID -->
   <interface name="org.woodchuck.object">
-    <!-- Remove this object.  -->
-    <method name="Delete">
+    <!-- Unregister this object.  This does not remove any files, only
+         metadata stored on the woodchuck server.  -->
+    <method name="Unregister">
     </method>
 
 

@@ -2,8 +2,10 @@
 <node>
   <!-- Object: /org/woodchuck/MANAGER_UUID -->
   <interface name="org.woodchuck.manager">
-    <!-- Remove this manager and any descendents.  -->
-    <method name="Delete">
+    <!-- Unregister this manager and any descendent objects.  This
+         does not remove any files, only metadata stored on the
+         woodchuck server.  -->
+    <method name="Unregister">
       <!-- If true, fail if this manager has any descendents.  -->
       <arg name="only_if_no_descendents" type="b"/>
     </method>

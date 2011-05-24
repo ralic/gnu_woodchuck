@@ -595,11 +595,11 @@ abort_if_too_many_callback (void *cookie, int argc, char **argv, char **names)
 }
 
 static enum woodchuck_error
-object_delete (const char *uuid,
-	       const char *table, const char *secondary_tables[],
-	       const char *child_tables[],
-	       bool only_if_no_descendents,
-	       GError **error)
+object_unregister (const char *uuid,
+		   const char *table, const char *secondary_tables[],
+		   const char *child_tables[],
+		   bool only_if_no_descendents,
+		   GError **error)
 {
   if (only_if_no_descendents)
     {
@@ -827,13 +827,13 @@ woodchuck_manager_manager_register (const char *manager, GHashTable *properties,
 }
 
 enum woodchuck_error
-woodchuck_manager_delete (const char *manager, bool only_if_no_descendents,
-			  GError **error)
+woodchuck_manager_unregister (const char *manager, bool only_if_no_descendents,
+			      GError **error)
 {
   const char *child_tables[] = { "managers", "streams", "stream_updates",
 				 NULL };
-  return object_delete (manager, "managers", NULL, child_tables,
-			only_if_no_descendents, error);
+  return object_unregister (manager, "managers", NULL, child_tables,
+			    only_if_no_descendents, error);
 }
 
 enum woodchuck_error
@@ -986,8 +986,8 @@ woodchuck_manager_feedback_ack
 }
 
 enum woodchuck_error
-woodchuck_stream_delete (const char *stream, bool only_if_empty,
-			 GError **error)
+woodchuck_stream_unregister (const char *stream, bool only_if_empty,
+			     GError **error)
 {
   const char *child_tables[] = { "objects", "object_versions",
 				 "object_instance_status",
@@ -995,8 +995,8 @@ woodchuck_stream_delete (const char *stream, bool only_if_empty,
 				 "object_use",
 				 NULL };
   const char *secondary_tables[] = { "stream_updates", NULL };
-  return object_delete (stream, "streams", secondary_tables, child_tables,
-			only_if_empty, error);
+  return object_unregister (stream, "streams", secondary_tables, child_tables,
+			    only_if_empty, error);
 }
 
 enum woodchuck_error
@@ -1129,14 +1129,15 @@ woodchuck_stream_update_status
 }
 
 enum woodchuck_error
-woodchuck_object_delete (const char *object, GError **error)
+woodchuck_object_unregister (const char *object, GError **error)
 {
   const char *secondary_tables[] = { "object_versions",
 				     "object_instance_status",
 				     "object_instance_files",
 				     "object_use",
 				     NULL };
-  return object_delete (object, "objects", secondary_tables, NULL, TRUE, error);
+  return object_unregister (object, "objects", secondary_tables, NULL,
+			    TRUE, error);
 }
 
 enum woodchuck_error

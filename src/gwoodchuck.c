@@ -755,8 +755,8 @@ gwoodchuck_stream_update_failed (GWoodchuck *wc,
 }
 
 gboolean
-gwoodchuck_stream_delete (GWoodchuck *wc, const char *identifier,
-			  GError **caller_error)
+gwoodchuck_stream_unregister (GWoodchuck *wc, const char *identifier,
+			      GError **caller_error)
 {
   GError *error = NULL;
   struct object *stream = stream_lookup (wc, identifier, &error);
@@ -768,7 +768,7 @@ gwoodchuck_stream_delete (GWoodchuck *wc, const char *identifier,
       return FALSE;
     }
 
-  if (! org_woodchuck_stream_delete (stream->proxy, FALSE, &error))
+  if (! org_woodchuck_stream_unregister (stream->proxy, FALSE, &error))
     {
       g_prefix_error (&error, "%s: ", __FUNCTION__);
       g_critical ("%s", error->message);
@@ -893,10 +893,10 @@ gwoodchuck_object_register (GWoodchuck *wc,
 }
 
 gboolean
-gwoodchuck_object_delete (GWoodchuck *wc,
-			  const char *stream_identifier,
-			  const char *object_identifier,
-			  GError **caller_error)
+gwoodchuck_object_unregister (GWoodchuck *wc,
+			      const char *stream_identifier,
+			      const char *object_identifier,
+			      GError **caller_error)
 {
   GError *error = NULL;
   struct object *stream = stream_lookup (wc, stream_identifier, &error);
@@ -937,7 +937,7 @@ gwoodchuck_object_delete (GWoodchuck *wc,
       return FALSE;
     }
 
-  if (! org_woodchuck_object_delete (object->proxy, &error))
+  if (! org_woodchuck_object_unregister (object->proxy, &error))
     {
       g_prefix_error (&error, "%s: ", __FUNCTION__);
       g_critical ("%s", error->message);
@@ -1491,11 +1491,11 @@ main (int argc, char *argv[])
 
 	  /* For I == 0, test removal of a stream with objects.  */
 	  if (i != 0)
-	    if (! gwoodchuck_object_delete
+	    if (! gwoodchuck_object_unregister
 		(wc, streams[i].identifier, streams[i].objects[j].identifier,
 		 &error))
 	      {
-		fprintf (stderr, "gwoodchuck_object_delete(%s, %s): %s",
+		fprintf (stderr, "gwoodchuck_object_unregister(%s, %s): %s",
 			 streams[i].human_readable_name,
 			 streams[i].objects[j].human_readable_name,
 			 error->message);
@@ -1517,9 +1517,9 @@ main (int argc, char *argv[])
 	}
 
 
-      if (! gwoodchuck_stream_delete (wc, streams[i].identifier, &error))
+      if (! gwoodchuck_stream_unregister (wc, streams[i].identifier, &error))
 	{
-	  fprintf (stderr, "gwoodchuck_stream_delete(%s): %s",
+	  fprintf (stderr, "gwoodchuck_stream_unregister(%s): %s",
 		   streams[i].human_readable_name, error->message);
 	  g_error_free (error);
 	  error = NULL;

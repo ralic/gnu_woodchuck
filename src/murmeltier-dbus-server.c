@@ -694,8 +694,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
       else
 	assert (ret != 0);
     }
-  else if ((type == manager && strcmp (method, "Delete") == 0)
-	   || (type == stream && strcmp (method, "Delete") == 0))
+  else if ((type == manager && strcmp (method, "Unregister") == 0)
+	   || (type == stream && strcmp (method, "Unregister") == 0))
     {
       /* In.  */
       bool predicate = false;
@@ -713,11 +713,11 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	}
 
       if (type == manager)
-	ret = woodchuck_manager_delete (path, predicate, &error);
+	ret = woodchuck_manager_unregister (path, predicate, &error);
       else
 	{
 	  assert (type == stream);
-	  ret = woodchuck_stream_delete (path, predicate, &error);
+	  ret = woodchuck_stream_unregister (path, predicate, &error);
 	}
     }
   else if (type == root && strcmp (method, "DownloadDesirability") == 0)
@@ -851,13 +851,13 @@ process_message (DBusConnection *connection, DBusMessage *message,
       ret = woodchuck_manager_feedback_ack
 	(path, object_uuid, object_instance, &error);
     }
-  else if (type == object && strcmp (method, "Delete") == 0)
+  else if (type == object && strcmp (method, "Unregister") == 0)
     {
       expected_sig = "";
       if (strcmp (expected_sig, actual_sig) != 0)
 	goto bad_signature;
 
-      ret = woodchuck_object_delete (path, &error);
+      ret = woodchuck_object_unregister (path, &error);
     }
   else if (type == object && strcmp (method, "Download") == 0)
     {

@@ -55,7 +55,7 @@ extern enum woodchuck_error woodchuck_download_desirability_version
    uint32_t *desirability, uint32_t *version, GError **error);
 
 /* org.woochuck.manager callbacks.  */
-extern enum woodchuck_error woodchuck_manager_delete
+extern enum woodchuck_error woodchuck_manager_unregister
   (const char *manager, bool only_if_no_descendents, GError **error);
 
 extern enum woodchuck_error woodchuck_manager_manager_register
@@ -99,7 +99,7 @@ extern enum woodchuck_error woodchuck_manager_feedback_ack
    GError **error);
 
 /* org.woodchuck.stream callbacks.  */
-extern enum woodchuck_error woodchuck_stream_delete
+extern enum woodchuck_error woodchuck_stream_unregister
   (const char *stream, bool only_if_empty, GError **error);
 
 extern enum woodchuck_error woodchuck_stream_object_register
@@ -125,7 +125,7 @@ extern enum woodchuck_error woodchuck_stream_update_status
 
 /* org.woodchuck.object callbacks.  */
 
-extern enum woodchuck_error woodchuck_object_delete
+extern enum woodchuck_error woodchuck_object_unregister
   (const char *object, GError **error);
 
 extern enum woodchuck_error woodchuck_object_download
@@ -146,7 +146,7 @@ extern enum woodchuck_error woodchuck_object_download_status
    GError **error);
 
 extern enum woodchuck_error woodchuck_object_use
-  (const char *object, uint64_t start, uint64_t end, uint64_t use_mask,
+  (const char *object, uint64_t start, uint64_t duration, uint64_t use_mask,
    GError **error);
 
 extern enum woodchuck_error woodchuck_object_files_deleted

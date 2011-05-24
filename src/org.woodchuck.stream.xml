@@ -2,8 +2,10 @@
 <node>
   <!-- Object: /org/woodchuck/STREAM_UUID -->
   <interface name="org.woodchuck.stream">
-    <!-- Remove this stream and any objects it contains.  -->
-    <method name="Delete">
+    <!-- Unregister this stream and any descendent objects.  This does
+         not remove any files, only metadata stored on the woodchuck
+         server.  -->
+    <method name="Unregister">
       <!-- If true, fail if this stream has any objects.  -->
       <arg name="only_if_empty" type="b"/>
     </method>
