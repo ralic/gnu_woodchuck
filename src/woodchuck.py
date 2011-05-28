@@ -97,11 +97,6 @@ def _dbus_exception_to_woodchuck_exception(exception):
     else:
         raise exception
 
-# Establish a connection with the Woodchuck server.
-_session_bus = dbus.SessionBus ()
-_woodchuck_proxy = _session_bus.get_object ('org.woodchuck', '/org/woodchuck')
-_woodchuck = dbus.Interface (_woodchuck_proxy, dbus_interface='org.woodchuck')
-
 _manager_properties_to_camel_case = \
     dict ({"UUID": ("UUID", dbus.UTF8String, ""),
            "parent_UUID": ("ParentUUID", dbus.UTF8String, ""),
@@ -180,9 +175,9 @@ class _Object():
             assert k in _object_properties_to_camel_case
 
         self.properties = properties
-        self.proxy = _session_bus.get_object ('org.woodchuck',
-                                              '/org/woodchuck/object/'
-                                              + self.properties['UUID'])
+        self.proxy = dbus.SessionBus().get_object ('org.woodchuck',
+                                                   '/org/woodchuck/object/'
+                                                   + self.properties['UUID'])
         self.dbus = dbus.Interface (self.proxy,
                                     dbus_interface='org.woodchuck.object')
 
@@ -299,9 +294,9 @@ class _Stream():
             assert k in _stream_properties_to_camel_case
 
         self.properties = properties
-        self.proxy = _session_bus.get_object ('org.woodchuck',
-                                              '/org/woodchuck/stream/'
-                                              + self.properties['UUID'])
+        self.proxy = dbus.SessionBus().get_object ('org.woodchuck',
+                                                   '/org/woodchuck/stream/'
+                                                   + self.properties['UUID'])
         try:
             self.dbus = dbus.Interface (self.proxy,
                                         dbus_interface='org.woodchuck.stream')
@@ -408,9 +403,9 @@ class _Manager():
             assert k in _manager_properties_to_camel_case
 
         self.properties = properties
-        self.proxy = _session_bus.get_object ('org.woodchuck',
-                                              '/org/woodchuck/manager/'
-                                              + self.properties['UUID'])
+        self.proxy = dbus.SessionBus().get_object ('org.woodchuck',
+                                                   '/org/woodchuck/manager/'
+                                                   + self.properties['UUID'])
         self.dbus = dbus.Interface (self.proxy,
                                     dbus_interface='org.woodchuck.manager')
 
@@ -520,6 +515,20 @@ class _Manager():
         except dbus.exceptions.DBusException as exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
+# Establish a connection with the Woodchuck server.
+_woodchuck_object = None
+_woodchuck_server = None
+
+def _woodchuck():
+    global _woodchuck_object
+    global _woodchuck_server
+    if _woodchuck_object is None:
+        _woodchuck_object = dbus.SessionBus().get_object ('org.woodchuck',
+                                                          '/org/woodchuck')
+        _woodchuck_server = dbus.Interface (_woodchuck_object,
+                                            dbus_interface='org.woodchuck')
+    return _woodchuck_server
+
 _managers = {}
 def Manager(**properties):
     """Instantiate a local manager object."""
@@ -532,14 +541,14 @@ def list_managers(recursive=False):
         return [Manager(UUID=UUID, human_readable_name=human_readable_name,
                         cookie=cookie, parent_UUID=parent_UUID)
                 for UUID, cookie, human_readable_name, parent_UUID
-                in _woodchuck.ListManagers (recursive)]
+                in _woodchuck().ListManagers (recursive)]
     except dbus.exceptions.DBusException as exception:
         _dbus_exception_to_woodchuck_exception (exception)
 
 def manager_register(only_if_cookie_unique=True, **properties):
     assert 'parent_UUID' not in properties
     try:
-        UUID = _woodchuck.ManagerRegister \
+        UUID = _woodchuck().ManagerRegister \
             (_keys_convert (properties, _manager_properties_to_camel_case),
              only_if_cookie_unique)
     except dbus.exceptions.DBusException as exception:
@@ -553,7 +562,7 @@ def lookup_manager_by_cookie(cookie, recursive=False):
         return [Manager(UUID=UUID, human_readable_name=human_readable_name,
                         cookie=cookie, parent_UUID=parent_UUID)
                 for UUID, human_readable_name, parent_UUID
-                in _woodchuck.LookupManagerByCookie (cookie, recursive)]
+                in _woodchuck().LookupManagerByCookie (cookie, recursive)]
     except dbus.exceptions.DBusException as exception:
         _dbus_exception_to_woodchuck_exception (exception)
 
