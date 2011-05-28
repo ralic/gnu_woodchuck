@@ -89,13 +89,15 @@ extern enum woodchuck_error woodchuck_manager_lookup_stream_by_cookie
   (const char *manager, const char *cookie, GPtrArray **list, GError **error);
 
 extern enum woodchuck_error woodchuck_manager_feedback_subscribe
-  (const char *manager, bool descendents_too, char **handle, GError **error);
+  (const char *sender, const char *manager, bool descendents_too, char **handle,
+   GError **error);
 
 extern enum woodchuck_error woodchuck_manager_feedback_unsubscribe
-  (const char *manager, const char *handle, GError **error);
+  (const char *sender, const char *manager, const char *handle, GError **error);
 
 extern enum woodchuck_error woodchuck_manager_feedback_ack
-  (const char *manager, const char *object_uuid, uint32_t object_instance,
+  (const char *sender, const char *manager,
+   const char *object_uuid, uint32_t object_instance,
    GError **error);
 
 /* org.woodchuck.stream callbacks.  */

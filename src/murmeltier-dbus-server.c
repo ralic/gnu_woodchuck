@@ -802,7 +802,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	}
 
       ret = woodchuck_manager_feedback_subscribe
-	(path, descendents_too, &handle, &error);
+	(dbus_message_get_sender (message),
+	 path, descendents_too, &handle, &error);
 
       if (ret == 0)
 	dbus_message_append_args (reply, DBUS_TYPE_STRING, &handle,
@@ -827,7 +828,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  goto bad_signature;
 	}
 
-      ret = woodchuck_manager_feedback_unsubscribe (path, handle, &error);
+      ret = woodchuck_manager_feedback_unsubscribe
+	(dbus_message_get_sender (message), path, handle, &error);
     }
   else if (type == manager && strcmp (method, "FeedbackAck") == 0)
     {
@@ -849,7 +851,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	}
 
       ret = woodchuck_manager_feedback_ack
-	(path, object_uuid, object_instance, &error);
+	(dbus_message_get_sender (message), path, object_uuid, object_instance,
+	 &error);
     }
   else if (type == object && strcmp (method, "Unregister") == 0)
     {

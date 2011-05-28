@@ -962,7 +962,8 @@ woodchuck_manager_lookup_stream_by_cookie
 
 enum woodchuck_error
 woodchuck_manager_feedback_subscribe
-  (const char *manager, bool descendents_too, char **handle, GError **error)
+  (const char *sender, const char *manager, bool descendents_too, char **handle,
+   GError **error)
 {
 #warning Implement woodchuck_manager_feedback_subscribe
   return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
@@ -970,7 +971,7 @@ woodchuck_manager_feedback_subscribe
 
 enum woodchuck_error
 woodchuck_manager_feedback_unsubscribe
-  (const char *manager, const char *handle, GError **error)
+  (const char *sender, const char *manager, const char *handle, GError **error)
 {
 #warning Implement woodchuck_manager_feedback_unsubscribe
   return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
@@ -978,8 +979,8 @@ woodchuck_manager_feedback_unsubscribe
 
 enum woodchuck_error
 woodchuck_manager_feedback_ack
-  (const char *manager, const char *object_uuid, uint32_t instance,
-   GError **error)
+  (const char *sender, const char *manager,
+   const char *object_uuid, uint32_t instance, GError **error)
 {
 #warning Implement woodchuck_manager_feedback_ack
   return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
