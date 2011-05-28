@@ -968,7 +968,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	    }
 
 	  ret = woodchuck_object_download_status
-	    (path, indicator, status, transferred_up, transferred_down,
+	    (path, status, indicator, transferred_up, transferred_down,
 	     download_time, download_duration, object_size,
 	     files, files_count, &error);
 	}
@@ -984,7 +984,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  dbus_message_iter_next (&outer_iter);
 
 	  ret = woodchuck_stream_update_status
-	    (path, indicator, status, transferred_up, transferred_down,
+	    (path, status, indicator, transferred_up, transferred_down,
 	     download_time, download_duration, new_objects,
 	     updated_objects, objects_inline, &error);
 	}

@@ -18,6 +18,7 @@
 # Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111, USA.
 
 import dbus
+import dbus.service
 import time
 
 """A low-level wrapper of the org.woodchuck DBus interfaces."""
@@ -409,6 +410,9 @@ class _Manager():
         self.dbus = dbus.Interface (self.proxy,
                                     dbus_interface='org.woodchuck.manager')
 
+        self.feedback_subscriptions = 0
+        self.feedback_subscription_handle = None
+
     def __repr__(self):
         return self.properties.__repr__ ()
     def __str__(self):
@@ -489,12 +493,13 @@ class _Manager():
             _dbus_exception_to_woodchuck_exception (exception)
 
     def feedback_subscribe(self, descendents_too=True):
-        if self.feedback_subscription:
+        if self.feedback_subscription_handle is not None:
             # Already subscribed.
+            print "Already subscribed..."
             self.feedback_subscriptions += 1
             return
 
-        self.feedback_subscription \
+        self.feedback_subscription_handle \
             = self.dbus.FeedbackSubscribe (descendents_too)
 
     def feedback_unsubscribe(self):
@@ -504,10 +509,10 @@ class _Manager():
             self.feedback_subscriptions -= 1
             if self.feedback_subscriptions == 0:
                 try:
-                    self.dbus.FeedbackAck (self.feedback_subscription)
+                    self.dbus.FeedbackAck (self.feedback_subscription_handle)
                 except dbus.exceptions.DBusException as exception:
                     _dbus_exception_to_woodchuck_exception (exception)
-                self.feedback_subscription = None
+                self.feedback_subscription_handle = None
 
     def feedback_ack(self, object_UUID, object_instance):
         try:
@@ -565,6 +570,137 @@ def lookup_manager_by_cookie(cookie, recursive=False):
                 in _woodchuck().LookupManagerByCookie (cookie, recursive)]
     except dbus.exceptions.DBusException as exception:
         _dbus_exception_to_woodchuck_exception (exception)
+
+# As there is only a single woodchuck instance, tracking the Woodchuck
+# instance and checking whether messages comes from it can be shared
+# by all instances of Upcalls.
+_watching_woodchuck_owner = False
+_woodchuck_owner = None
+
+def _woodchuck_owner_update(new_owner):
+    """DBus watch name owner call back.  (Initialized the first time
+    the Upcalls class is instantiated.)"""
+    global _woodchuck_owner
+    _woodchuck_owner = new_owner
+
+def _is_woodchuck(name):
+    """Return whether NAME is the private dbus name of the woodchuck
+    daemon."""
+    if name[0] != ':':
+        raise ValueError(("%s is not a private DBus name "
+                          "(should start with ':')") % (name,))
+
+    if name != _woodchuck_owner:
+        print ("Message from %s, expected message from %s" \
+                   % (name, _woodchuck_owner))
+
+    return name == _woodchuck_owner
+
+class Upcalls(dbus.service.Object):
+    """A thin wrapper around org.woodchuck.upcalls."""
+    def __init__(self, path):
+        """PATH is the object that will receive the upcalls from
+        woodchuck.  Inherit from this class and implement the
+        corresponding virtual methods."""
+        bus = dbus.SessionBus()
+
+        dbus.service.Object.__init__(self, bus, path)
+
+        if not _watching_woodchuck_owner:
+            bus.watch_name_owner ("org.woodchuck", _woodchuck_owner_update)
+            _woodchuck_owner_update (bus.get_name_owner ("org.woodchuck"))
+
+    @dbus.service.method(dbus_interface='org.woodchuck.upcall',
+                         in_signature='ssssssuu(ustub)sttt',
+                         out_signature='',
+                         sender_keyword="sender")
+    def ObjectDownloaded(self, manager_UUID, manager_cookie,
+                         stream_UUID, stream_cookie,
+                         object_UUID, object_cookie,
+                         status, instance, version, filename, size,
+                         trigger_target, trigger_fired, sender):
+        if not _is_woodchuck (sender):
+            return False
+
+        return self.object_downloaded_cb(manager_UUID, manager_cookie,
+                                         stream_UUID, stream_cookie,
+                                         object_UUID, object_cookie,
+                                         status, instance, version,
+                                         filename, size,
+                                         trigger_target, trigger_fired)
+
+    def object_downloaded_cb(self, manager_UUID, manager_cookie,
+                             stream_UUID, stream_cookie,
+                             object_UUID, object_cookie,
+                             status, instance, version, filename, size,
+                             trigger_target, trigger_fired):
+        """Virtual method that should be implemented by the child
+        class if it is interested in
+        org.woodchuck.upcall.ObjectDownloaded upcalls."""
+        pass
+    
+    @dbus.service.method(dbus_interface='org.woodchuck.upcall',
+                         in_signature='ssss', out_signature='',
+                         sender_keyword="sender")
+    def StreamUpdate(self, manager_UUID, manager_cookie,
+                     stream_UUID, stream_cookie, sender):
+        if not _is_woodchuck (sender):
+            return False
+
+        self.stream_update_cb (manager_UUID, manager_cookie,
+                               stream_UUID, stream_cookie)
+
+    def stream_update_cb(self, manager_UUID, manager_cookie,
+                         stream_UUID, stream_cookie):
+        """Virtual method that should be implemented by the child
+        class if it is interested in
+        org.woodchuck.upcall.StreamUpdate upcalls."""
+        pass
+    
+    @dbus.service.method(dbus_interface='org.woodchuck.upcall',
+                         in_signature='ssssss(ustub)su', out_signature='',
+                         sender_keyword="sender")
+    def ObjectDownload(self, manager_UUID, manager_cookie,
+                       stream_UUID, stream_cookie,
+                       object_UUID, object_cookie,
+                       version, filename, quality, sender):
+        if not _is_woodchuck (sender):
+            return False
+
+        self.object_download_cb (manager_UUID, manager_cookie,
+                              stream_UUID, stream_cookie,
+                              object_UUID, object_cookie,
+                              version, filename, quality)
+
+    def object_download_cb (self, manager_UUID, manager_cookie,
+                            stream_UUID, stream_cookie,
+                            object_UUID, object_cookie,
+                            version, filename, quality):
+        """Virtual method that should be implemented by the child
+        class if it is interested in
+        org.woodchuck.upcall.ObjectDownload upcalls."""
+        pass
+
+    @dbus.service.method(dbus_interface='org.woodchuck.upcall',
+                         in_signature='ssssss', out_signature='',
+                         sender_keyword="sender")
+    def ObjectDeleteFiles(self, manager_UUID, manager_cookie,
+                          stream_UUID, stream_cookie,
+                          object_UUID, object_cookie, sender):
+        if not _is_woodchuck (sender):
+            return False
+
+        self.object_delete_files_cb (manager_UUID, manager_cookie,
+                                     stream_UUID, stream_cookie,
+                                     object_UUID, object_cookie)
+
+    def object_delete_files_cb (self, manager_UUID, manager_cookie,
+                                stream_UUID, stream_cookie,
+                                object_UUID, object_cookie):
+        """Virtual method that should be implemented by the child
+        class if it is interested in
+        org.woodchuck.upcall.ObjectDeleteFiles upcalls."""
+        pass
 
 if __name__ == "__main__":
     import random

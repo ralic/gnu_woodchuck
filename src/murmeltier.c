@@ -29,6 +29,8 @@
 
 #include "murmeltier-dbus-server.h"
 
+#include "org.woodchuck.upcall.h"
+
 #include "debug.h"
 #include "util.h"
 #include "dotdir.h"
@@ -40,7 +42,15 @@ murmeltier_error_quark (void)
   return g_quark_from_static_string ("murmeltier");
 }
 
-static sqlite3 *db = NULL;
+struct subscription
+{
+  char *manager;
+  gboolean descendents_too;
+  char *dbus_name;
+  DBusGProxy *proxy;
+  char *handle;
+  char data[];
+};
 
 typedef struct _Murmeltier Murmeltier;
 typedef struct _MurmeltierClass MurmeltierClass;
@@ -61,12 +71,377 @@ struct _Murmeltier
 {
   GObject parent;
 
+  DBusGProxy *dbus_proxy;
+
   NCNetworkMonitor *nm;
 
+  DBusGConnection *session_bus;
+
   sqlite3 *connectivity_db;
+
+  /* Subscription management variables.  */
+
+  /* A hash from a subscription handle to a struct subscription *.  */
+  GHashTable *handle_to_subscription_hash;
+  /* A hash from a manager's UUID to a GSList * of struct subscription
+     *.  */
+  GHashTable *manager_to_subscription_list_hash;
+  /* A hash from a client's bus name to a GSList * of struct
+     subscription *.  */
+  GHashTable *bus_name_to_subscription_list_hash;
 };
 
+/* There is a single instance.  */
+static Murmeltier *mt;
+static sqlite3 *db = NULL;
+
 extern GType murmeltier_get_type (void);
+
+static guint schedule_id;
+
+static gboolean
+do_schedule (gpointer user_data)
+{
+#warning Support notifications for nested managers.
+  if (schedule_id)
+    g_source_remove (schedule_id);
+  schedule_id = 0;
+
+  NCNetworkConnection *dc = nc_network_monitor_default_connection (mt->nm);
+  if (! dc)
+    /* No connection.  */
+    goto out;
+
+  if ((nc_network_connection_mediums (dc)
+       & ~(NC_CONNECTION_MEDIUM_ETHERNET|NC_CONNECTION_MEDIUM_WIFI)) != 0)
+    /* Only use ethernet and wifi based connections.  */
+    goto out;
+
+  /* The following is a very simple scheduler.  We look for streams
+     and objects that have not been updated recently and update
+     them.  */
+
+  uint64_t n = now ();
+
+  int streams_callback (void *cookie, int argc, char **argv, char **names)
+  {
+    int i = 0;
+    const char *stream_uuid = argv[i] ?: ""; i ++;
+    const char *stream_cookie = argv[i] ?: ""; i ++;
+    const char *manager_uuid = argv[i] ?: ""; i ++;
+    const char *manager_cookie = argv[i] ?: ""; i ++;
+    uint32_t freshness = argv[i] ? atoi (argv[i]) : 0; i ++;
+    uint64_t download_time = argv[i] ? atoll (argv[i]) : 0; i ++;
+    uint32_t last_trys_status = argv[i] ? atoi (argv[i]) : 0; i ++;
+
+    if (freshness == UINT32_MAX)
+      /* Never update this stream.  */
+      return 0;
+
+    if (download_time && download_time + freshness / 4 * 3 > n / 1000)
+      /* The content is fresh enough.  */
+      return 0;
+
+    GSList *list = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
+					manager_uuid);
+
+    do_debug (4)
+      {
+	GString *s = g_string_new ("");
+	g_string_append_printf
+	  (s, "Stream: %s, %s; Manager: %s, %s; "
+	   "Freshness: %"PRId32"; Download time: %"PRId64"/delta: "TIME_FMT"; "
+	   "last try's status: %"PRId32" ->",
+	   stream_uuid, stream_cookie, manager_uuid, manager_cookie,
+	   freshness, download_time,
+	   TIME_PRINTF (download_time == 0 ? 0 : (download_time * 1000 - n)),
+	   last_trys_status);
+
+	if (! list)
+	  g_string_append_printf (s, " NONE");
+	else
+	  {
+	    GSList *l = list;
+	    while (l)
+	      {
+		g_string_append_printf
+		  (s, " %s", ((struct subscription *) l->data)->dbus_name);
+		l = l->next;
+	      }
+	  }
+	debug (3, "%s", s->str);
+	g_string_free (s, TRUE);
+      }
+
+    while (list)
+      {
+	struct subscription *s = list->data;
+	list = list->next;
+
+	GError *error = NULL;
+	if (! (org_woodchuck_upcall_stream_update
+	       (s->proxy, manager_uuid, manager_cookie,
+		stream_uuid, stream_cookie, &error)))
+	  {
+	    debug (0, "Executing org_woodchuck_upcall_stream_update "
+		   "(%s, %s, %s, %s, %s) upcall failed: %s",
+		   s->handle, manager_uuid, manager_cookie,
+		   stream_uuid, stream_cookie,
+		   error ? error->message : "<Unknown>");
+
+	    if (error)
+	      g_error_free (error);
+	    error = NULL;
+	  }
+      }
+
+    return 0;
+  }
+  char *errmsg = NULL;
+  int err = sqlite3_exec
+    (db,
+     "select streams.uuid, streams.cookie,"
+     "  streams.parent_uuid, managers.cookie,"
+     "  streams.Freshness, stream_updates.download_time, stream_updates.status"
+     " from streams left join stream_updates"
+     " on (streams.uuid == stream_updates.uuid"
+     /* MAX(STREAMS_UPDATES.INSTANCE) == STREAMS.INSTANCE + 1 */
+     "     and streams.instance == stream_updates.instance + 1)"
+     " join managers on streams.parent_uuid == managers.uuid"
+     /* A value of -1 means never update.  */
+     " where streams.Freshness != (1 << 32)-1;",
+     streams_callback, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%s", errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+  int objects_callback (void *cookie, int argc, char **argv, char **names)
+  {
+    int i = 0;
+    const char *object_uuid = argv[i] ?: ""; i ++;
+    const char *object_cookie = argv[i] ?: ""; i ++;
+    const char *stream_uuid = argv[i] ?: ""; i ++;
+    const char *stream_cookie = argv[i] ?: ""; i ++;
+    const char *manager_uuid = argv[i] ?: ""; i ++;
+    const char *manager_cookie = argv[i] ?: ""; i ++;
+    uint32_t download_frequency = argv[i] ? atoi (argv[i]) : 0; i ++;
+    uint64_t download_time = argv[i] ? atoll (argv[i]) : 0; i ++;
+    uint32_t last_trys_status = argv[i] ? atoi (argv[i]) : 0; i ++;
+    uint64_t trigger_target = argv[i] ? atoll (argv[i]) : 0; i ++;
+    uint64_t trigger_earliest = argv[i] ? atoll (argv[i]) : 0; i ++;
+    uint64_t trigger_latest = argv[i] ? atoll (argv[i]) : 0; i ++;
+    int instance = argv[i] ? atoi (argv[i]) : 0; i ++;
+
+    if (download_time && last_trys_status == 0 && download_frequency == 0)
+      /* The object has been successfully downloaded and it is a
+	 one-shot object.  Ignore.  */
+      return 0;
+
+    if (last_trys_status == 0
+	&& download_time
+	&& download_time + download_frequency / 4 * 3 > n / 1000)
+      /* The content is fresh enough.  */
+      return 0;
+
+    GSList *list = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
+					manager_uuid);
+
+    do_debug (4)
+      {
+	GString *s = g_string_new ("");
+	g_string_append_printf
+	  (s, "Object: %s, %s; Stream: %s, %s; Manager: %s, %s; "
+	   "download frequency: %"PRId32", "
+	   "time: @ %"PRId64"/delta: "TIME_FMT"; "
+	   "last try's status: %"PRId32"; "
+	   "trigger: <%"PRId64", %"PRId64", %"PRId64">; instance: %d; "
+	   "subscriptions: ",
+	   object_uuid, object_cookie,
+	   stream_uuid, stream_cookie, manager_uuid, manager_cookie,
+	   download_frequency, download_time,
+	   TIME_PRINTF (download_time == 0 ? 0 : (download_time * 1000 - n)),
+	   last_trys_status, trigger_target, trigger_earliest, trigger_latest,
+	   instance);
+
+	if (! list)
+	  g_string_append_printf (s, " NONE");
+	else
+	  {
+	    GSList *l = list;
+	    while (l)
+	      {
+		g_string_append_printf
+		  (s, " %s", ((struct subscription *) l->data)->dbus_name);
+		l = l->next;
+	      }
+	  }
+	debug (3, "%s", s->str);
+	g_string_free (s, TRUE);
+      }
+
+    while (list)
+      {
+	struct subscription *s = list->data;
+	list = list->next;
+
+	GValueArray *versions = g_value_array_new (5);
+
+	GValue index_value = { 0 };
+	g_value_init (&index_value, G_TYPE_UINT);
+	g_value_set_uint (&index_value, 0);
+	g_value_array_append (versions, &index_value);
+
+#warning Get the real values from the object_versions table.
+	GValue url_value = { 0 };
+	g_value_init (&url_value, G_TYPE_STRING);
+	g_value_set_static_string (&url_value, "");
+	g_value_array_append (versions, &url_value);
+
+	GValue expected_size_value = { 0 };
+	g_value_init (&expected_size_value, G_TYPE_UINT64);
+	g_value_set_uint64 (&expected_size_value, 0);
+	g_value_array_append (versions, &expected_size_value);
+
+	GValue utility_value = { 0 };
+	g_value_init (&utility_value, G_TYPE_UINT);
+	g_value_set_uint (&utility_value, 1);
+	g_value_array_append (versions, &utility_value);
+
+	GValue use_simple_downloader_value = { 0 };
+	g_value_init (&use_simple_downloader_value, G_TYPE_BOOLEAN);
+	g_value_set_boolean (&use_simple_downloader_value, FALSE);
+	g_value_array_append (versions, &use_simple_downloader_value);
+
+	GError *error = NULL;
+	if (! (org_woodchuck_upcall_object_download
+	       (s->proxy, manager_uuid, manager_cookie,
+		stream_uuid, stream_cookie, object_uuid, object_cookie,
+		versions, "", 5, &error)))
+	  {
+	    debug (0, "Executing org_woodchuck_upcall_object_download "
+		   "(%s, %s, %s, %s, %s, %s, %s, [], '', 5) upcall failed: %s",
+		   s->handle, manager_uuid, manager_cookie,
+		   stream_uuid, stream_cookie,
+		   object_uuid, object_cookie,
+		   error ? error->message : "<Unknown>");
+
+	    if (error)
+	      g_error_free (error);
+	    error = NULL;
+	  }
+      }
+
+    return 0;
+  }
+  errmsg = NULL;
+  err = sqlite3_exec
+    (db,
+     "select objects.uuid, objects.cookie,"
+     "  streams.uuid, streams.cookie,"
+     "  streams.parent_uuid, managers.cookie,"
+     "  objects.DownloadFrequency, object_instance_status.download_time,"
+     "  object_instance_status.status,"
+     "  objects.TriggerTarget, objects.TriggerEarliest, objects.TriggerLatest,"
+     "  objects.instance"
+     " from objects left join object_instance_status"
+     " on (objects.uuid == object_instance_status.uuid"
+     /* MAX(OBJECT_INSTANCE_STATUS.INSTANCE) == OBJECTS.INSTANCE + 1 */
+     "     and objects.Instance == object_instance_status.instance + 1)"
+     " join streams on objects.parent_uuid == streams.uuid"
+     " join managers on managers.uuid == streams.parent_uuid;",
+     objects_callback, NULL, &errmsg);
+  if (errmsg)
+    {
+      debug (0, "%s", errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+    }
+
+ out:
+  /* Don't call again.  */
+  return FALSE;
+}
+
+/* Call this when it appears that an action can be executed, e.g.,
+   updating a stream or downloading an object.  */
+static void
+schedule (void)
+{
+  if (schedule_id)
+    return;
+
+  /* Delay for a couple of seconds to aggregate multiple events.  */
+  schedule_id = g_timeout_add_seconds (2, do_schedule, NULL);
+}
+
+/* When a client exits, clean up any feedback subscriptions it may
+   have.  */
+static void
+dbus_name_owner_changed_cb (DBusGProxy *proxy,
+			    const char *name, const char *old_owner,
+			    const char *new_owner,
+			    gpointer user_data)
+{
+  if (! name)
+    return;
+  if (name[0] != ':')
+    /* We are only interested in private names.  */
+    return;
+
+  GSList *list = g_hash_table_lookup (mt->bus_name_to_subscription_list_hash,
+				      old_owner);
+  while (list)
+    /* Be careful how we traverse the list:
+       woodchuck_manager_feedback_unsubscribe modifies it!  */
+    {
+      struct subscription *s = list->data;
+      list = list->next;
+
+      int ret = woodchuck_manager_feedback_unsubscribe (s->dbus_name,
+							s->manager, s->handle,
+							NULL);
+      if (ret)
+	debug (0, "Removing owner:%s, manager:%s, handle:%s: %s",
+	       s->dbus_name, s->manager, s->handle,
+	       woodchuck_error_to_error (ret));
+    }
+}
+
+static gboolean
+schedule_periodically (gpointer user_data)
+{
+  schedule ();
+
+  /* Run again.  */
+  return true;
+}
+
+/* A new connection has been established.  */
+static void
+new_connection (NCNetworkMonitor *nm, NCNetworkConnection *nc,
+		gpointer user_data)
+{
+}
+
+/* An existing connection has been brought down.  */
+static void
+disconnected (NCNetworkMonitor *nm, NCNetworkConnection *nc,
+	      gpointer user_data)
+{
+}
+
+/* There is a new default connection.  */
+static void
+default_connection_changed (NCNetworkMonitor *nm,
+			    NCNetworkConnection *old_default,
+			    NCNetworkConnection *new_default,
+			    gpointer user_data)
+{
+  schedule ();
+}
 
 G_DEFINE_TYPE (Murmeltier, murmeltier, G_TYPE_OBJECT);
 
@@ -83,95 +458,42 @@ murmeltier_class_init (MurmeltierClass *klass)
 }
 
 static void
-connection_dump (NCNetworkConnection *nc)
-{
-  GList *n = nc_network_connection_info (nc, -1);
-  while (n)
-    {
-      GList *e = n;
-      n = e->next;
-
-      struct nc_device_info *info = e->data;
-
-      printf ("Interface: %s\n", info->interface);
-      char *medium = nc_connection_medium_to_string (info->medium);
-      printf ("  Medium: %s\n", medium);
-      g_free (medium);
-      printf ("  IP: %d.%d.%d.%d\n",
-	      info->ip4[0], info->ip4[1], info->ip4[2], info->ip4[3]);
-      printf ("  Gateway: %d.%d.%d.%d\n",
-	      info->gateway4[0], info->gateway4[1],
-	      info->gateway4[2], info->gateway4[3]);
-      printf ("  Gateway MAC: %x:%x:%x:%x:%x:%x\n",
-	      info->gateway_hwaddr[0],
-	      info->gateway_hwaddr[1],
-	      info->gateway_hwaddr[2],
-	      info->gateway_hwaddr[3],
-	      info->gateway_hwaddr[4],
-	      info->gateway_hwaddr[5]);
-      printf ("  Access point: %s\n", info->access_point);
-      printf ("  Stats tx/rx: "BYTES_FMT"/"BYTES_FMT"\n",
-	      BYTES_PRINTF (info->stats.tx),
-	      BYTES_PRINTF (info->stats.rx));
-
-      g_free (e->data);
-      g_list_free_1 (e);
-    }
-}
-
-static gboolean
-connections_dump (gpointer user_data)
-{
-  Murmeltier *mt = MURMELTIER (user_data);
-  NCNetworkMonitor *m = mt->nm;
-
-  GList *e = nc_network_monitor_connections (m);
-  while (e)
-    {
-      NCNetworkConnection *c = e->data;
-      GList *n = e->next;
-      g_list_free_1 (e);
-      e = n;
-
-      connection_dump (c);
-    }
-
-  return true;
-}
-
-/* A new connection has been established.  */
-static void
-new_connection (NCNetworkMonitor *nm, NCNetworkConnection *nc,
-		gpointer user_data)
-{
-  printf (DEBUG_BOLD ("New %sconnection!!!")"\n",
-	  nc_network_connection_is_default (nc) ? "DEFAULT " : "");
-
-  connection_dump (nc);
-}
-
-/* An existing connection has been brought down.  */
-static void
-disconnected (NCNetworkMonitor *nm, NCNetworkConnection *nc,
-	      gpointer user_data)
-{
-  printf ("\nDisconnected!!!\n\n");
-}
-
-/* There is a new default connection.  */
-static void
-default_connection_changed (NCNetworkMonitor *nm,
-			    NCNetworkConnection *old_default,
-			    NCNetworkConnection *new_default,
-			    gpointer user_data)
-{
-  printf (DEBUG_BOLD ("Default connection changed!!!")"\n");
-}
-
-static void
 murmeltier_init (Murmeltier *mt)
 {
   // MurmeltierClass *klass = MURMELTIER_GET_CLASS (mt);
+
+  GError *error = NULL;
+  mt->session_bus = dbus_g_bus_get (DBUS_BUS_SESSION, &error);
+  if (error)
+    {
+      g_critical ("%s: Getting system bus: %s", __FUNCTION__, error->message);
+      g_error_free (error);
+    }
+
+  mt->handle_to_subscription_hash
+    = g_hash_table_new (g_str_hash, g_str_equal);
+  mt->manager_to_subscription_list_hash
+    = g_hash_table_new (g_str_hash, g_str_equal);
+  mt->bus_name_to_subscription_list_hash
+    = g_hash_table_new (g_str_hash, g_str_equal);
+  
+
+  mt->dbus_proxy = dbus_g_proxy_new_for_name
+    (mt->session_bus, "org.freedesktop.DBus",
+     "/org/freedesktop/DBus", "org.freedesktop.DBus");
+
+  dbus_g_proxy_add_signal (mt->dbus_proxy,
+			   "NameOwnerChanged",
+			   G_TYPE_STRING, G_TYPE_STRING, G_TYPE_STRING,
+			   G_TYPE_INVALID);
+  dbus_g_proxy_connect_signal (mt->dbus_proxy, "NameOwnerChanged",
+			       G_CALLBACK (dbus_name_owner_changed_cb),
+			       NULL, NULL);
+
+  /* Approximately every hour, check to see if there is something that
+     needs to be downloaded.  */
+  g_timeout_add_seconds (60 * 60, schedule_periodically, mt);
+
 
   /* Initialize the network monitor.  */
   mt->nm = nc_network_monitor_new ();
@@ -182,8 +504,6 @@ murmeltier_init (Murmeltier *mt)
 		    G_CALLBACK (disconnected), mt);
   g_signal_connect (G_OBJECT (mt->nm), "default-connection-changed",
 		    G_CALLBACK (default_connection_changed), mt);
-
-  g_timeout_add_seconds (5 * 60, connections_dump, mt);
 }
 
 static enum woodchuck_error
@@ -494,6 +814,8 @@ object_register (const char *parent, const char *parent_table,
   abort_transaction = false;
 
   assert (*uuid);
+
+  schedule ();
  out:
   if (abort_transaction)
     {
@@ -965,16 +1287,116 @@ woodchuck_manager_feedback_subscribe
   (const char *sender, const char *manager, bool descendents_too, char **handle,
    GError **error)
 {
-#warning Implement woodchuck_manager_feedback_subscribe
-  return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+  if (descendents_too)
+#warning Support notifications for nested managers.
+    return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+
+  int sender_len = strlen (sender);
+  int manager_len = strlen (manager);
+  struct subscription *s = g_malloc (sizeof (*s) + sender_len + 1
+				     + manager_len + 1
+				     + sender_len + 1 + 16 + 1);
+
+  s->proxy = dbus_g_proxy_new_for_name
+    (mt->session_bus, sender, "/org/woodchuck", "org.woodchuck.upcall");
+
+  s->descendents_too = descendents_too;
+
+  char *p = s->data;
+  s->dbus_name = p;
+  p = mempcpy (p, sender, sender_len + 1);
+  s->manager = p;
+  p = mempcpy (p, manager, manager_len + 1);
+
+  static uint64_t c;
+  s->handle = p;
+  snprintf (p, sender_len + 1 + 16, "%s.%"PRIx64, sender, c ++);
+  /* Ensure that it is NUL terminated.  */
+  p[sender_len + 1 + 16] = 0;
+
+
+  /* Add the subscription to the various hashes.  */
+  g_hash_table_insert (mt->handle_to_subscription_hash, s->handle, s);
+
+
+  GSList *l = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
+				   manager);
+  l = g_slist_prepend (l, s);
+  g_hash_table_replace (mt->manager_to_subscription_list_hash, s->manager, l);
+
+
+  l = g_hash_table_lookup (mt->bus_name_to_subscription_list_hash,
+			   s->dbus_name);
+  l = g_slist_prepend (l, s);
+  g_hash_table_replace (mt->bus_name_to_subscription_list_hash,
+			s->dbus_name, l);
+
+  *handle = g_strdup (s->handle);
+
+  return 0;
 }
 
 enum woodchuck_error
 woodchuck_manager_feedback_unsubscribe
   (const char *sender, const char *manager, const char *handle, GError **error)
 {
-#warning Implement woodchuck_manager_feedback_unsubscribe
-  return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+  struct subscription *s
+    = g_hash_table_lookup (mt->handle_to_subscription_hash, handle);
+  if (! s)
+    return WOODCHUCK_ERROR_NO_SUCH_OBJECT;
+
+  /* Remove it from the handle to subscription hash.  */
+  if (! g_hash_table_remove (mt->handle_to_subscription_hash, handle))
+    {
+      debug (0, "Failed to remove %s from handle_to_subscription_hash,"
+	     "but just looked it up!",
+	     handle);
+      assert (0 == 1);
+    }
+
+
+  /* Remove it from the manager to subscription list hash.  */
+  GSList *l = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
+				   manager);
+  l = g_slist_remove (l, s);
+  if (l)
+    g_hash_table_replace (mt->manager_to_subscription_list_hash,
+			  ((struct subscription *) l->data)->manager, l);
+  else
+    {
+      if (! g_hash_table_remove (mt->manager_to_subscription_list_hash,
+				 manager))
+	{
+	  debug (0, "Failed to remove %s from "
+		 "manager_to_subscription_list_hash, but just looked it up!",
+		 manager);
+	  assert (0 == 1);
+	}
+    }
+
+  /* Remove it from the bus name to subscription list hash.  */
+  l = g_hash_table_lookup (mt->bus_name_to_subscription_list_hash,
+			   s->dbus_name);
+  l = g_slist_remove (l, s);
+  if (l)
+    g_hash_table_replace (mt->bus_name_to_subscription_list_hash,
+			  ((struct subscription *) l->data)->dbus_name, l);
+  else
+    {
+      if (! g_hash_table_remove (mt->bus_name_to_subscription_list_hash,
+				 s->dbus_name))
+	{
+	  debug (0, "Failed to remove %s from "
+		 "bus_name_to_subscription_list_hash, but just looked it up!",
+		 s->dbus_name);
+	  assert (0 == 1);
+	}
+    }
+
+
+  g_free (s);
+
+  return 0;
 }
 
 enum woodchuck_error
@@ -1522,7 +1944,7 @@ main (int argc, char *argv[])
 
   murmeltier_dbus_server_init ();
 
-  Murmeltier *mt = MURMELTIER (g_object_new (MURMELTIER_TYPE, NULL));
+  mt = MURMELTIER (g_object_new (MURMELTIER_TYPE, NULL));
   if (! mt)
     {
       debug (0, "Failed to allocate memory.");
