@@ -64,7 +64,7 @@
       <!-- Copies of the object's properties.  -->
       <!-- Index and value of the version to download from the
            versions array (at the time of the upcall).  -->
-      <arg name="Version" type="ustub"/>
+      <arg name="Version" type="(ustub)"/>
       <arg name="Filename" type="s"/>
 
       <!-- Target quality from 1 to 5.  -->
