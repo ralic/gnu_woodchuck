@@ -63,7 +63,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
      from this function.  */
   GSList *array_of_structs_to_free = NULL;
 
-  debug (0, "Invocation of %s.%s on %s", interface_str, method, path);
+  debug (5, "Invocation of %s.%s on %s", interface_str, method, path);
 
   enum
   {
@@ -93,7 +93,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 
   path = &path[sizeof (PATH_ROOT) - 1];
 
-  debug (0, "Path -> '%s'", path);
+  debug (5, "Path -> '%s'", path);
 
 #define PATH_MANAGER "manager/"
 #define PATH_STREAM "stream/"
@@ -106,7 +106,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 
   if (*path == '\0')
     {
-      debug (0, "Object type: root");
+      debug (5, "Object type: root");
       type = root;
       if (! (interface == org_freedesktop_dbus_introspectable
 	     || interface == org_woodchuck))
@@ -117,7 +117,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
       path ++;
       if (strncmp (path, PATH_MANAGER, sizeof (PATH_MANAGER) - 1) == 0)
 	{
-	  debug (0, "Object type: manager");
+	  debug (5, "Object type: manager");
 	  path += sizeof (PATH_MANAGER) - 1;
 	  type = manager;
 	  if (! (interface == org_freedesktop_dbus_introspectable
@@ -126,7 +126,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	}
       else if (strncmp (path, PATH_STREAM, sizeof (PATH_STREAM) - 1) == 0)
 	{
-	  debug (0, "Object type: stream");
+	  debug (5, "Object type: stream");
 	  path += sizeof (PATH_STREAM) - 1;
 	  type = stream;
 	  if (! (interface == org_freedesktop_dbus_introspectable
@@ -135,7 +135,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	}
       if (strncmp (path, PATH_OBJECT, sizeof (PATH_OBJECT) - 1) == 0)
 	{
-	  debug (0, "Object type: object");
+	  debug (5, "Object type: object");
 	  path += sizeof (PATH_OBJECT) - 1;
 	  type = object;
 	  if (! (interface == org_freedesktop_dbus_introspectable
@@ -148,7 +148,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
   if (! type || path[hexdigits] != '\0')
     /* Bad object name.  */
     {
-      debug (0, "Bad object name: %s.", path);
+      debug (3, "Bad object name: %s.", path);
       error = g_error_new (DBUS_GERROR, 0, "%s: No such object.",
 			   dbus_message_get_path (message));
       error_name = DBUS_ERROR_UNKNOWN_OBJECT;
@@ -161,7 +161,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
       goto bad_method;
     }
 
-  debug (0, "Object is '%s'", path);
+  debug (5, "Object is '%s'", path);
 
   /* Demux and demarshal.  */
   if (interface == org_freedesktop_dbus_introspectable
@@ -260,7 +260,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 
 	      char *key = NULL;
 	      dbus_message_iter_get_basic (&dict_entry_iter, &key);
-	      debug (0, "Dict entry key: %s", key);
+	      debug (5, "Dict entry key: %s", key);
 
 	      dbus_message_iter_next (&dict_entry_iter);
 	      arg_type = dbus_message_iter_get_arg_type (&dict_entry_iter);
@@ -271,14 +271,14 @@ process_message (DBusConnection *connection, DBusMessage *message,
 		  dbus_message_iter_recurse (&dict_entry_iter, &variant_iter);
 
 		  arg_type = dbus_message_iter_get_arg_type (&variant_iter);
-		  debug (0, "Key %s's value has type '%c'", key, arg_type);
+		  debug (5, "Key %s's value has type '%c'", key, arg_type);
 		  switch (arg_type)
 		    {
 		    case DBUS_TYPE_STRING:
 		      {
 			char *value = NULL;
 			dbus_message_iter_get_basic (&variant_iter, &value);
-			debug (0, "Dict entry value: %s", value);
+			debug (5, "Dict entry value: %s", value);
 
 			g_value_init (&values[i], G_TYPE_STRING);
 			g_value_set_static_string (&values[i], value);
@@ -288,7 +288,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 		      {
 			uint32_t value = 10011001;
 			dbus_message_iter_get_basic (&variant_iter, &value);
-			debug (0, "Dict entry value: %d", value);
+			debug (5, "Dict entry value: %d", value);
 
 			g_value_init (&values[i], G_TYPE_UINT);
 			g_value_set_uint (&values[i], value);
@@ -298,7 +298,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 		      {
 			uint64_t value = 10011001;
 			dbus_message_iter_get_basic (&variant_iter, &value);
-			debug (0, "Dict entry value: %"PRId64, value);
+			debug (5, "Dict entry value: %"PRId64, value);
 
 			g_value_init (&values[i], G_TYPE_UINT64);
 			g_value_set_uint64 (&values[i], value);
@@ -452,7 +452,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 		{
 		  char *value = NULL;
 		  dbus_message_iter_get_basic (&dict_entry_iter, &value);
-		  debug (0, "Dict entry value: %s", value);
+		  debug (5, "Dict entry value: %s", value);
 
 		  g_value_init (&values[i], G_TYPE_STRING);
 		  g_value_set_static_string (&values[i], value);
@@ -1094,7 +1094,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
       reply = dbus_message_new_error (message, error_name,
 				      error->message);
 
-      debug (0, "Returning %s: %s", error_name, error->message);
+      debug (3, "Returning %s: %s", error_name, error->message);
 
       g_error_free (error);
       error = NULL;
@@ -1155,7 +1155,7 @@ murmeltier_dbus_server_init (void)
   switch (ret)
     {
     case DBUS_REQUEST_NAME_REPLY_PRIMARY_OWNER:
-      debug (0, "Acquired %s", bus_name);
+      debug (5, "Acquired %s", bus_name);
       break;
     case DBUS_REQUEST_NAME_REPLY_IN_QUEUE:
       debug (0, "Waiting for bus name %s to become free", bus_name);
