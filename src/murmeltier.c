@@ -968,7 +968,7 @@ object_unregister (const char *uuid,
 
 	  g_set_error (error, G_MURMELTIER_ERROR, 0,
 		       "%s has descendents, not removing.", uuid);
-	  ret = WOODCHUCK_ERROR_GENERIC;
+	  ret = WOODCHUCK_ERROR_OBJECT_EXISTS;
 	}
       else if (count == 1)
 	ret = WOODCHUCK_ERROR_NO_SUCH_OBJECT;
