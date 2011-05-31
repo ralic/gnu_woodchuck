@@ -410,8 +410,9 @@ class _Manager():
         self.dbus = dbus.Interface (self.proxy,
                                     dbus_interface='org.woodchuck.manager')
 
-        self.feedback_subscriptions = 0
-        self.feedback_subscription_handle = None
+        # [0]: descendents_too = False; [1]: descendents_too = True
+        self.feedback_subscriptions = [ 0, 0 ];
+        self.feedback_subscription_handle = None;
 
     def __repr__(self):
         return self.properties.__repr__ ()
@@ -493,26 +494,85 @@ class _Manager():
             _dbus_exception_to_woodchuck_exception (exception)
 
     def feedback_subscribe(self, descendents_too=True):
-        if self.feedback_subscription_handle is not None:
-            # Already subscribed.
-            print "Already subscribed..."
-            self.feedback_subscriptions += 1
+        """Request that Woodchuck begin making upcalls for this
+        manager.
+
+        If descendents_too is True, also makes upcalls for 
+
+        Returns an opaque handle that is required by
+        feedback_unsubscribe.
+
+        At most, a single subscription is obtained per Manager.  Thus,
+        multiple subscriptions share the same handle.  To stop
+        receiving feedback, feedback_unsubscribe must be called the
+        same number of times.
+
+        Example::
+
+          subscription = manager.feedback_subscribe (True)
+          ...
+          manager.feedback_unsubscribe(subscription)"""
+        if descendents_too:
+            idx = 1
+        else:
+            idx = 0
+
+        if self.feedback_subscription_handle:
+            # We already have a subscription.
+            if descendents_too and self.feedback_subscriptions[1] == 0:
+                # It does not include descendents, but the new
+                # subscriber wants descendents.  Get a new
+                # subscription (which can be shared).
+                assert self.feedback_subscriptions[0] > 0
+
+                h = self.dbus.FeedbackSubscribe (True)
+                self.dbus.FeedbackUnsubscribe \
+                    (self.feedback_subscription_handle)
+                self.feedback_subscription_handle = h
+
+                self.feedback_subscriptions[idx] += 1
+            else:
+                # We have an acceptable subscription.
+                self.feedback_subscriptions[idx] += 1
+        else:
+            # No subscriptions yet.
+            assert self.feedback_subscriptions[0] == 0
+            assert self.feedback_subscriptions[1] == 0
+
+            self.feedback_subscription_handle \
+                = self.dbus.FeedbackSubscribe (descendents_too)
+            self.feedback_subscriptions[idx] = 1
+
+        return idx
+
+    def feedback_unsubscribe(self, handle):
+        """Cancel an upcall subscription.  HANDLE must be the value
+        returned by feedback_subscribe."""
+
+        assert handle == 0 or handle == 1
+        assert self.feedback_subscriptions[handle] > 0
+
+        if (self.feedback_subscriptions[0]
+            + self.feedback_subscriptions[1] == 1):
+            # No subscriptions left.
+            self.dbus.FeedbackUnsubscribe (self.feedback_subscription_handle)
+            self.feedback_subscription_handle = None
+
+            self.feedback_subscriptions[handle] -= 1
             return
 
-        self.feedback_subscription_handle \
-            = self.dbus.FeedbackSubscribe (descendents_too)
+        if (handle == 1
+            and self.feedback_subscriptions[1] == 1
+            and self.feedback_subscriptions[0] > 0):
+            # The last descendents_too subscription is now gone, but
+            # we still have non-descendent subscriptions.  Get an
+            # appropriate subscription.
+            h = self.dbus.FeedbackSubscribe (False)
+            self.dbus.FeedbackUnsubscribe (self.feedback_subscription_handle)
+            self.feedback_subscription_handle = h
 
-    def feedback_unsubscribe(self):
-        if self.feedback_subscriptions == 0:
-            raise Foo;
-        else:
-            self.feedback_subscriptions -= 1
-            if self.feedback_subscriptions == 0:
-                try:
-                    self.dbus.FeedbackAck (self.feedback_subscription_handle)
-                except dbus.exceptions.DBusException as exception:
-                    _dbus_exception_to_woodchuck_exception (exception)
-                self.feedback_subscription_handle = None
+            self.feedback_subscriptions[1] = 0
+            return
 
     def feedback_ack(self, object_UUID, object_instance):
         try:
