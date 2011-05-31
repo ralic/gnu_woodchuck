@@ -909,7 +909,8 @@ static int
 abort_if_too_many_callback (void *cookie, int argc, char **argv, char **names)
 {
   int *count = cookie;
-  if (count == 0)
+
+  if (*count == 0)
     return 1;
 
   -- *count;
