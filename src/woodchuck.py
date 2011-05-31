@@ -580,20 +580,6 @@ class _Manager():
         except dbus.exceptions.DBusException as exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
-# Establish a connection with the Woodchuck server.
-_woodchuck_object = None
-_woodchuck_server = None
-
-def _woodchuck():
-    global _woodchuck_object
-    global _woodchuck_server
-    if _woodchuck_object is None:
-        _woodchuck_object = dbus.SessionBus().get_object ('org.woodchuck',
-                                                          '/org/woodchuck')
-        _woodchuck_server = dbus.Interface (_woodchuck_object,
-                                            dbus_interface='org.woodchuck')
-    return _woodchuck_server
-
 _managers = {}
 def Manager(**properties):
     """Instantiate a local manager object."""
@@ -601,35 +587,107 @@ def Manager(**properties):
         return _managers[properties['UUID']]
     return _Manager(**properties)
 
-def list_managers(recursive=False):
-    try:
-        return [Manager(UUID=UUID, human_readable_name=human_readable_name,
-                        cookie=cookie, parent_UUID=parent_UUID)
-                for UUID, cookie, human_readable_name, parent_UUID
-                in _woodchuck().ListManagers (recursive)]
-    except dbus.exceptions.DBusException as exception:
-        _dbus_exception_to_woodchuck_exception (exception)
+class _Woodchuck:
+    """The top-level Woodchuck class."""
 
-def manager_register(only_if_cookie_unique=True, **properties):
-    assert 'parent_UUID' not in properties
-    try:
-        UUID = _woodchuck().ManagerRegister \
-            (_keys_convert (properties, _manager_properties_to_camel_case),
-             only_if_cookie_unique)
-    except dbus.exceptions.DBusException as exception:
-        _dbus_exception_to_woodchuck_exception (exception)
+    def __init__(self):
+        # Establish a connection with the Woodchuck server.
+        self._woodchuck_object \
+            = dbus.SessionBus().get_object ('org.woodchuck', '/org/woodchuck')
+        self._woodchuck \
+            = dbus.Interface (self._woodchuck_object,
+                              dbus_interface='org.woodchuck')
 
-    properties['UUID'] = UUID
-    return Manager (**properties)
+    def manager_register(self, only_if_cookie_unique=True, **properties):
+        """Register a new top-level manager.
+    
+        :param only_if_cookie_unique: If True, only succeed if the
+            specified cookie is unique.
+    
+        :param properties: A dict of properties.
+    
+        :returns: An array of :class:`_Manager`
 
-def lookup_manager_by_cookie(cookie, recursive=False):
-    try:
-        return [Manager(UUID=UUID, human_readable_name=human_readable_name,
-                        cookie=cookie, parent_UUID=parent_UUID)
-                for UUID, human_readable_name, parent_UUID
-                in _woodchuck().LookupManagerByCookie (cookie, recursive)]
-    except dbus.exceptions.DBusException as exception:
-        _dbus_exception_to_woodchuck_exception (exception)
+        Example::
+    
+            manager = manager_register(
+                True,
+                {human_readable_name:'BoingBoing.net',
+                 cookie:'http://feeds.boingboing.net/boingboing/iBag',
+                 dbus_service_name:'org.rssreader'})
+        """
+        assert 'parent_UUID' not in properties
+        try:
+            UUID = self._woodchuck.ManagerRegister \
+                (_keys_convert (properties, _manager_properties_to_camel_case),
+                 only_if_cookie_unique)
+        except dbus.exceptions.DBusException as exception:
+            _dbus_exception_to_woodchuck_exception (exception)
+    
+        properties['UUID'] = UUID
+        return Manager (**properties)
+    
+    def list_managers(self, recursive=False):
+        """List known managers.
+
+        :returns: An array of :class:`_Manager`
+
+        Example::
+
+            import woodchuck
+            print "The top-level managers are:"
+            for m in woodchuck.Woodchuck().list_managers (False):
+                print m.human_readable_name ": " m.cookie
+        """
+        try:
+            return [Manager(UUID=UUID, human_readable_name=human_readable_name,
+                            cookie=cookie, parent_UUID=parent_UUID)
+                    for UUID, cookie, human_readable_name, parent_UUID
+                    in self._woodchuck.ListManagers (recursive)]
+        except dbus.exceptions.DBusException as exception:
+            _dbus_exception_to_woodchuck_exception (exception)
+    
+    def lookup_manager_by_cookie(self, cookie, recursive=False):
+        """Return the set of managers with the specified cookie.
+
+        :param cookie: The cookie to lookup.
+        :param recursive: If False, only consider top-level managers,
+            otherwise, consider any manager.
+        :returns: An array of :class:`_Manager`
+
+        Example::
+
+          import woodchuck
+          import random
+
+          w = woodchuck.Woodchuck()
+
+          cookie=str (random.random())
+          m = w.manager_register(True, cookie=cookie,
+              human_readable_name='Test')
+
+          managers = w.lookup_manager_by_cookie(cookie, False)
+          assert len (managers) == 1
+          assert managers[0].UUID == m.UUID
+          assert managers[0].cookie == cookie
+          m.unregister (True)
+          """
+        try:
+            return [Manager(UUID=UUID, human_readable_name=human_readable_name,
+                            cookie=cookie, parent_UUID=parent_UUID)
+                    for UUID, human_readable_name, parent_UUID
+                    in self._woodchuck.LookupManagerByCookie \
+                        (cookie, recursive)]
+        except dbus.exceptions.DBusException as exception:
+            _dbus_exception_to_woodchuck_exception (exception)
+
+_woodchuck = None
+def Woodchuck():
+    """Return a reference to the top-level Woodchuck singleton."""
+    global _woodchuck
+    if _woodchuck is None:
+        _woodchuck = _Woodchuck()
+    return _woodchuck
 
 # As there is only a single woodchuck instance, tracking the Woodchuck
 # instance and checking whether messages comes from it can be shared
@@ -761,16 +819,17 @@ class Upcalls(dbus.service.Object):
         class if it is interested in
         org.woodchuck.upcall.ObjectDeleteFiles upcalls."""
         pass
-
+
 if __name__ == "__main__":
     import random
     cookie = str (random.random ())
-    print list_managers()
-    manager = manager_register (human_readable_name="Test", cookie=cookie,
-                                only_if_cookie_unique=True)
+    print Woodchuck().list_managers()
+    manager = Woodchuck().manager_register \
+        (human_readable_name="Test", cookie=cookie,
+         only_if_cookie_unique=True)
     try:
         have_one = 0
-        for m in lookup_manager_by_cookie (cookie, False):
+        for m in Woodchuck().lookup_manager_by_cookie (cookie, False):
             print "Considering: " + str (m)
             if m.properties['cookie'] == cookie:
                 have_one += 1

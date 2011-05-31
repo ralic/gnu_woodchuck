@@ -122,7 +122,7 @@ class PyWoodchuck:
                  request_feedback=True):
         try:
             # Try to register a new manager.
-            self.manager = woodchuck.manager_register \
+            self.manager = woodchuck.Woodchuck().manager_register \
                 (only_if_cookie_unique=True,
                  human_readable_name=human_readable_name,
                  cookie=dbus_service_name,
@@ -131,8 +131,8 @@ class PyWoodchuck:
             # Whoops, it failed.  Look up the manager(s) with the
             # cookie.
             self.manager = None
-            for m in woodchuck.lookup_manager_by_cookie (dbus_service_name,
-                                                         False):
+            for m in woodchuck.Woodchuck().lookup_manager_by_cookie \
+                    (dbus_service_name, False):
                 if m.human_readable_name == human_readable_name:
                     # Human readable name also matches.  Looks good.
                     if self.manager is None:
