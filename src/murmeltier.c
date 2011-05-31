@@ -670,8 +670,8 @@ object_register (const char *parent, const char *parent_table,
       char *errmsg = NULL;
       int err = sqlite3_exec_printf
 	(db,
-	 "select uuid from %s where cookie = '%s';",
-	 unique_callback, NULL, &errmsg, object_table, cookie);
+	 "select uuid from %s where cookie = '%s' and parent_uuid='%s';",
+	 unique_callback, NULL, &errmsg, object_table, cookie, parent);
       if (errmsg)
 	{
 	  g_set_error (error, G_MURMELTIER_ERROR, 0,
