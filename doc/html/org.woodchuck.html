@@ -1,0 +1,233 @@
+
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    
+    <title>org.woodchuck &mdash; Woodchuck v0.2 documentation</title>
+    <link rel="stylesheet" href="_static/default.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    '',
+        VERSION:     '0.2',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true
+      };
+    </script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <link rel="top" title="Woodchuck v0.2 documentation" href="index.html" />
+    <link rel="next" title="org.woodchuck.manager" href="org.woodchuck.manager.html" />
+    <link rel="prev" title="Woodchuck" href="woodchuck.html" /> 
+  </head>
+  <body>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="py-modindex.html" title="Python Module Index"
+             >modules</a> |</li>
+        <li class="right" >
+          <a href="org.woodchuck.manager.html" title="org.woodchuck.manager"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="woodchuck.html" title="Woodchuck"
+             accesskey="P">previous</a> |</li>
+        <li><a href="woodchuck.html">Woodchuck v0.2 documentation</a> &raquo;</li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body">
+            
+  <div class="section" id="org-woodchuck">
+<h1>org.woodchuck<a class="headerlink" href="#org-woodchuck" title="Permalink to this headline">¶</a></h1>
+<dl class="class">
+<dt id="org.woodchuck">
+<em class="property">class </em><tt class="descclassname">org.</tt><tt class="descname">woodchuck</tt><a class="headerlink" href="#org.woodchuck" title="Permalink to this definition">¶</a></dt>
+<dd><p>The top-level interface to Woodchuck.</p>
+<p>By default, Woodchuck listens on the session bus.  It registers
+the DBus service name <cite>org.woodchuck</cite> and uses the object
+<cite>/org/woodchuck</cite>.</p>
+<dl class="function">
+<dt id="org.woodchuck.ManagerRegister">
+<tt class="descname">ManagerRegister</tt><big>(</big><em>Properties</em>, <em>OnlyIfCookieUnique</em>, <em>UUID</em><big>)</big><a class="headerlink" href="#org.woodchuck.ManagerRegister" title="Permalink to this definition">¶</a></dt>
+<dd><p>Register a new manager.</p>
+<p>Also see the <a class="reference internal" href="org.woodchuck.manager.html#org.woodchuck.manager.ManagerRegister" title="org.woodchuck.manager.ManagerRegister"><tt class="xref py py-func docutils literal"><span class="pre">org.woodchuck.manager.ManagerRegister()</span></tt></a>.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Returns:</th><td class="field-body"><p class="first">The UUID of a new manager object.  Manipulate the
+manager object using <a class="reference internal" href="org.woodchuck.manager.html#org.woodchuck.manager" title="org.woodchuck.manager"><tt class="xref py py-class docutils literal"><span class="pre">org.woodchuck.manager</span></tt></a>
+interface and the object /org/woodchuck/manager/<cite>UUID</cite>.</p>
+</td>
+</tr>
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>Properties a{sv}</strong> (<em>in</em>) &#8211; <p>Dictionary of initial values for the various
+properties. See the <a class="reference internal" href="org.woodchuck.manager.html#org.woodchuck.manager" title="org.woodchuck.manager"><tt class="xref py py-class docutils literal"><span class="pre">org.woodchuck.manager</span></tt></a>
+interface for the list of properties and their meanings.</p>
+<p>The following properties are required: <cite>HumanReadableName</cite></p>
+<p>Note: The a{ss} type is also supported, but then only
+properties with a string type may be expressed.  (This is a
+concession to dbus-send, as it does not support parameters
+with the variant type.)</p>
+</li>
+<li><strong>OnlyIfCookieUnique b</strong> (<em>in</em>) &#8211; Only succeed if the supplied cookie is unique among all
+top-level managers.</li>
+<li><strong>UUID s</strong> (<em>out</em>) &#8211; The new manager&#8217;s unique identifier (a 16-character
+alpha-numeric string).</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.ListManagers">
+<tt class="descname">ListManagers</tt><big>(</big><em>Recursive</em>, <em>Managers</em><big>)</big><a class="headerlink" href="#org.woodchuck.ListManagers" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return a list of the known managers.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>Recursive b</strong> (<em>in</em>) &#8211; Whether to list all descendents (true) or just top-level
+manager (false).</li>
+<li><strong>Managers a(ssss)</strong> (<em>out</em>) &#8211; An array of &lt;<cite>UUID</cite>, <cite>Cookie, `HumanReadableName</cite>,
+<cite>ParentUUID</cite>&gt;.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.LookupManagerByCookie">
+<tt class="descname">LookupManagerByCookie</tt><big>(</big><em>Cookie</em>, <em>Recursive</em>, <em>Managers</em><big>)</big><a class="headerlink" href="#org.woodchuck.LookupManagerByCookie" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return the managers whose <cite>Cookie</cite> property matches the
+specified cookie.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>Cookie s</strong> (<em>in</em>) &#8211; The cookie to match.</li>
+<li><strong>Recursive b</strong> (<em>in</em>) &#8211; If true, consider any manager.  If false, only consider
+top-level managers.</li>
+<li><strong>Managers a(sss)</strong> (<em>out</em>) &#8211; An array of &lt;<cite>UUID</cite>, <cite>HumanReadableName</cite>, <cite>ParentUUID</cite>&gt;.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.DownloadDesirability">
+<tt class="descname">DownloadDesirability</tt><big>(</big><em>RequestType</em>, <em>Versions</em>, <em>Desirability</em>, <em>Version</em><big>)</big><a class="headerlink" href="#org.woodchuck.DownloadDesirability" title="Permalink to this definition">¶</a></dt>
+<dd><p>Evaluate the desirability of executing a download right now.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>RequestType u</strong> (<em>in</em>) &#8211; <p>The type of request:</p>
+<ul>
+<li>1: User initiated</li>
+<li>2: Application initiated</li>
+</ul>
+</li>
+<li><strong>Versions a(tu)</strong> (<em>in</em>) &#8211; Array of &lt;<cite>ExpectedSize</cite>, <cite>Utility</cite>&gt; tuples.  See
+<a class="reference internal" href="org.woodchuck.object.html#org.woodchuck.object.Versions" title="org.woodchuck.object.Versions"><tt class="xref py py-data docutils literal"><span class="pre">org.woodchuck.object.Versions</span></tt></a> for a description.</li>
+<li><strong>Desirability u</strong> (<em>out</em>) &#8211; <p>The desirability of executing the job now:</p>
+<ul>
+<li>0: Avoid if at all possible.</li>
+<li>5: Now is acceptable but waiting is better.</li>
+<li>9: Now is ideal.</li>
+</ul>
+</li>
+<li><strong>Version u</strong> (<em>out</em>) &#8211; The version to download as an index into the passed
+Versions array.  -1 means do not download anything.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+</dd></dl>
+
+</div>
+
+
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar">
+        <div class="sphinxsidebarwrapper">
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="woodchuck.html"
+                        title="previous chapter">Woodchuck</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="org.woodchuck.manager.html"
+                        title="next chapter">org.woodchuck.manager</a></p>
+  <h3>This Page</h3>
+  <ul class="this-page-menu">
+    <li><a href="_sources/org.woodchuck.txt"
+           rel="nofollow">Show Source</a></li>
+  </ul>
+<div id="searchbox" style="display: none">
+  <h3>Quick search</h3>
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" size="18" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    <p class="searchtip" style="font-size: 90%">
+    Enter search terms or a module, class or function name.
+    </p>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="py-modindex.html" title="Python Module Index"
+             >modules</a> |</li>
+        <li class="right" >
+          <a href="org.woodchuck.manager.html" title="org.woodchuck.manager"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="woodchuck.html" title="Woodchuck"
+             >previous</a> |</li>
+        <li><a href="woodchuck.html">Woodchuck v0.2 documentation</a> &raquo;</li> 
+      </ul>
+    </div>
+    <div class="footer">
+        &copy; Copyright 2011, Neal H. Walfield.
+      Created using <a href="http://sphinx.pocoo.org/">Sphinx</a> 1.0.7.
+    </div>
+  </body>
+</html>

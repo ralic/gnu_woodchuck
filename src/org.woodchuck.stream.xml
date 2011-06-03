@@ -1,85 +1,106 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
-  <!-- Object: /org/woodchuck/STREAM_UUID -->
+  <!-- Object: /org/woodchuck/stream/`StreamUUID`. -->
   <interface name="org.woodchuck.stream">
     <!-- Unregister this stream and any descendent objects.  This does
-         not remove any files, only metadata stored on the woodchuck
-         server.  -->
+         not remove any files, only metadata stored on the Woodchuck
+         server is deleted.  -->
     <method name="Unregister">
-      <!-- If true, fail if this stream has any objects.  -->
-      <arg name="only_if_empty" type="b"/>
+      <!-- If true, fail if this stream has any registered objects.
+           -->
+      <arg name="OnlyIfEmpty" type="b"/>
     </method>
 
     <!-- Register a new object.  -->
     <method name="ObjectRegister">
       <!-- Dictionary of initial values for the various
-           properties. See the org.woodchuck.object interface for a
-           list.
+           properties. See the :class:`org.woodchuck.object` interface
+           for the list of properties and their meanings.
 
-           Note: a{ss} is also supported, but then only properties
-           with a string type may be expressed.
-      -->
-      <arg name="properties" type="a{sv}"/>
+           No properties are required.
 
-      <!-- Only succeed if the supplied cookie is unique.  -->
-      <arg name="only_if_cookie_unique" type="b"/>
+           Note: The a{ss} type is also supported, but then only
+           properties with a string type may be expressed.  (This is a
+           concession to dbus-send, as it does not support parameters
+           with the variant type.)  -->
+      <arg name="Properties" type="a{sv}"/>
 
-      <!-- The stream's unique identifier.  -->
+      <!-- Only succeed if the supplied cookie is unique among all
+           objects in this stream.  -->
+      <arg name="OnlyIfCookieUnique" type="b"/>
+
+      <!-- The new object's unique identifier.  -->
       <arg name="UUID" type="s" direction="out"/>
     </method>
 
     <!-- Return a list of objects in this stream.  -->
     <method name="ListObjects">
-      <!-- Any array of <UUID, COOKIE, HUMAN_READABLE_NAME>.  -->
+      <!-- An array of <`UUID`, `Cookie, `HumanReadableName`,
+           `ParentUUID`>.  -->
       <arg name="Objects" type="a(sss)" direction="out"/>
     </method>
 
-    <!-- Return a list of objects with the cookie COOKIE.  -->
+    <!-- Return the objects whose `Cookie` property matches the
+         specified cookie.  -->
     <method name="LookupObjectByCookie">
+      <!-- The cookie to match.  -->
       <arg name="Cookie" type="s"/>
 
-      <!-- Any array of <UUID, HUMAN_READABLE_NAME>.  -->
+      <!-- An array of <`UUID`, `HumanReadableName`>.  -->
       <arg name="Objects" type="a(ss)" direction="out"/>
     </method>
 
+    <!-- Indicate that a stream has been downloaded.
+
+         This is typically called in reaction to a
+         :func:`org.woodchuck.upcall.StreamUpdate` upcall, but should
+         whenever a stream is updated.
+         -->
     <method name="UpdateStatus">
       <!-- 0: Success.
 
-           Transient errors (will try again later).
-           0x100: Other.
-           0x101: Unable to contact server.
-           0x102: Transfer incomplete.
+           Transient errors (will try again later):
 
-           Hard errors (give up trying to download this object).
-	   0x200: Other.
-           0x201: File gone.
+           * 0x100: Other.
+           * 0x101: Unable to contact server.
+           * 0x102: Transfer incomplete.
+
+           Hard errors (give up trying to download this object):
+
+	   * 0x200: Other.
+           * 0x201: File gone.
       -->
       <arg name="Status" type="u"/>
 
       <!-- The type of indicator displayed to the user, if any.  A
            bitmask of:
 
-             0x1: Audio sound
-	     0x2: Application visual notification
-	     0x4: Desktop visual notification, small, e.g., blinking icon
-	     0x8: Desktop visual notification, large, e.g., system tray
-	          notification
-	     0x10: External visible notification, e.g., an LED
-	     0x20: Vibrate
+             * 0x1: Audio sound
+	     * 0x2: Application visual notification
+	     * 0x4: Desktop visual notification, small, e.g., blinking icon
+	     * 0x8: Desktop visual notification, large, e.g., system tray
+	       notification
+	     * 0x10: External visible notification, e.g., an LED
+	     * 0x20: Vibrate
 
-             0x40: Object-specific notification
-             0x80: Stream-wide notification, i.e., an aggregate
-	           notification for all updates in the stream.
-             0x100: Manager-wide notification, i.e., an aggregate
-	            notification for all updates in the manager.
+             * 0x40: Object-specific notification
+             * 0x80: Stream-wide notification, i.e., an aggregate
+	       notification for all updates in the stream.
+
+             * 0x100: Manager-wide notification, i.e., an aggregate
+	       notification for all updates in the manager.
+
+             * 0x80000000: It is unknown if an indicator was shown.
 
            0 means that no notification was shown.
        -->
       <arg name="Indicator" type="u"/>
 
-      <!-- The approximate number of bytes uploaded.  -->
+      <!-- The approximate number of bytes uploaded.  If unknown, pass
+           -1.  -->
       <arg name="TransferredUp" type="t"/>
-      <!-- The approximate number of bytes downloaded.  -->
+      <!-- The approximate number of bytes downloaded.  If unknown,
+           pass -1.  -->
       <arg name="TransferredDown" type="t"/>
 
       <!-- The time at which the download was started (in seconds
@@ -89,11 +110,13 @@
            Pass 0 if unknown.  -->
       <arg name="DownloadDuration" type="u"/>
 
-      <!-- The number of new objects discovered.  -->
+      <!-- The number of new objects discovered.  If not known, pass
+           -1.  -->
       <arg name="NewObjects" type="u"/>
-      <!-- The objects discovered to have changes.  -->
+      <!-- The objects discovered to have changes.  If not known, pass
+           -1.  -->
       <arg name="UpdatedObjects" type="u"/>
-      <!-- The number of inline updates. -->
+      <!-- The number of inline updates.  If not known, pass -1.  -->
       <arg name="ObjectsInline" type="u"/>
     </method>
 
@@ -101,18 +124,17 @@
     <!-- The manager this streams belongs to.  -->
     <property name="ParentUUID" type="s" access="read"/>
 
-    <!-- A human readable name for the manager.  When displaying a
-         manager's human readable name, the human readable name of
-         each of its ancestors as well as its own will be concatenated
-         together.  Thus, if the manager's parent is called "Firefox"
-         and it has a child web cache, the human readable name of the
-         child should be "Web Cache," not "Firefox Web Cache."  The
-         latter would result in "Firefox Firefox Web Cache" being
-         displayed to the user.  -->
+    <!-- A human readable name for the stream.  When displaying a
+         stream's human readable name, it will always be displayed
+         with the human readable name of the manager.  -->
     <property name="HumanReadableName" type="s" access="readwrite"/>
 
     <!-- A free-form string uninterpreted by the server and passed to
-         any manager upcalls.  -->
+         any stream upcalls.
+
+         The application can set this to a database key or URL to
+         avoid having to manage a mapping between Woodchuck UUIDs and
+         local identifiers.  -->
     <property name="Cookie" type="s" access="readwrite"/>
 
     <!-- The priority, relative to other streams managed by the same
@@ -122,17 +144,16 @@
     <!-- How often the stream should be updated, in seconds.
 
          A value of UINT32_MAX is interpretted as meaning that the
-         stream is never updated.  This is useful if only object
-         contents are updated.  In this case there is no need to check
-         for stream updates.  Consider a weather application that
-         shows the weather for a particular city.  If the city is
-         represented as an object, there are no new objects; the
-         single object is updated periodically.  -->
+         stream is never updated, in which case, there is no need to
+         check for stream updates.  -->
     <property name="Freshness" type="u" access="readwrite"/>
 
     <!-- Whether objects are predominantly inline (i.e., delivered
-         with stream updates) or not.  An RSS feed often includes the
-         article text, for instance.  Default: False.  -->
+         with stream updates) or not.  Default: False.
+
+         Consider an RSS feed for a blog: this often includes the
+         article text.  This is unlike a Podcast feed, which often
+         just includes links to the objects' contents.  -->
     <property name="ObjectsMostlyInline" type="b" access="readwrite"/>
   </interface>
 </node>

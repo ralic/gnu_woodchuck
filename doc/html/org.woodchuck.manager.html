@@ -1,0 +1,376 @@
+
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    
+    <title>org.woodchuck.manager &mdash; Woodchuck v0.2 documentation</title>
+    <link rel="stylesheet" href="_static/default.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    '',
+        VERSION:     '0.2',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true
+      };
+    </script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <link rel="top" title="Woodchuck v0.2 documentation" href="index.html" />
+    <link rel="next" title="org.woodchuck.stream" href="org.woodchuck.stream.html" />
+    <link rel="prev" title="org.woodchuck" href="org.woodchuck.html" /> 
+  </head>
+  <body>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="py-modindex.html" title="Python Module Index"
+             >modules</a> |</li>
+        <li class="right" >
+          <a href="org.woodchuck.stream.html" title="org.woodchuck.stream"
+             accesskey="N">next</a> |</li>
+        <li class="right" >
+          <a href="org.woodchuck.html" title="org.woodchuck"
+             accesskey="P">previous</a> |</li>
+        <li><a href="woodchuck.html">Woodchuck v0.2 documentation</a> &raquo;</li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body">
+            
+  <div class="section" id="org-woodchuck-manager">
+<h1>org.woodchuck.manager<a class="headerlink" href="#org-woodchuck-manager" title="Permalink to this headline">¶</a></h1>
+<dl class="class">
+<dt id="org.woodchuck.manager">
+<em class="property">class </em><tt class="descclassname">org.woodchuck.</tt><tt class="descname">manager</tt><a class="headerlink" href="#org.woodchuck.manager" title="Permalink to this definition">¶</a></dt>
+<dd><p>Object: /org/woodchuck/manager/<cite>ManagerUUID</cite></p>
+<dl class="function">
+<dt id="org.woodchuck.manager.Unregister">
+<tt class="descname">Unregister</tt><big>(</big><em>OnlyIfNoDescendents</em><big>)</big><a class="headerlink" href="#org.woodchuck.manager.Unregister" title="Permalink to this definition">¶</a></dt>
+<dd><p>Unregister this manager and any descendent objects.  This
+does not remove any files; only the metadata stored on the
+Woodchuck server is deleted.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><strong>OnlyIfNoDescendents b</strong> (<em>in</em>) &#8211; If true, fail if this manager has any descendents.</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.manager.ManagerRegister">
+<tt class="descname">ManagerRegister</tt><big>(</big><em>Properties</em>, <em>OnlyIfCookieUnique</em>, <em>UUID</em><big>)</big><a class="headerlink" href="#org.woodchuck.manager.ManagerRegister" title="Permalink to this definition">¶</a></dt>
+<dd><p>Register a new manager, which is subordinate to this one.</p>
+<p>This enables the creation of a manager hierarchy, which is
+useful for separating a program&#8217;s components.  For instance,
+a web browser might have a page cache and a set of files that
+should be downloaded later.  Each should be registered as a
+child manager to the top-level web browser manager.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>Properties a{sv}</strong> (<em>in</em>) &#8211; <p>Dictionary of initial values for the various
+properties.</p>
+<p>The following properties are required: <cite>HumanReadableName</cite>.</p>
+<p>Note: The a{ss} type is also supported, but then only
+properties with a string type may be expressed.  (This is a
+concession to dbus-send, as it does not support parameters
+with the variant type.)</p>
+</li>
+<li><strong>OnlyIfCookieUnique b</strong> (<em>in</em>) &#8211; Only succeed if the supplied cookie is unique among all
+sibling managers.</li>
+<li><strong>UUID s</strong> (<em>out</em>) &#8211; The new manager&#8217;s unique identifier (a 16-character
+alpha-numeric string).</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.manager.ListManagers">
+<tt class="descname">ListManagers</tt><big>(</big><em>Recursive</em>, <em>Managers</em><big>)</big><a class="headerlink" href="#org.woodchuck.manager.ListManagers" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return a list of child managers.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>Recursive b</strong> (<em>in</em>) &#8211; Whether to list all descendents (true) or just immediate
+children (false).</li>
+<li><strong>Managers a(ssss)</strong> (<em>out</em>) &#8211; An array of &lt;<cite>UUID</cite>, <cite>Cookie, `HumanReadableName</cite>,
+<cite>ParentUUID</cite>&gt;.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.manager.LookupManagerByCookie">
+<tt class="descname">LookupManagerByCookie</tt><big>(</big><em>Cookie</em>, <em>Recursive</em>, <em>Managers</em><big>)</big><a class="headerlink" href="#org.woodchuck.manager.LookupManagerByCookie" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return the managers whose <cite>Cookie</cite> property matches the
+specified cookie.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>Cookie s</strong> (<em>in</em>) &#8211; The cookie to match.</li>
+<li><strong>Recursive b</strong> (<em>in</em>) &#8211; If true, consider any descendent manager.  If false, only
+consider immediate children.</li>
+<li><strong>Managers a(sss)</strong> (<em>out</em>) &#8211; An array of &lt;<cite>UUID</cite>, <cite>HumanReadableName</cite>, <cite>ParentUUID</cite>&gt;.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.manager.StreamRegister">
+<tt class="descname">StreamRegister</tt><big>(</big><em>Properties</em>, <em>OnlyIfCookieUnique</em>, <em>UUID</em><big>)</big><a class="headerlink" href="#org.woodchuck.manager.StreamRegister" title="Permalink to this definition">¶</a></dt>
+<dd><p>Register a new stream.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>Properties a{sv}</strong> (<em>in</em>) &#8211; <p>Dictionary of initial values for the various
+properties. See the <a class="reference internal" href="org.woodchuck.stream.html#org.woodchuck.stream" title="org.woodchuck.stream"><tt class="xref py py-class docutils literal"><span class="pre">org.woodchuck.stream</span></tt></a>
+interface for the list of properties and their meanings.</p>
+<p>The following properties are required: <cite>HumanReadableName</cite></p>
+<p>Note: The a{ss} type is also supported, but then only
+properties with a string type may be expressed.  (This is a
+concession to dbus-send, as it does not support parameters
+with the variant type.)</p>
+</li>
+<li><strong>OnlyIfCookieUnique b</strong> (<em>in</em>) &#8211; Only succeed if the supplied cookie is unique among all
+streams belonging to this manager.</li>
+<li><strong>UUID s</strong> (<em>out</em>) &#8211; The new stream&#8217;s unique identifier.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.manager.ListStreams">
+<tt class="descname">ListStreams</tt><big>(</big><em>Streams</em><big>)</big><a class="headerlink" href="#org.woodchuck.manager.ListStreams" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return a list of streams.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><strong>Streams a(sss)</strong> (<em>out</em>) &#8211; An array of &lt;UUID, COOKIE, HUMAN_READABLE_NAME&gt;.</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.manager.LookupStreamByCookie">
+<tt class="descname">LookupStreamByCookie</tt><big>(</big><em>Cookie</em>, <em>Streams</em><big>)</big><a class="headerlink" href="#org.woodchuck.manager.LookupStreamByCookie" title="Permalink to this definition">¶</a></dt>
+<dd><p>Return a list of streams with the cookie COOKIE.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>Cookie s</strong> (<em>in</em>) &#8211; The cookie to match.</li>
+<li><strong>Streams a(ss)</strong> (<em>out</em>) &#8211; An array of &lt;<cite>UUID</cite>, <cite>HumanReadableName</cite>&gt;.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.manager.FeedbackSubscribe">
+<tt class="descname">FeedbackSubscribe</tt><big>(</big><em>DescendentsToo</em>, <em>Handle</em><big>)</big><a class="headerlink" href="#org.woodchuck.manager.FeedbackSubscribe" title="Permalink to this definition">¶</a></dt>
+<dd><p>Indicate that the calling process would like to receive
+upcalls pertaining to this manager and (optionally) any of
+its descendents.</p>
+<p>Feedback is sent until <a class="reference internal" href="#org.woodchuck.manager.FeedbackUnsubscribe" title="org.woodchuck.manager.FeedbackUnsubscribe"><tt class="xref py py-func docutils literal"><span class="pre">FeedbackUnsubscribe()</span></tt></a> is called.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>DescendentsToo b</strong> (<em>in</em>) &#8211; If true, also make upcalls for any descendents.</li>
+<li><strong>Handle s</strong> (<em>out</em>) &#8211; An opaque handle, that must be passed to
+<tt class="xref py py-func docutils literal"><span class="pre">FeedbackUnSubscribe()</span></tt>.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.manager.FeedbackUnsubscribe">
+<tt class="descname">FeedbackUnsubscribe</tt><big>(</big><em>Handle</em><big>)</big><a class="headerlink" href="#org.woodchuck.manager.FeedbackUnsubscribe" title="Permalink to this definition">¶</a></dt>
+<dd><p>Request that Woodchuck cancel the indicated subscription.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><strong>Handle s</strong> (<em>in</em>) &#8211; The handle returned by <a class="reference internal" href="#org.woodchuck.manager.FeedbackSubscribe" title="org.woodchuck.manager.FeedbackSubscribe"><tt class="xref py py-func docutils literal"><span class="pre">FeedbackSubscribe()</span></tt></a>.</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.manager.FeedbackAck">
+<tt class="descname">FeedbackAck</tt><big>(</big><em>ObjectUUID</em>, <em>ObjectInstance</em><big>)</big><a class="headerlink" href="#org.woodchuck.manager.FeedbackAck" title="Permalink to this definition">¶</a></dt>
+<dd><p>Ack the feedback with the provided UUID.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>ObjectUUID s</strong> (<em>in</em>) &#8211; </li>
+<li><strong>ObjectInstance u</strong> (<em>in</em>) &#8211; </li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="data">
+<dt id="org.woodchuck.manager.ParentUUID">
+<tt class="descname">ParentUUID</tt><a class="headerlink" href="#org.woodchuck.manager.ParentUUID" title="Permalink to this definition">¶</a></dt>
+<dd><p>This manager&#8217;s parent manager.</p>
+</dd></dl>
+
+<dl class="data">
+<dt id="org.woodchuck.manager.HumanReadableName">
+<tt class="descname">HumanReadableName</tt><a class="headerlink" href="#org.woodchuck.manager.HumanReadableName" title="Permalink to this definition">¶</a></dt>
+<dd><p>A human readable name for the manager.  When displaying a
+manager&#8217;s human readable name, the human readable name of
+each of its ancestors as well as its own will be concatenated
+together.  Thus, if the manager&#8217;s parent is called &#8220;Firefox&#8221;
+and it has a child web cache, the human readable name of the
+child should be &#8220;Web Cache,&#8221; not &#8220;Firefox Web Cache.&#8221;  The
+latter would result in &#8220;Firefox Firefox Web Cache&#8221; being
+displayed to the user.</p>
+</dd></dl>
+
+<dl class="data">
+<dt id="org.woodchuck.manager.Cookie">
+<tt class="descname">Cookie</tt><a class="headerlink" href="#org.woodchuck.manager.Cookie" title="Permalink to this definition">¶</a></dt>
+<dd><p>A free-form string uninterpreted by the server and passed to
+any manager upcalls.</p>
+<p>By convention, this is set to the application&#8217;s DBus name
+thereby allowing all application&#8217;s to easily lookup the UUID
+of their manager and avoiding any namespace collisions.</p>
+</dd></dl>
+
+<dl class="data">
+<dt id="org.woodchuck.manager.DBusServiceName">
+<tt class="descname">DBusServiceName</tt><a class="headerlink" href="#org.woodchuck.manager.DBusServiceName" title="Permalink to this definition">¶</a></dt>
+<dd><p>The DBus service name of the service to start when there is
+work to do, e.g., streams to update or objects to download.
+See <a class="reference internal" href="org.woodchuck.upcall.html#org.woodchuck.upcall" title="org.woodchuck.upcall"><tt class="xref py py-class docutils literal"><span class="pre">org.woodchuck.upcall</span></tt></a>.</p>
+</dd></dl>
+
+<dl class="data">
+<dt id="org.woodchuck.manager.DBusObject">
+<tt class="descname">DBusObject</tt><a class="headerlink" href="#org.woodchuck.manager.DBusObject" title="Permalink to this definition">¶</a></dt>
+<dd><p>The DBus object to send upcalls to.  This defaults to
+&#8216;/org/woodchuck&#8217;.</p>
+</dd></dl>
+
+<dl class="data">
+<dt id="org.woodchuck.manager.Priority">
+<tt class="descname">Priority</tt><a class="headerlink" href="#org.woodchuck.manager.Priority" title="Permalink to this definition">¶</a></dt>
+<dd><p>The priority, relative to other managers with the same parent
+manager.</p>
+</dd></dl>
+
+</dd></dl>
+
+</div>
+
+
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar">
+        <div class="sphinxsidebarwrapper">
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="org.woodchuck.html"
+                        title="previous chapter">org.woodchuck</a></p>
+  <h4>Next topic</h4>
+  <p class="topless"><a href="org.woodchuck.stream.html"
+                        title="next chapter">org.woodchuck.stream</a></p>
+  <h3>This Page</h3>
+  <ul class="this-page-menu">
+    <li><a href="_sources/org.woodchuck.manager.txt"
+           rel="nofollow">Show Source</a></li>
+  </ul>
+<div id="searchbox" style="display: none">
+  <h3>Quick search</h3>
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" size="18" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    <p class="searchtip" style="font-size: 90%">
+    Enter search terms or a module, class or function name.
+    </p>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="py-modindex.html" title="Python Module Index"
+             >modules</a> |</li>
+        <li class="right" >
+          <a href="org.woodchuck.stream.html" title="org.woodchuck.stream"
+             >next</a> |</li>
+        <li class="right" >
+          <a href="org.woodchuck.html" title="org.woodchuck"
+             >previous</a> |</li>
+        <li><a href="woodchuck.html">Woodchuck v0.2 documentation</a> &raquo;</li> 
+      </ul>
+    </div>
+    <div class="footer">
+        &copy; Copyright 2011, Neal H. Walfield.
+      Created using <a href="http://sphinx.pocoo.org/">Sphinx</a> 1.0.7.
+    </div>
+  </body>
+</html>

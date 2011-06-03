@@ -1,35 +1,40 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
-  <!-- Object: /org/woodchuck/MANAGER_UUID -->
+  <!-- Object: /org/woodchuck/manager/`ManagerUUID` -->
   <interface name="org.woodchuck.manager">
     <!-- Unregister this manager and any descendent objects.  This
-         does not remove any files, only metadata stored on the
-         woodchuck server.  -->
+         does not remove any files; only the metadata stored on the
+         Woodchuck server is deleted.  -->
     <method name="Unregister">
       <!-- If true, fail if this manager has any descendents.  -->
-      <arg name="only_if_no_descendents" type="b"/>
+      <arg name="OnlyIfNoDescendents" type="b"/>
     </method>
 
-    <!-- Register a new manager, which is subordinate to this one
-         thereby creating a manager hierarchy.  This is useful for
-         separating a program's components.  -->
+    <!-- Register a new manager, which is subordinate to this one.
+
+         This enables the creation of a manager hierarchy, which is
+         useful for separating a program's components.  For instance,
+         a web browser might have a page cache and a set of files that
+         should be downloaded later.  Each should be registered as a
+         child manager to the top-level web browser manager.  -->
     <method name="ManagerRegister">
       <!-- Dictionary of initial values for the various
-           properties. See the org.woodchuck.manager interface for a
-           list.
+           properties.
 
-           The following properties are required:
-            - HumanReadableName.
+           The following properties are required: `HumanReadableName`.
 
-           Note: a{ss} is also supported, but then only properties
-           with a string type may be expressed.
+           Note: The a{ss} type is also supported, but then only
+           properties with a string type may be expressed.  (This is a
+           concession to dbus-send, as it does not support parameters
+           with the variant type.)
       -->
-      <arg name="properties" type="a{sv}"/>
+      <arg name="Properties" type="a{sv}"/>
 
-      <!-- Only succeed if the supplied cookie is unique.  -->
-      <arg name="only_if_cookie_unique" type="b"/>
+      <!-- Only succeed if the supplied cookie is unique among all
+           sibling managers.  -->
+      <arg name="OnlyIfCookieUnique" type="b"/>
 
-      <!-- The manager's unique identifier (a 16-character
+      <!-- The new manager's unique identifier (a 16-character
            alpha-numeric string).  -->
       <arg name="UUID" type="s" direction="out"/>
     </method>
@@ -37,45 +42,46 @@
     <!-- Return a list of child managers.  -->
     <method name="ListManagers">
       <!-- Whether to list all descendents (true) or just immediate
-           children (false). Argument is optional and defaults to
-           true.  -->
+           children (false).  -->
       <arg name="Recursive" type="b"/>
 
-      <!-- Any array of <UUID, COOKIE, HUMAN_READABLE_NAME, PARENT
-           MANAGER UUID>.  -->
+      <!-- An array of <`UUID`, `Cookie, `HumanReadableName`,
+           `ParentUUID`>.  -->
       <arg name="Managers" type="a(ssss)" direction="out"/>
     </method>
 
-    <!-- Return a list of managers with the cookie COOKIE.  If
-         RECURSIVE is TRUE, consider any manager that is a descendent
-         of this one.  If RECURSIVE is FALSE, only consider managers
-         whose parent is this one.  -->
+    <!-- Return the managers whose `Cookie` property matches the
+         specified cookie.  -->
     <method name="LookupManagerByCookie">
+      <!-- The cookie to match.  -->
       <arg name="Cookie" type="s"/>
+      <!-- If true, consider any descendent manager.  If false, only
+           consider immediate children.  -->
       <arg name="Recursive" type="b"/>
 
-      <!-- Any array of <UUID, HUMAN_READABLE_NAME, PARENT UUID>.  -->
+      <!-- An array of <`UUID`, `HumanReadableName`, `ParentUUID`>.  -->
       <arg name="Managers" type="a(sss)" direction="out"/>
     </method>
 
     <!-- Register a new stream.  -->
     <method name="StreamRegister">
       <!-- Dictionary of initial values for the various
-           properties. See the org.woodchuck.stream interface for a
-           list.
+           properties. See the :class:`org.woodchuck.stream`
+           interface for the list of properties and their meanings.
 
-           The following properties are required:
-            - HumanReadableName.
+           The following properties are required: `HumanReadableName`
 
-           Note: a{ss} is also supported, but then only properties
-           with a string type may be expressed.
-      -->
-      <arg name="properties" type="a{sv}"/>
+           Note: The a{ss} type is also supported, but then only
+           properties with a string type may be expressed.  (This is a
+           concession to dbus-send, as it does not support parameters
+           with the variant type.)  -->
+      <arg name="Properties" type="a{sv}"/>
 
-      <!-- Only succeed if the supplied cookie is unique.  -->
-      <arg name="only_if_cookie_unique" type="b"/>
+      <!-- Only succeed if the supplied cookie is unique among all
+           streams belonging to this manager.  -->
+      <arg name="OnlyIfCookieUnique" type="b"/>
 
-      <!-- The stream's unique identifier.  -->
+      <!-- The new stream's unique identifier.  -->
       <arg name="UUID" type="s" direction="out"/>
     </method>
 
@@ -87,29 +93,39 @@
 
     <!-- Return a list of streams with the cookie COOKIE.  -->
     <method name="LookupStreamByCookie">
+      <!-- The cookie to match.  -->
       <arg name="Cookie" type="s"/>
 
-      <!-- Any array of <UUID, HUMAN_READABLE_NAME>.  -->
+      <!-- An array of <`UUID`, `HumanReadableName`>.  -->
       <arg name="Streams" type="a(ss)" direction="out"/>
     </method>
 
-    <!-- Request that Woodchuck send any unacked feedback belonging to
-         the manager and (optionally) any of its descendents.
+    <!-- Indicate that the calling process would like to receive
+         upcalls pertaining to this manager and (optionally) any of
+         its descendents.
 
-         Feedback is sent as jobs complete or until
-         FeedbackUnsubscribe is called.  -->
+         .. Note: Upcalls are sent to all subscriptions.  Thus, if a
+             single process has multiple subscriptions, it will receive
+             the same upcall multiple times.
+
+         Feedback is sent until :func:`FeedbackUnsubscribe` is called.
+
+         .. Note: If the calling process's private DBus name becomes
+             invalid, the subscription is automatically cancelled.
+         -->
     <method name="FeedbackSubscribe">
-      <!-- If true, also send feedback for any descendents.  -->
+      <!-- If true, also make upcalls for any descendents.  -->
       <arg name="DescendentsToo" type="b"/>
 
+      <!-- An opaque handle, that must be passed to
+           :func:`FeedbackUnSubscribe`.  -->
       <arg name="Handle" type="s" direction="out"/>
     </method>
 
-    <!-- Request that Woodchuck stop sending feedback for the given
-         subscription (as returned by FeedbackSubscribe). Any unacked
-         feedback will be reset the next time FeedbackSubscribe is
-         called.  -->
+    <!-- Request that Woodchuck cancel the indicated subscription.
+         -->
     <method name="FeedbackUnsubscribe">
+      <!-- The handle returned by :func:`FeedbackSubscribe`.  -->
       <arg name="Handle" type="s"/>
     </method>
 
@@ -118,7 +134,6 @@
       <arg name="ObjectUUID" type="s"/>
       <arg name="ObjectInstance" type="u"/>
     </method>
-
 
     <!-- This manager's parent manager.  -->
     <property name="ParentUUID" type="s" access="read"/>
@@ -134,13 +149,23 @@
     <property name="HumanReadableName" type="s" access="readwrite"/>
 
     <!-- A free-form string uninterpreted by the server and passed to
-         any manager upcalls.  -->
+         any manager upcalls.
+
+         By convention, this is set to the application's DBus name
+         thereby allowing all application's to easily lookup the UUID
+         of their manager and avoiding any namespace collisions.
+
+         .. Note: Woodchuck does not enforce that the `Cookie`
+             property be unique.  -->
     <property name="Cookie" type="s" access="readwrite"/>
 
-    <!-- The DBus service name to send upcalls to.  -->
+    <!-- The DBus service name of the service to start when there is
+         work to do, e.g., streams to update or objects to download.
+         See :class:`org.woodchuck.upcall`.  -->
     <property name="DBusServiceName" type="s" access="readwrite"/>
 
-    <!-- The DBus object to send upcalls to.  -->
+    <!-- The DBus object to send upcalls to.  This defaults to
+         '/org/woodchuck'.  -->
     <property name="DBusObject" type="s" access="readwrite"/>
 
     <!-- The priority, relative to other managers with the same parent

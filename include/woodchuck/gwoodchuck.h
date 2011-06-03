@@ -124,8 +124,8 @@ extern GWoodchuck *gwoodchuck_new (const char *human_readable_name,
 
 /* Register a new stream.
 
-   IDENTIFIER is a free-form string, which is uninterpreted by the
-   server and provided on upcalls.  It must uniquely identify the
+   STREAM_IDENTIFIER is a free-form string, which is uninterpreted by
+   the server and provided on upcalls.  It must uniquely identify the
    stream within the application.  It can be an application specific
    key, e.g., the URL of an RSS feed.
 
@@ -142,7 +142,7 @@ extern GWoodchuck *gwoodchuck_new (const char *human_readable_name,
    UINT32_MAX is interpretted as meaning that the stream is never
    updated.  */
 extern gboolean gwoodchuck_stream_register (GWoodchuck *wc,
-					    const char *identifier,
+					    const char *stream_identifier,
 					    const char *human_readable_name,
 					    uint32_t freshness,
 					    GError **error);
@@ -290,16 +290,16 @@ extern gboolean gwoodchuck_object_used (GWoodchuck *wc,
 					GError **error);
 
 /* Mark the object identified by OBJECT_IDENTIFIER in the stream
-   identified by STREAM_IDENTIFIER as having been used.  START and END
-   indicate the time the user started using the object and stopped
-   using the object, in seconds since the epoch.  USE_MASK indicates
-   the portions of the object that have been used. Bit 0 corresponds
-   to the first 1/64 of the object, bit 1 to the second 1/64 of the
-   object, etc.  */
+   identified by STREAM_IDENTIFIER as having been used.  START and
+   DURATION indicate the time the user started using the object (in
+   seconds since the epoch) and how long (in seconds).  USE_MASK
+   indicates the portions of the object that have been used. Bit 0
+   corresponds to the first 1/64 of the object, bit 1 to the second
+   1/64 of the object, etc.  */
 extern gboolean gwoodchuck_object_used_full (GWoodchuck *wc,
 					     const char *stream_identifier,
 					     const char *object_identifier,
-					     uint64_t start, uint64_t end,
+					     uint64_t start, uint64_t duration,
 					     uint64_t use_mask,
 					     GError **error);
 

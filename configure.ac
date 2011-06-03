@@ -14,6 +14,10 @@ AM_PROG_AS
 AC_PROG_RANLIB
 AC_PROG_LIBTOOL
 
+# If sphinx-build is not found, set it to :, in which case the
+# documentation won't be rebuilt.
+AC_PATH_PROG([SPHINX_BUILD], [sphinx-build], :)
+
 # Check whether we are running on Maemo and which version.
 AC_MSG_CHECKING([for a Maemo environment])
 PKG_CHECK_EXISTS(maemo-version,
@@ -76,5 +80,6 @@ AC_CONFIG_FILES([Makefile
 		src/Makefile
 		include/Makefile
 		include/netczar/Makefile
-		data/Makefile])
+		data/Makefile
+		doc/Makefile])
 AC_OUTPUT

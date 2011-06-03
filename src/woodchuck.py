@@ -23,62 +23,118 @@ import time
 
 """A low-level wrapper of the org.woodchuck DBus interfaces."""
 
+class RequestType:
+    """Values for the request_type argument of
+    :func:`_Object.download`."""
+
+    #: The user initiated the download request.
+    UserInitiated = 0
+    #: The application initiated the download request.
+    ApplicationInitiated = 0
+
 class DownloadStatus:
     """Values for the Indicator argument of
-    org.woodchuck.object.DownloadStatus and
-    org.woodchuck.stream.StreamUpdated."""
+    :func:`woodchuck._Object.download_status`,
+    :func:`woodchuck._Stream.update_status` and
+    :func:`woodchuck.Upcalls.object_downloaded_cb`.
+    """
+    #: The download was successful.
     Success = 0
 
+    #: An unspecified transient error occurred.
     TransientOther = 0x100
+    #: A transient network error occured, e.g., the host was
+    #: unreachable.
     TransientNetwork = 0x101
+    #: A transient error occured during the transfer.
     TransientInterrupted = 0x102
 
+    #: An unspecified hard error occured.  Don't try again.
     FailureOther = 0x200
+    #: A hard error, the object is gone, occured.
     FailureGone = 0x201
 
 class Indicator:
     """Values for the Indicator argument of
-    org.woodchuck.object.DownloadStatus and
-    org.woodchuck.stream.StreamUpdated."""
+    :func:`woodchuck._Object.download_status`,
+    :func:`woodchuck._Stream.update_status`."""
+    #: An audio sound was emitted.
     Audio = 0x1
+    #: An visual notification was displayed in the application.
     ApplicationVisual = 0x2
+    #: A small visual notification was displayed on the desktop, e.g.,
+    #: in the system tray.
     DesktopSmallVisual = 0x4
+    #: A large visual notification was displayed on the desktop.
     DesktopLargeVisual = 0x8
+    #: An external visual notification was displayed, e.g., an LED was
+    #: blinked.
     ExternalVisual = 0x10
+    #: The device vibrated.
     Vibrate = 0x20
 
+    #: The notification was object specific.
     ObjectSpecific = 0x40
-    SystemWide = 0x80
+    #: The notification was stream-wide, i.e., an aggregate
+    #: notification for all updates in the stream.
+    StreamWide = 0x80
+    #: The notification was manager-wide, i.e., an aggregate :
+    #: notification for multiple stream updates.
     ManagerWide = 0x100
 
+    #: It is unknown whether an indicator was shown.
     Unknown = 0x80000000
 
 class DeletionPolicy:
-    """Values for the DELETION_POLICY argument of
-    org.woodchuck.object.DownloadStatus."""
+    """Values for the `deletion_policy` argument of
+    :func:`woodchuck._Object.download_status`."""
+
+    #: The file is precious and will only be deleted by the user.
     Precious = 0
+
+    #: Woodchuck may delete the file without consulting the
+    #: application.
     DeleteWithoutConsultation = 1
+
+    #: Woodchuck may ask the application to delete the file.
     DeleteWithConsultation = 2
 
 class DeletionResponse:
     """Values for the Update arguments of
-    org.woodchuck.object.FilesDeleted."""
+    :func:`woodchuck._Object.files_deleted`"""
+    #: The files associated with the object were deleted.
     Deleted = 0
+    #: The application refuses to delete the object.
     Refused = 1
+    #: The application compressed the object, e.g., for an email, it
+    #discarded the attachments, but not the email's body.
     Compressed = 2
 
 class Error(Exception):
     """Base class for exceptions in this model.  args[0] contains a
     more detailed description of the error."""
-    pass
 
-class GenericError(Error): pass
-class NoSuchObject(Error): pass
-class ObjectExistsError(Error): pass
-class NotImplementedError(Error): pass
-class InternalError(Error): pass
-class InvalidArgsError(Error): pass
-class UnknownError(Error): pass
+class GenericError(Error):
+    """While invoking a Woodchuck method, a DBus error
+    org.woodchuck.GenericError occured."""
+class NoSuchObject(Error):
+    """While invoking a Woodchuck method, a DBus error
+    org.freedesktop.DBus.Error.UnknownObject occured."""
+class ObjectExistsError(Error):
+    """While invoking a Woodchuck method, a DBus error
+    org.woodchuck.ObjectExists occured."""
+class NotImplementedError(Error):
+    """While invoking a Woodchuck method, a DBus error
+    org.woodchuck.MethodNotImplemented occured."""
+class InternalError(Error):
+    """While invoking a Woodchuck method, a DBus error
+    org.woodchuck.InternalError occured."""
+class InvalidArgsError(Error):
+    """While invoking a Woodchuck method, a DBus error
+    org.woodchuck.InvalidArgs occured."""
+class UnknownError(Error):
+    """While invoking a Woodchuck method, an unknown DBus error with
+    prefix org.woodchuck occured."""
 
 def _dbus_exception_to_woodchuck_exception(exception):
     """Convert a dbus exception to a local exception."""
@@ -165,11 +221,22 @@ def _keys_convert(d, conversion):
 class _Object():
     """The local representation for a Woodchuck object."""
     def __init__(self, **properties):
-        """ You should never instantiate this class yourself.
-        Instead, use a method that returns an object, such as
-        Stream.LookupObjectByCookie.
+        """
+        Instantiate a :class:`Woodchuck._Object`.  Instantiating this
+        object does not actually register an object; the object is
+        assumed to already exist.  A :class:`Woodchuck._Object` object
+        should should not normally be directly instantiated from user
+        code.  Instead, use a method that returns an :class:`_Object`,
+        such as :func:`_Stream.object_register` or
+        :func:`_Stream.lookup_object_by_cookie` to get a
+        :class:`_Object` object.
 
-        The UUID property is required."""
+        :param UUID: The UUID of the object.
+
+        :param properties: Other properties, e.g.,
+            human_readable_name.  Assumed to correspond to stream's
+            actual values.
+        """
 
         # Check the properties.
         for k in properties.keys ():
@@ -195,6 +262,12 @@ class _Object():
                                    % (self.__class__.__name__, name)))
 
     def unregister(self):
+        """Unregister the object object thereby causing Woodchuck to
+        permanently forget about the object.
+
+        See :func:`_Stream.unregister` for an example using a similar
+        function.
+        """
         try:
             ret = self.dbus.Unregister ()
         except dbus.exceptions.DBusException as exception:
@@ -204,6 +277,14 @@ class _Object():
             del _objects[self.properties['UUID']]
 
     def download(self, request_type):
+        """
+        Request that Woodchuck download the object.  This only makes
+        sense for object's that use Woodchuck's simple downloader.
+
+        :param request_type: Whether the request is user initiated or
+            application initiated.  See :class:`DownloadStatus` for
+            possible values.
+        """
         try:
             self.dbus.Download (request_type)
         except dbus.exceptions.DBusException as exception:
@@ -213,6 +294,58 @@ class _Object():
                         transferred_up=None, transferred_down=None,
                         download_time=None, download_duration=None,
                         object_size=None, files=None):
+        """
+        Tell Woodchuck that the object has been transferred.  Call
+        this function whenever an object is downloaded (or uploaded),
+        not only in response to a :func:`_Upcalls.object_download_cb`
+        upcall.
+
+        :param status: On success, 0.  Otherwise, the error code.  See
+            :class:`DownloadStatus` for possible values.
+
+        :param indicator: What indicators, if any, were shown to the
+            user indicating that the stream was updated.  A bit-wise
+            mask of :class:`Indicator`.  Default: None.
+
+        :param transferred_up: The number of bytes uploaded.  If not
+            known, set to None.  Default: None.
+
+        :param transferred_down: The number of bytes downloaded.  If
+            not known, set to None.  Default: None.
+
+        :param download_time: The time at which the update was
+            started.  If not known, set to None.  Default: None.
+
+        :param download_duration: The amount of time the update took,
+            in seconds.  If not known, set to None.  Default: None.
+
+        :param object_size: The amount of disk space used by the
+            object, in bytes.  If not known, set to None.  Default:
+            None.
+
+        :param files: The files belong to the object.  An array of
+            arrays consisting of a filename (a string), a boolean
+            indicating whether the file is exclusive to the object,
+            and the file's deletion policy (see
+            :class:`woodchuck.DeletionPolicy` for possible values).
+
+        Example of reporting an object download for an object that
+        Woodchuck can deleted without consulting the user::
+
+          download_time = int (time.time ())
+          ...
+          # Perform the download
+          ...
+          download_duration = int (time.time ()) - download_time
+          stream.update_status(
+              status=0,
+              transferred_up=4096,
+              transferred_down=1024000,
+              download_time=download_time,
+              download_duration=download_duration,
+              files=( ("/home/user/Podcasts/Foo/Episode1.ogg", True,
+                       woodchuck.DeletionPolicy.DeleteWithoutConsultation),))
+        """
         if indicator is None:
             indicator = 0x80000000
         indicator = dbus.UInt32 (indicator)
@@ -237,7 +370,7 @@ class _Object():
             object_size = 2 ** 64 - 1
         object_size = dbus.UInt64 (object_size)
 
-        files = dbus.Array (file if files is not None else [], "(stu)")
+        files = dbus.Array (files if files is not None else [], "(stu)")
 
         try:
             self.dbus.DownloadStatus(status, indicator,
@@ -248,6 +381,26 @@ class _Object():
             _dbus_exception_to_woodchuck_exception (exception)
 
     def used(self, start=None, duration=None, use_mask=None):
+        """
+        Mark the object as having been used.
+
+        :param start: The time at which the user started using the
+            object.  If unknown, pass None.  Default: None.
+
+        :param duration: The amount of time the user used the object,
+            in seconds.  If unknown, pass None.  Default: None.
+
+        :param use_mask: A 64-bit mask indicating the parts of the
+            object that were used.  Setting the least-significant bit
+            means that the first 1/64 of the object was used, the
+            second bit means that the second 1/64 of the object was
+            used, etc.  If unknown, pass None.  Default: None.
+
+        Example: Indicate that that the first two minutes of an
+        hour-long video were viewed::
+
+            object.used(start_time, 120, 0x3)
+        """
         if start is None:
             start = int (time.time ())
         if duration is None:
@@ -261,6 +414,31 @@ class _Object():
             _dbus_exception_to_woodchuck_exception (exception)
 
     def files_deleted(self, update=None, arg=None):
+        """
+        Indicate that some or all of the object's files have been
+        deleted.  This should be called whenever an object's files are
+        deleted, not only in response to
+        :func:`Upcalls.object_delete_files_cb`.
+
+        :param update: Taken from :class:`woodchuck.DeletionResponse`.
+
+        :param arg: If update is DeletionResponse.Deleted, the value
+            is ignored.
+
+            If update is DeletionResponse.Refused, the value is the
+            minimum number of seconds the object should be preserved,
+            i.e., the minimum amount of time before Woodchuck should
+            call :func:`Upcalls.object_delete_files_cb` again.
+
+            If update is DeletionResponse.Compressed, the value is the
+            number of bytes of disk space the object now uses.
+
+        Example: An email's attachments are purged, but the body is
+        preserved::
+
+            object.files_deleted (woodchuck.DeletionResponse.Compressed,
+                                  2338)
+        """
         if update is None or update == DeletionResponse.Deleted:
             update = DeletionResponse.Deleted
             arg = 0
@@ -277,27 +455,54 @@ class _Object():
 
 _objects = {}
 def Object(**properties):
-    """Instantiate a local object."""
+    """Return a reference to a :class:`_Object` object.  This function
+    does not actually register the object; the manager is assumed to
+    already exist.  This function should not normally be called from
+    user code.  Instead, call :func:`_Stream.object_register` or
+    :func:`_Stream.lookup_object_by_cookie` to get a :class:`_Object`
+    object.
+
+    :param UUID: The object's UUID, required.
+
+    :param properties: Other properties, e.g., human_readable_name.
+        Assumed to correspond to the manager's actual values.
+
+    :returns: A :class:`_Object` object with the specified
+        properties.
+
+    Note: There is at most a single :class:`_Object` instance per
+    Woodchuck object.  In other words, the Python object is shared
+    among all users."""
     if properties['UUID'] in _objects:
         return _objects[properties['UUID']]
     return _Object(**properties)
 
 class _Stream():
     def __init__(self, **properties):
-        """ You should never instantiate this class yourself.
-        Instead, use a method that returns an object, such as
-        Stream.LookupObjectByCookie.
+        """Instantiate a :class:`Woodchuck._Stream`.  Instantiating
+        this object does not actually register a stream; the stream is
+        assumed to already exist.  A :class:`Woodchuck._Stream` object
+        should should not normally be directly instantiated from user
+        code.  Instead, use a method that returns an :class:`_Stream`,
+        such as :func:`_Manager.stream_register` or
+        :func:`_Manager.lookup_stream_by_cookie` to get a
+        :class:`_Stream` object.
 
-        The UUID property is required."""
+        :param UUID: The UUID of the stream.
+
+        :param properties: Other properties, e.g.,
+            human_readable_name.  Assumed to correspond to stream's
+            actual values.
+        """
 
         # Check the properties.
         for k in properties.keys ():
             assert k in _stream_properties_to_camel_case
 
         self.properties = properties
-        self.proxy = dbus.SessionBus().get_object ('org.woodchuck',
-                                                   '/org/woodchuck/stream/'
-                                                   + self.properties['UUID'])
+        self.proxy = dbus.SessionBus().get_object \
+            ('org.woodchuck',
+             '/org/woodchuck/stream/' + self.properties['UUID'])
         try:
             self.dbus = dbus.Interface (self.proxy,
                                         dbus_interface='org.woodchuck.stream')
@@ -305,7 +510,7 @@ class _Stream():
             _dbus_exception_to_woodchuck_exception (exception)
 
     def __repr__(self):
-        return self.properties
+        return self.properties.__repr__ ()
     def __str__(self):
         return self.__repr__ ().__str__ ()
 
@@ -317,6 +522,24 @@ class _Stream():
                                    % (self.__class__.__name__, name)))
 
     def unregister(self, only_if_empty):
+        """Unregister the stream object thereby causing Woodchuck to
+        permanently forget about the stream and any object it
+        contained.
+
+        :param only_if_empty: If True, this method invocation only
+            suceeds if the stream contains no objects.
+
+        Example::
+
+          try:
+              stream.unregister (True)
+          except woodchuck.NoSuchObject as exception:
+              print "Can't remove stream %s: Does not exist: %s"
+                  % (str (stream), exception)
+          except woodchuck.ObjectExistsError as exception:
+              print "Can't remove stream %s: Not empty: %s"
+                  % (str (stream), exception)
+        """
         try:
             ret = self.dbus.Unregister (only_if_empty)
         except dbus.exceptions.DBusException as exception:
@@ -326,6 +549,21 @@ class _Stream():
             del _streams[self.properties['UUID']]
 
     def object_register(self, only_if_cookie_unique=True, **properties):
+        """Register a new object.
+    
+        :param only_if_cookie_unique: If True, only succeed if the
+            specified cookie is unique.
+    
+        :param human_readable_name: A string that can be shown to the
+            user that identifies the object.
+
+        :param properties: Other properties to set.
+    
+        :returns: A :class:`_Object` object.
+
+        See :func:`_Manager.stream_register` for an example using a
+        similar function.
+        """
         try:
             UUID = self.dbus.ObjectRegister \
                 (_keys_convert (properties, _object_properties_to_camel_case),
@@ -337,6 +575,13 @@ class _Stream():
         return Object (**properties)
 
     def list_objects(self):
+        """List this stream's objects.
+
+        :returns: An array of :class:`_Object`
+
+        See :func:`_Woodchuck.list_managers` for an example using a
+        similar function.
+        """
         try:
             return [Object(UUID=UUID, human_readable_name=human_readable_name,
                            cookie=cookie, parent_UUID=self.properties['UUID'])
@@ -346,6 +591,15 @@ class _Stream():
             _dbus_exception_to_woodchuck_exception (exception)
 
     def lookup_object_by_cookie(self, cookie):
+        """Return the set of objects with the specified cookie.
+
+        :param cookie: The cookie to match.
+
+        :returns: An array of :class:`_Object`
+
+        See :func:`_Woodchuck.lookup_manager_by_cookie` for an example
+        using a similar function.
+        """
         try:
             return [Object(UUID=UUID, human_readable_name=human_readable_name,
                            cookie=cookie, parent_UUID=self.properties['UUID'])
@@ -359,6 +613,72 @@ class _Stream():
                       download_time=None, download_duration=None,
                       new_objects=None, updated_objects=None,
                       objects_inline=None):
+        """
+        Tell Woodchuck that the stream has been updated.  Call this
+        function whenever a stream is updated, not only in response to
+        a :func:`_Upcalls.stream_update_cb` upcall.
+
+        :param status: On success, 0.  Otherwise, the error code.  See
+            :class:`DownloadStatus` for possible values.
+
+        :param indicator: What indicators, if any, were shown to the
+            user indicating that the stream was updated.  A bit-wise
+            mask of :class:`Indicator`.  Default: None.
+
+        :param transferred_up: The number of bytes uploaded.  If not
+            known, set to None.  Default: None.
+
+        :param transferred_down: The number of bytes downloaded.  If
+            not known, set to None.  Default: None.
+
+        :param download_time: The time at which the update was
+            started.  If not known, set to None.  Default: None.
+
+        :param download_duration: The amount of time the update took,
+            in seconds.  If not known, set to None.  Default: None.
+
+        :param new_objects: The number of newly discovered objects.  If
+            not known, set to None.  Default: None.
+
+        :param updated_objects: The number of objects with updates.
+            If not known, set to None.  Default: None.
+
+        :param objects_inline: The number of objects whose content was
+            delivered inline, i.e., with the update.  If not known,
+            set to None.  Default: None.
+
+        Example of reporting a stream update for which five new
+        objects were discovered and all of which were delivered
+        inline::
+
+            import woodchuck
+            import time
+
+            ...
+            
+            download_time = int (time.time ())
+            ...
+            # Perform the download
+            ...
+            download_duration = int (time.time ()) - download_time
+            stream.update_status (status=0,
+                                  transferred_up=2048,
+                                  transferred_down=64000,
+                                  download_time=download_time,
+                                  download_duration=download_duration,
+                                  new_objects=5,
+                                  objects_inline=5)
+
+        Note: The five new objects should immediately be registered
+        using :func:`_Stream.object_register` and marked as downloaded
+        using :func:`_Object.download_status`.
+
+        Example of a failed update due to a network problem, e.g., the
+        host is unreachable::
+
+          stream.update_status (woodchuck.TransientNetwork,
+                                transferred_up=100)
+        """
         if indicator is None:
             indicator = 0
         if transferred_up is None:
@@ -366,7 +686,7 @@ class _Stream():
         if transferred_down is None:
             transferred_down = 2 ** 64 - 1
         if download_time is None:
-            download_time = int (time.time ())
+            download_time = 0
         if download_duration is None:
             download_duration = 0
         if new_objects is None:
@@ -386,27 +706,54 @@ class _Stream():
 
 _streams = {}
 def Stream(**properties):
-    """Instantiate a local stream object."""
+    """Return a reference to a :class:`_Stream` object.  This function
+    does not actually register a stream; a stream is assumed to
+    already exist.  This function should not normally be called from
+    user code.  Instead, call :func:`_Manager.stream_register` or
+    :func:`_Manager.lookup_stream_by_cookie` to get a :class:`_Stream`
+    object.
+
+    :param UUID: The stream's UUID, required.
+
+    :param properties: Other properties, e.g., human_readable_name.
+        Assumed to correspond to the manager's actual values.
+
+    :returns: A :class:`_Stream` object with the specified
+        properties.
+
+    Note: There is at most a single :class:`_Stream` instance per
+    Woodchuck stream object.  In other words, the Python object is
+    shared among all users."""
     if properties['UUID'] in _streams:
         return _streams[properties['UUID']]
     return _Stream(**properties)
 
 class _Manager():
     def __init__(self, **properties):
-        """ You should never instantiate this class yourself.
-        Instead, use a method that returns an object, such as
-        Stream.LookupObjectByCookie.
+        """Instantiate a :class:`Woodchuck._Manager`.  Instantiating
+        this object does not actually register a manager; the manager
+        is assumed to already exist.  A :class:`Woodchuck._Manager`
+        object should should not normally be directly instantiated
+        from user code.  Instead, use a method that returns an
+        :class:`_Manager`, such as :func:`_Woodchuck.manager_register`
+        or :func:`_Woodchuck.lookup_manager_by_cookie` to get a
+        :class:`_Manager` object.
 
-        The UUID property is required."""
+        :param UUID: The UUID of the Manager.
+
+        :param properties: Other properties, e.g.,
+            human_readable_name.  Assumed to correspond to the
+            manager's actual values.
+        """
 
         # Check the properties.
         for k in properties.keys ():
             assert k in _manager_properties_to_camel_case
 
         self.properties = properties
-        self.proxy = dbus.SessionBus().get_object ('org.woodchuck',
-                                                   '/org/woodchuck/manager/'
-                                                   + self.properties['UUID'])
+        self.proxy = dbus.SessionBus().get_object \
+            ('org.woodchuck',
+             '/org/woodchuck/manager/' + self.properties['UUID'])
         self.dbus = dbus.Interface (self.proxy,
                                     dbus_interface='org.woodchuck.manager')
 
@@ -427,6 +774,24 @@ class _Manager():
                                    % (self.__class__.__name__, name)))
 
     def unregister(self, only_if_empty=True):
+        """Unregister the manager object thereby causing Woodchuck to
+        permanently forget about the manager and any streams and
+        objects it contained.
+
+        :param only_if_empty: If True, this method invocation only
+            suceeds if the manager has no children, i.e., no
+            descendent managers and no streams.
+
+        Example::
+
+          try:
+              manager.unregister (True)
+          except woodchuck.NoSuchObject as exception:
+              print "Can't remove stream %s: Does not exist: %s"
+                  % (str (manager), exception)
+          except woodchuck.ObjectExistsError as exception:
+              print "Can't remove manager %s: Not empty: %s"
+                  % (str (manager), exception)"""
         try:
             ret = self.dbus.Unregister (only_if_empty)
         except dbus.exceptions.DBusException as exception:
@@ -436,6 +801,39 @@ class _Manager():
 
     def manager_register(self, only_if_cookie_unique=True,
                          **properties):
+        """Register a child manager.
+
+        :param only_if_cookie_unique: If True, only succeed if the
+            specified cookie is unique among sibling managers.
+    
+        :param human_readable_name: A string that can be shown to the
+            user that identifies the manager.
+
+        :param properties: Other properties to set.
+    
+        :returns: A :class:`_Manager` object.
+
+        Example::
+    
+            import woodchuck
+
+            w = woodchuck.Woodchuck ()
+            manager = w.manager_register(
+                only_if_cookie_unique=True,
+                human_readable_name='Web Browser',
+                cookie='org.webbrowser',
+                dbus_service_name='org.webbrowser')
+
+            web_cache = manager.manager_register(
+                only_if_cookie_unique=False,
+                human_readable_name='Web Cache')
+
+            download_later = manager.manager_register(
+                only_if_cookie_unique=False,
+                human_readable_name='Downloads for Later')
+
+            manager.unregister (only_if_empty=False)
+        """
         try:
             UUID = self.dbus.ManagerRegister \
                 (_keys_convert (properties, _manager_properties_to_camel_case),
@@ -447,6 +845,17 @@ class _Manager():
         return Manager (**properties)
 
     def list_managers(self, recursive=False):
+        """List managers that are a descendent of this one.
+
+        :param recursive: If True, list all descendent managers.
+            Otherwise, only list managers that are an immediate
+            descendent.
+
+        :returns: An array of :class:`_Manager`
+
+        See :func:`_Woodchuck.list_managers` for an example using a
+        similar function.
+        """
         try:
             return [Manager(UUID=UUID, human_readable_name=human_readable_name,
                             cookie=cookie, parent_UUID=parent_UUID)
@@ -456,6 +865,18 @@ class _Manager():
             _dbus_exception_to_woodchuck_exception (exception)
 
     def lookup_manager_by_cookie(self, cookie, recursive=False):
+        """Return the set of managers with the specified cookie that
+        are a descendent of this one.
+
+        :param cookie: The cookie to lookup.
+
+        :param recursive: If False, only consider immediate children,
+            otherwise, consider any descendent.
+
+        :returns: An array of :class:`_Manager`
+
+        See :func:`_Woodchuck.lookup_manager_by_cookie` for an example.
+        """
         try:
             return [Manager(UUID=UUID, human_readable_name=human_readable_name,
                             cookie=cookie, parent_UUID=parent_UUID)
@@ -465,6 +886,36 @@ class _Manager():
             _dbus_exception_to_woodchuck_exception (exception)
 
     def stream_register(self, only_if_cookie_unique=True, **properties):
+        """Register a new stream.
+    
+        :param only_if_cookie_unique: If True, only succeed if the
+            specified cookie is unique.
+    
+        :param human_readable_name: A string that can be shown to the
+            user that identifies the stream.
+
+        :param properties: Other properties to set.
+    
+        :returns: A :class:`_Stream` object.
+
+        Example::
+    
+            import woodchuck
+            import random
+
+            w = woodchuck.Woodchuck()
+
+            cookie=str (random.random())
+            m = w.manager_register(True, cookie=cookie,
+                human_readable_name='Test Manager')
+
+            s = m.stream_register(True, cookie=cookie,
+                human_readable_name='Test Stream')
+
+            print m.list_streams ()
+
+            m.unregister (only_if_empty=False)
+        """
         try:
             UUID = self.dbus.StreamRegister \
                 (_keys_convert (properties, _stream_properties_to_camel_case),
@@ -476,6 +927,13 @@ class _Manager():
         return Stream (**properties)
 
     def list_streams(self):
+        """List this manager's streams.
+
+        :returns: An array of :class:`_Stream`
+
+        See :func:`_Woodchuck.list_managers` for an example using a
+        similar function.
+        """
         try:
             return [Stream(UUID=UUID, human_readable_name=human_readable_name,
                            cookie=cookie, parent_UUID=self.properties['UUID'])
@@ -485,6 +943,15 @@ class _Manager():
             _dbus_exception_to_woodchuck_exception (exception)
 
     def lookup_stream_by_cookie(self, cookie):
+        """Return the set of streams with the specified cookie.
+
+        :param cookie: The cookie to match.
+
+        :returns: An array of :class:`_Stream`
+
+        See :func:`_Woodchuck.lookup_manager_by_cookie` for an example
+        using a similar function.
+        """
         try:
             return [Stream(UUID=UUID, human_readable_name=human_readable_name,
                            cookie=cookie, parent_UUID=self.properties['UUID'])
@@ -497,21 +964,25 @@ class _Manager():
         """Request that Woodchuck begin making upcalls for this
         manager.
 
-        If descendents_too is True, also makes upcalls for 
+        :param descendents_too: If True, also makes upcalls for any
+              descendent managers.
 
-        Returns an opaque handle that is required by
-        feedback_unsubscribe.
+        :returns: An opaque handle, which must be passed to
+              :func:`_Manager.feedback_unsubscribe`.
 
         At most, a single subscription is obtained per Manager.  Thus,
         multiple subscriptions share the same handle.  To stop
-        receiving feedback, feedback_unsubscribe must be called the
-        same number of times.
+        receiving feedback, :func:`_Manager.feedback_unsubscribe` must
+        be called the same number of times.
 
         Example::
 
-          subscription = manager.feedback_subscribe (True)
-          ...
-          manager.feedback_unsubscribe(subscription)"""
+            subscription = manager.feedback_subscribe (True)
+            ...
+            manager.feedback_unsubscribe(subscription)
+
+        To actually receive upcalls refer to
+        :class:`woodchuck.Upcalls`."""
         if descendents_too:
             idx = 1
         else:
@@ -546,8 +1017,11 @@ class _Manager():
         return idx
 
     def feedback_unsubscribe(self, handle):
-        """Cancel an upcall subscription.  HANDLE must be the value
-        returned by feedback_subscribe."""
+        """Cancel an upcall subscription.
+
+        :param handle: The value returned by a previous call to
+            :func:`_Manager.feedback_subscribe`.
+        """
 
         assert handle == 0 or handle == 1
         assert self.feedback_subscriptions[handle] > 0
@@ -575,6 +1049,7 @@ class _Manager():
             return
 
     def feedback_ack(self, object_UUID, object_instance):
+        """Invoke org.woodchuck.manager.FeedbackAck."""
         try:
             self.dbus.FeedbackAck (object_UUID, object_instance)
         except dbus.exceptions.DBusException as exception:
@@ -582,7 +1057,25 @@ class _Manager():
 
 _managers = {}
 def Manager(**properties):
-    """Instantiate a local manager object."""
+    """Return a reference to a :class:`_Manager` object.  This
+    function does not actually register a manager; a manager is
+    assumed to already exist.  This function should not normally be
+    called from user code.  Instead, call
+    :func:`_Woodchuck.manager_register` or
+    :func:`_Woodchuck.lookup_manager_by_cookie` to get a
+    :class:`_Manager` object.
+
+    :param UUID: The manager's UUID, required.
+
+    :param properties: Other properties, e.g., human_readable_name.
+        Assumed to correspond to the manager's actual values.
+
+    :returns: A :class:`_Manager` object with the specified
+        properties.
+
+    Note: There is at most a single :class:`_Manager` instance per
+    Woodchuck manager object.  In other words, the Python object is
+    shared among all users."""
     if properties['UUID'] in _managers:
         return _managers[properties['UUID']]
     return _Manager(**properties)
@@ -602,19 +1095,26 @@ class _Woodchuck:
         """Register a new top-level manager.
     
         :param only_if_cookie_unique: If True, only succeed if the
-            specified cookie is unique.
+            specified cookie is unique among top-level managers.
     
-        :param properties: A dict of properties.
+        :param human_readable_name: A string that can be shown to the
+            user that identifies the manager.
+
+        :param properties: Other properties to set.
     
-        :returns: An array of :class:`_Manager`
+        :returns: A :class:`_Manager` object.
 
         Example::
     
-            manager = manager_register(
-                True,
-                {human_readable_name:'BoingBoing.net',
-                 cookie:'http://feeds.boingboing.net/boingboing/iBag',
-                 dbus_service_name:'org.rssreader'})
+            import woodchuck
+
+            w = woodchuck.Woodchuck ()
+            manager = w.manager_register(
+                only_if_cookie_unique=True,
+                human_readable_name='RSS Reader',
+                cookie='org.rssreader',
+                dbus_service_name='org.rssreader')
+            manager.unregister ()
         """
         assert 'parent_UUID' not in properties
         try:
@@ -629,6 +1129,9 @@ class _Woodchuck:
     
     def list_managers(self, recursive=False):
         """List known managers.
+
+        :param recursive: If True, list all managers.  Otherwise, only
+            list top-level managers.
 
         :returns: An array of :class:`_Manager`
 
@@ -651,8 +1154,10 @@ class _Woodchuck:
         """Return the set of managers with the specified cookie.
 
         :param cookie: The cookie to lookup.
+
         :param recursive: If False, only consider top-level managers,
             otherwise, consider any manager.
+
         :returns: An array of :class:`_Manager`
 
         Example::
@@ -683,7 +1188,10 @@ class _Woodchuck:
 
 _woodchuck = None
 def Woodchuck():
-    """Return a reference to the top-level Woodchuck singleton."""
+    """Return a reference to the top-level Woodchuck singleton.
+
+    Note: There is at most a single :class:`_Woodchuck` instance.  In
+    other words, the Python object is shared among all users."""
     global _woodchuck
     if _woodchuck is None:
         _woodchuck = _Woodchuck()
@@ -715,11 +1223,46 @@ def _is_woodchuck(name):
     return name == _woodchuck_owner
 
 class Upcalls(dbus.service.Object):
-    """A thin wrapper around org.woodchuck.upcalls."""
+    """A thin wrapper around org.woodchuck.upcalls.
+
+    To use this class, implement your own class, which inherits from
+    this one and overrides the virtual methods of the upcalls that you
+    are interested in (:func:`Upcalls.object_downloaded_cb`,
+    :func:`Upcalls.stream_update_cb`,
+    :func:`Upcalls.object_download_cb` and
+    :func:`object_delete_files_cb`).  Instantiate the class and then
+    call :func:`woodchuck.feedback_subscribe` to begin receiving
+    feedback.
+
+    Example::
+
+        class Upcalls(woodchuck.Upcalls):
+            def object_downloaded_cb (self, **kwargs):
+                # Download the kwargs[object_UUID] object.
+                ...
+        upcalls = Upcalls ()
+        subscription = Manager.feedback_subscribe (False)
+
+    .. note::
+
+        In order to process upcalls, **your application must use a
+        main loop**.  Moreover, DBus must know about the main loop.
+        If you are using glib, **before accessing the session bus**,
+        run:
+
+          from dbus.mainloop.glib import DBusGMainLoop
+          DBusGMainLoop(set_as_default=True)
+
+        or, if you are using Qt, run:
+      
+          from dbus.mainloop.qt import DBusQtMainLoop
+          DBusQtMainLoop(set_as_default=True)
+    """
     def __init__(self, path):
-        """PATH is the object that will receive the upcalls from
-        woodchuck.  Inherit from this class and implement the
-        corresponding virtual methods."""
+        """
+        :param path: The object that will receive the upcalls from
+            woodchuck.
+        """
         bus = dbus.SessionBus()
 
         dbus.service.Object.__init__(self, bus, path)
@@ -754,7 +1297,44 @@ class Upcalls(dbus.service.Object):
                              trigger_target, trigger_fired):
         """Virtual method that should be implemented by the child
         class if it is interested in
-        org.woodchuck.upcall.ObjectDownloaded upcalls."""
+        org.woodchuck.upcall.ObjectDownloaded upcalls.
+
+        This upcall is invoked when Woodchuck downloads an object on
+        behalf of a manager.  This is only done for objects using the
+        simple downloader.
+
+        :param manager_UUID: The manager's UUID.
+
+        :param manager_cookie: The manager's cookie.
+
+        :param stream_UUID: The stream's UUID.
+
+        :param stream_cookie: The stream's cookie.
+
+        :param object_UUID: The object's UUID.
+
+        :param object_cookie: The object's cookie.
+
+        :param status: Whether the download was successfully.  The
+            value is taken from :class:`woodchuck.DownloadStatus`.
+
+        :param instance: The number of download attempts (not
+            including this one).
+
+        :param version: The version that was downloaded.  An array of:
+            the index in the version array, the URL, the expected
+            size, the utility and the value of use simple downloader.
+
+        :param filename: The name of the file containing the data.
+
+        :param size: The size of the file, in bytes.
+
+        :param trigger_target: The time the application requested the
+            object be downloaded.
+
+        :param trigger_fired: The time at which the file was actually
+            downloaded.
+        """
         pass
     
     @dbus.service.method(dbus_interface='org.woodchuck.upcall',
@@ -772,7 +1352,20 @@ class Upcalls(dbus.service.Object):
                          stream_UUID, stream_cookie):
         """Virtual method that should be implemented by the child
         class if it is interested in
-        org.woodchuck.upcall.StreamUpdate upcalls."""
+        org.woodchuck.upcall.StreamUpdate upcalls.
+
+        This upcall is invoked when a stream should be updated.  The
+        application should update the stream and call
+        :func:`_Stream.update_status`.
+
+        :param manager_UUID: The manager's UUID.
+
+        :param manager_cookie: The manager's cookie.
+
+        :param stream_UUID: The stream's UUID.
+
+        :param stream_cookie: The stream's cookie.
+        """
         pass
     
     @dbus.service.method(dbus_interface='org.woodchuck.upcall',
@@ -786,9 +1379,9 @@ class Upcalls(dbus.service.Object):
             return False
 
         self.object_download_cb (manager_UUID, manager_cookie,
-                              stream_UUID, stream_cookie,
-                              object_UUID, object_cookie,
-                              version, filename, quality)
+                                 stream_UUID, stream_cookie,
+                                 object_UUID, object_cookie,
+                                 version, filename, quality)
 
     def object_download_cb (self, manager_UUID, manager_cookie,
                             stream_UUID, stream_cookie,
@@ -796,7 +1389,35 @@ class Upcalls(dbus.service.Object):
                             version, filename, quality):
         """Virtual method that should be implemented by the child
         class if it is interested in
-        org.woodchuck.upcall.ObjectDownload upcalls."""
+        org.woodchuck.upcall.ObjectDownload upcalls.
+
+        This upcall is invoked when Woodchuck downloads an object on
+        behalf of a manager.  This is only done for objects using the
+        simple downloader.
+
+        :param manager_UUID: The manager's UUID.
+
+        :param manager_cookie: The manager's cookie.
+
+        :param stream_UUID: The stream's UUID.
+
+        :param stream_cookie: The stream's cookie.
+
+        :param object_UUID: The object's UUID.
+
+        :param object_cookie: The object's cookie.
+
+        :param version: The version to download.  An array of: the
+            index in the version array, the URL, the expected size,
+            the utility and the value of use simple downloader.
+
+        :param filename: The name of the filename property.
+
+        :param quality: The degree to which quality should be
+            sacrified to reduce the number of bytes transferred.  The
+            target quality of the download.  From 1 (most compressed)
+            to 5 (highest available fidelity).
+        """
         pass
 
     @dbus.service.method(dbus_interface='org.woodchuck.upcall',
@@ -817,7 +1438,23 @@ class Upcalls(dbus.service.Object):
                                 object_UUID, object_cookie):
         """Virtual method that should be implemented by the child
         class if it is interested in
-        org.woodchuck.upcall.ObjectDeleteFiles upcalls."""
+        org.woodchuck.upcall.ObjectDeleteFiles upcalls.
+
+        This upcall is invoked when Woodchuck wants a manager to free
+        disk space.
+
+        :param manager_UUID: The manager's UUID.
+
+        :param manager_cookie: The manager's cookie.
+
+        :param stream_UUID: The stream's UUID.
+
+        :param stream_cookie: The stream's cookie.
+
+        :param object_UUID: The object's UUID.
+
+        :param object_cookie: The object's cookie.
+        """
         pass
 
 if __name__ == "__main__":

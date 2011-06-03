@@ -1,30 +1,37 @@
 <!DOCTYPE node PUBLIC "-//freedesktop//DTD D-BUS Object Introspection 1.0//EN" "http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd">
 <node>
-  <!-- Object: /org/woodchuck -->
+  <!-- The top-level interface to Woodchuck.
+
+       By default, Woodchuck listens on the session bus.  It registers
+       the DBus service name `org.woodchuck` and uses the object
+       `/org/woodchuck`.
+   -->
   <interface name="org.woodchuck">
     <!-- Register a new manager.
 
-         Also see the manager_register method in
-         org.woodchuck.manager.
+         Also see the :func:`org.woodchuck.manager.ManagerRegister`.
 
-         Manipulate the manager object using the org.woodchuck.manager
-         interface and the object /org/woodchuck/UUID.  -->
+         :returns: The UUID of a new manager object.  Manipulate the
+             manager object using :class:`org.woodchuck.manager`
+	     interface and the object /org/woodchuck/manager/`UUID`.  -->
     <method name="ManagerRegister">
       <!-- Dictionary of initial values for the various
-           properties. See the org.woodchuck.manager interface.
+           properties. See the :class:`org.woodchuck.manager`
+           interface for the list of properties and their meanings.
 
-           The following properties are required:
-            - HumanReadableName
+           The following properties are required: `HumanReadableName`
 
-           Note: a{ss} is also supported, but then only properties
-           with a string type may be expressed.
-      -->
-      <arg name="properties" type="a{sv}"/>
+           Note: The a{ss} type is also supported, but then only
+           properties with a string type may be expressed.  (This is a
+           concession to dbus-send, as it does not support parameters
+           with the variant type.)  -->
+      <arg name="Properties" type="a{sv}"/>
 
-      <!-- Only succeed if the supplied cookie is unique.  -->
-      <arg name="only_if_cookie_unique" type="b"/>
+      <!-- Only succeed if the supplied cookie is unique among all
+           top-level managers.  -->
+      <arg name="OnlyIfCookieUnique" type="b"/>
 
-      <!-- The manager's unique identifier (a 16-character
+      <!-- The new manager's unique identifier (a 16-character
            alpha-numeric string).  -->
       <arg name="UUID" type="s" direction="out"/>
     </method>
@@ -32,45 +39,49 @@
     <!-- Return a list of the known managers.  -->
     <method name="ListManagers">
       <!-- Whether to list all descendents (true) or just top-level
-           manager (false).  Argument is optional and defaults to
-           true.  -->
+           manager (false).  -->
       <arg name="Recursive" type="b"/>
 
-      <!-- An array of <UUID, COOKIE, HUMAN_READABLE_NAME, PARENT
-           UUID>.  -->
+      <!-- An array of <`UUID`, `Cookie, `HumanReadableName`,
+           `ParentUUID`>.  -->
       <arg name="Managers" type="a(ssss)" direction="out"/>
     </method>
 
-    <!-- Return a list of managers with the cookie COOKIE.  If
-         RECURSIVE is TRUE, consider any manager.  If RECURSIVE is
-         FALSE, only consider top-level managers.  -->
+    <!-- Return the managers whose `Cookie` property matches the
+         specified cookie.  -->
     <method name="LookupManagerByCookie">
+      <!-- The cookie to match.  -->
       <arg name="Cookie" type="s"/>
+      <!-- If true, consider any manager.  If false, only consider
+           top-level managers.  -->
       <arg name="Recursive" type="b"/>
 
-      <!-- An array of <UUID, HUMAN_READABLE_NAME, PARENT UUID>.  -->
+      <!-- An array of <`UUID`, `HumanReadableName`, `ParentUUID`>.  -->
       <arg name="Managers" type="a(sss)" direction="out"/>
     </method>
 
     <!-- Evaluate the desirability of executing a download right now.  -->
     <method name="DownloadDesirability">
-      <!-- The type of request.
-	     1 - user initiated
-	     2 - background
+      <!-- The type of request:
+
+	   * 1: User initiated
+	   * 2: Application initiated
 	-->
       <arg name="RequestType" type="u"/>
 
-      <!-- Array of <EXPECTED_SIZE, UTILITY> tuples.  See
-           org.woodchuck.object.Versions for a description.  -->
+      <!-- Array of <`ExpectedSize`, `Utility`> tuples.  See
+           :data:`org.woodchuck.object.Versions` for a description.  -->
       <arg name="Versions" type="a(tu)"/>
 
-      <!-- The desirability of executing the job now.
-	   0 - Avoid if at all possible.
-	   5 - Now is acceptable but waiting is better.
-	   9 - Now is ideal.
+      <!--
+	  The desirability of executing the job now:
+
+	  * 0: Avoid if at all possible.
+	  * 5: Now is acceptable but waiting is better.
+	  * 9: Now is ideal.
 	-->
       <arg name="Desirability" type="u" direction="out"/>
-      <!-- Which version to download as an index into the passed
+      <!-- The version to download as an index into the passed
            Versions array.  -1 means do not download anything.  -->
       <arg name="Version" type="u" direction="out"/>
     </method>

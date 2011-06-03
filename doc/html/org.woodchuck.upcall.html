@@ -1,0 +1,228 @@
+
+
+<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Transitional//EN"
+  "http://www.w3.org/TR/xhtml1/DTD/xhtml1-transitional.dtd">
+
+<html xmlns="http://www.w3.org/1999/xhtml">
+  <head>
+    <meta http-equiv="Content-Type" content="text/html; charset=utf-8" />
+    
+    <title>org.woodchuck.upcall &mdash; Woodchuck v0.2 documentation</title>
+    <link rel="stylesheet" href="_static/default.css" type="text/css" />
+    <link rel="stylesheet" href="_static/pygments.css" type="text/css" />
+    <script type="text/javascript">
+      var DOCUMENTATION_OPTIONS = {
+        URL_ROOT:    '',
+        VERSION:     '0.2',
+        COLLAPSE_INDEX: false,
+        FILE_SUFFIX: '.html',
+        HAS_SOURCE:  true
+      };
+    </script>
+    <script type="text/javascript" src="_static/jquery.js"></script>
+    <script type="text/javascript" src="_static/underscore.js"></script>
+    <script type="text/javascript" src="_static/doctools.js"></script>
+    <link rel="top" title="Woodchuck v0.2 documentation" href="index.html" />
+    <link rel="prev" title="org.woodchuck.object" href="org.woodchuck.object.html" /> 
+  </head>
+  <body>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             accesskey="I">index</a></li>
+        <li class="right" >
+          <a href="py-modindex.html" title="Python Module Index"
+             >modules</a> |</li>
+        <li class="right" >
+          <a href="org.woodchuck.object.html" title="org.woodchuck.object"
+             accesskey="P">previous</a> |</li>
+        <li><a href="woodchuck.html">Woodchuck v0.2 documentation</a> &raquo;</li> 
+      </ul>
+    </div>  
+
+    <div class="document">
+      <div class="documentwrapper">
+        <div class="bodywrapper">
+          <div class="body">
+            
+  <div class="section" id="org-woodchuck-upcall">
+<h1>org.woodchuck.upcall<a class="headerlink" href="#org-woodchuck-upcall" title="Permalink to this headline">¶</a></h1>
+<dl class="class">
+<dt id="org.woodchuck.upcall">
+<em class="property">class </em><tt class="descclassname">org.woodchuck.</tt><tt class="descname">upcall</tt><a class="headerlink" href="#org.woodchuck.upcall" title="Permalink to this definition">¶</a></dt>
+<dd><dl class="function">
+<dt id="org.woodchuck.upcall.ObjectDownloaded">
+<tt class="descname">ObjectDownloaded</tt><big>(</big><em>ManagerUUID</em>, <em>ManagerCookie</em>, <em>StreamUUID</em>, <em>StreamCookie</em>, <em>ObjectUUID</em>, <em>ObjectCookie</em>, <em>Status</em>, <em>Instance</em>, <em>Version</em>, <em>Filename</em>, <em>Size</em>, <em>TriggerTarget</em>, <em>TriggerFired</em><big>)</big><a class="headerlink" href="#org.woodchuck.upcall.ObjectDownloaded" title="Permalink to this definition">¶</a></dt>
+<dd><p>Upcall from Woodchuck indicating that a download has
+completed.  After processing, the application should
+acknowledge the feedback using FeedbackACK, otherwise, it
+will be resent.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>ManagerUUID s</strong> (<em>in</em>) &#8211; The manager&#8217;s UUID.</li>
+<li><strong>ManagerCookie s</strong> (<em>in</em>) &#8211; The manager&#8217;s cookie.</li>
+<li><strong>StreamUUID s</strong> (<em>in</em>) &#8211; The stream&#8217;s UUID.</li>
+<li><strong>StreamCookie s</strong> (<em>in</em>) &#8211; The stream&#8217;s cookie.</li>
+<li><strong>ObjectUUID s</strong> (<em>in</em>) &#8211; The object&#8217;s UUID.</li>
+<li><strong>ObjectCookie s</strong> (<em>in</em>) &#8211; The object&#8217;s cookie.</li>
+<li><strong>Status u</strong> (<em>in</em>) &#8211; Whether the download was successful or not.  See the status
+argument of <a class="reference internal" href="org.woodchuck.object.html#org.woodchuck.object.DownloadStatus" title="org.woodchuck.object.DownloadStatus"><tt class="xref py py-func docutils literal"><span class="pre">org.woodchuck.object.DownloadStatus()</span></tt></a> for
+the possible values.</li>
+<li><strong>Instance u</strong> (<em>in</em>) &#8211; <p>The number of download attempts (not including this one).</p>
+<p>This is the instance number of the feedback.</p>
+</li>
+<li><strong>Version ustub</strong> (<em>in</em>) &#8211; Index and value of the version downloaded from the versions
+array (at the time of download).  See
+<a class="reference internal" href="org.woodchuck.object.html#org.woodchuck.object.Versions" title="org.woodchuck.object.Versions"><tt class="xref py py-data docutils literal"><span class="pre">org.woodchuck.object.Versions</span></tt></a>.</li>
+<li><strong>Filename s</strong> (<em>in</em>) &#8211; The location of the data.</li>
+<li><strong>Size t</strong> (<em>in</em>) &#8211; The size (in bytes).</li>
+<li><strong>TriggerTarget t</strong> (<em>in</em>) &#8211; The target time.</li>
+<li><strong>TriggerFired t</strong> (<em>in</em>) &#8211; The time at which the download was attempted.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.upcall.StreamUpdate">
+<tt class="descname">StreamUpdate</tt><big>(</big><em>ManagerUUID</em>, <em>ManagerCookie</em>, <em>StreamUUID</em>, <em>StreamCookie</em><big>)</big><a class="headerlink" href="#org.woodchuck.upcall.StreamUpdate" title="Permalink to this definition">¶</a></dt>
+<dd><p>Update the specified stream.</p>
+<p>Respond by calling
+<a class="reference internal" href="org.woodchuck.stream.html#org.woodchuck.stream.UpdateStatus" title="org.woodchuck.stream.UpdateStatus"><tt class="xref py py-func docutils literal"><span class="pre">org.woodchuck.stream.UpdateStatus()</span></tt></a>.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>ManagerUUID s</strong> (<em>in</em>) &#8211; The manager&#8217;s UUID.</li>
+<li><strong>ManagerCookie s</strong> (<em>in</em>) &#8211; The manager&#8217;s cookie.</li>
+<li><strong>StreamUUID s</strong> (<em>in</em>) &#8211; The stream&#8217;s UUID.</li>
+<li><strong>StreamCookie s</strong> (<em>in</em>) &#8211; The stream&#8217;s cookie.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.upcall.ObjectDownload">
+<tt class="descname">ObjectDownload</tt><big>(</big><em>ManagerUUID</em>, <em>ManagerCookie</em>, <em>StreamUUID</em>, <em>StreamCookie</em>, <em>ObjectUUID</em>, <em>ObjectCookie</em>, <em>Version</em>, <em>Filename</em>, <em>Quality</em><big>)</big><a class="headerlink" href="#org.woodchuck.upcall.ObjectDownload" title="Permalink to this definition">¶</a></dt>
+<dd><p>Download the specified object.</p>
+<p>Respond by calling
+<a class="reference internal" href="org.woodchuck.object.html#org.woodchuck.object.DownloadStatus" title="org.woodchuck.object.DownloadStatus"><tt class="xref py py-func docutils literal"><span class="pre">org.woodchuck.object.DownloadStatus()</span></tt></a>.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>ManagerUUID s</strong> (<em>in</em>) &#8211; The manager&#8217;s UUID.</li>
+<li><strong>ManagerCookie s</strong> (<em>in</em>) &#8211; The manager&#8217;s cookie.</li>
+<li><strong>StreamUUID s</strong> (<em>in</em>) &#8211; The stream&#8217;s UUID.</li>
+<li><strong>StreamCookie s</strong> (<em>in</em>) &#8211; The stream&#8217;s cookie.</li>
+<li><strong>ObjectUUID s</strong> (<em>in</em>) &#8211; The object&#8217;s UUID.</li>
+<li><strong>ObjectCookie s</strong> (<em>in</em>) &#8211; The object&#8217;s cookie.</li>
+<li><strong>Version (ustub)</strong> (<em>in</em>) &#8211; Index and value of the version to download from the
+versions array (at the time of the upcall).  See
+<a class="reference internal" href="org.woodchuck.object.html#org.woodchuck.object.Versions" title="org.woodchuck.object.Versions"><tt class="xref py py-data docutils literal"><span class="pre">org.woodchuck.object.Versions</span></tt></a>.</li>
+<li><strong>Filename s</strong> (<em>in</em>) &#8211; The value of <a class="reference internal" href="org.woodchuck.object.html#org.woodchuck.object.Filename" title="org.woodchuck.object.Filename"><tt class="xref py py-data docutils literal"><span class="pre">org.woodchuck.object.Filename</span></tt></a>.</li>
+<li><strong>Quality u</strong> (<em>in</em>) &#8211; Target quality from 1 (most compressed) to 5 (highest
+available fidelity).  This is useful if all possible
+versions cannot be or are not easily expressed by the
+Version parameter.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+<dl class="function">
+<dt id="org.woodchuck.upcall.ObjectDeleteFiles">
+<tt class="descname">ObjectDeleteFiles</tt><big>(</big><em>ManagerUUID</em>, <em>ManagerCookie</em>, <em>StreamUUID</em>, <em>StreamCookie</em>, <em>ObjectUUID</em>, <em>ObjectCookie</em>, <em>Files</em><big>)</big><a class="headerlink" href="#org.woodchuck.upcall.ObjectDeleteFiles" title="Permalink to this definition">¶</a></dt>
+<dd><p>Delete the files associated with the specified object.
+Respond by calling
+<a class="reference internal" href="org.woodchuck.object.html#org.woodchuck.object.FilesDeleted" title="org.woodchuck.object.FilesDeleted"><tt class="xref py py-func docutils literal"><span class="pre">org.woodchuck.object.FilesDeleted()</span></tt></a>.</p>
+<table class="docutils field-list" frame="void" rules="none">
+<col class="field-name" />
+<col class="field-body" />
+<tbody valign="top">
+<tr class="field"><th class="field-name">Parameters:</th><td class="field-body"><ul class="first last simple">
+<li><strong>ManagerUUID s</strong> (<em>in</em>) &#8211; The manager&#8217;s UUID.</li>
+<li><strong>ManagerCookie s</strong> (<em>in</em>) &#8211; The manager&#8217;s cookie.</li>
+<li><strong>StreamUUID s</strong> (<em>in</em>) &#8211; The stream&#8217;s UUID.</li>
+<li><strong>StreamCookie s</strong> (<em>in</em>) &#8211; The stream&#8217;s cookie.</li>
+<li><strong>ObjectUUID s</strong> (<em>in</em>) &#8211; The object&#8217;s UUID.</li>
+<li><strong>ObjectCookie s</strong> (<em>in</em>) &#8211; The object&#8217;s cookie.</li>
+<li><strong>Files a(sbu)</strong> (<em>in</em>) &#8211; The list of files associated with this object, as provided
+the call to <a class="reference internal" href="org.woodchuck.object.html#org.woodchuck.object.DownloadStatus" title="org.woodchuck.object.DownloadStatus"><tt class="xref py py-func docutils literal"><span class="pre">org.woodchuck.object.DownloadStatus()</span></tt></a>.</li>
+</ul>
+</td>
+</tr>
+</tbody>
+</table>
+</dd></dl>
+
+</dd></dl>
+
+</div>
+
+
+          </div>
+        </div>
+      </div>
+      <div class="sphinxsidebar">
+        <div class="sphinxsidebarwrapper">
+  <h4>Previous topic</h4>
+  <p class="topless"><a href="org.woodchuck.object.html"
+                        title="previous chapter">org.woodchuck.object</a></p>
+  <h3>This Page</h3>
+  <ul class="this-page-menu">
+    <li><a href="_sources/org.woodchuck.upcall.txt"
+           rel="nofollow">Show Source</a></li>
+  </ul>
+<div id="searchbox" style="display: none">
+  <h3>Quick search</h3>
+    <form class="search" action="search.html" method="get">
+      <input type="text" name="q" size="18" />
+      <input type="submit" value="Go" />
+      <input type="hidden" name="check_keywords" value="yes" />
+      <input type="hidden" name="area" value="default" />
+    </form>
+    <p class="searchtip" style="font-size: 90%">
+    Enter search terms or a module, class or function name.
+    </p>
+</div>
+<script type="text/javascript">$('#searchbox').show(0);</script>
+        </div>
+      </div>
+      <div class="clearer"></div>
+    </div>
+    <div class="related">
+      <h3>Navigation</h3>
+      <ul>
+        <li class="right" style="margin-right: 10px">
+          <a href="genindex.html" title="General Index"
+             >index</a></li>
+        <li class="right" >
+          <a href="py-modindex.html" title="Python Module Index"
+             >modules</a> |</li>
+        <li class="right" >
+          <a href="org.woodchuck.object.html" title="org.woodchuck.object"
+             >previous</a> |</li>
+        <li><a href="woodchuck.html">Woodchuck v0.2 documentation</a> &raquo;</li> 
+      </ul>
+    </div>
+    <div class="footer">
+        &copy; Copyright 2011, Neal H. Walfield.
+      Created using <a href="http://sphinx.pocoo.org/">Sphinx</a> 1.0.7.
+    </div>
+  </body>
+</html>
