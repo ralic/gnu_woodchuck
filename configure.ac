@@ -14,6 +14,8 @@ AM_PROG_AS
 AC_PROG_RANLIB
 AC_PROG_LIBTOOL
 
+AM_PATH_PYTHON([2.4])
+
 # If sphinx-build is not found, set it to :, in which case the
 # documentation won't be rebuilt.
 AC_PATH_PROG([SPHINX_BUILD], [sphinx-build], :)
@@ -79,7 +81,6 @@ AC_SUBST(GLIB_GENMARSHAL)
 AC_CONFIG_FILES([Makefile
 		src/Makefile
 		include/Makefile
-		include/netczar/Makefile
 		data/Makefile
 		doc/Makefile])
 AC_OUTPUT

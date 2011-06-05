@@ -3,13 +3,21 @@ bin_PROGRAMS = murmeltier smart-storage-logger smart-storage-logger-recover \
 bin_SCRIPTS = smart-storage-logger-consent
 
 lib_LTLIBRARIES = libgwoodchuck-0.0.la
+python_PYTHON = woodchuck.py pywoodchuck.py
 
+# Turn a python program into a program.
 %: %.py
 	cp "$<" "$@"
 
 AM_CFLAGS = -Wall -g -O2 -std=gnu99 $(BASE_CFLAGS)
-AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 -DPKGDATADIR=\"$(pkgdatadir)\" -I$(top_srcdir)/include
-nm_interfaces_xml = $(foreach filename, \
+AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 \
+	-DPKGDATADIR=\"$(pkgdatadir)\" -I$(top_srcdir)/include
+
+EXTRA_DIST =
+BUILT_SOURCES =
+
+# DBus interfaces.
+dbus_interfaces_xml = \
 	org.freedesktop.DBus.Properties.xml \
 	org.freedesktop.NetworkManager.Device.xml \
 	org.freedesktop.NetworkManager.Device.Gsm.xml \
@@ -32,28 +40,29 @@ nm_interfaces_xml = $(foreach filename, \
 	org.woodchuck.manager.xml \
 	org.woodchuck.stream.xml \
 	org.woodchuck.object.xml \
-	org.woodchuck.upcall.xml \
-	, $(srcdir)/$(filename))
+	org.woodchuck.upcall.xml
+EXTRA_DIST += $(dbus_interfaces_xml)
 
-nm_interfaces_h = $(patsubst %.xml,%.h,$(nm_interfaces_xml))
+# Generate C client header files from the DBus interface specifications.
+dbus_interfaces_h = $(patsubst %.xml,%.h,$(dbus_interfaces_xml))
+BUILT_SOURCES += $(dbus_interfaces_h)
 
-nm_server_stubs_xml = $(foreach filename, \
-	org.woodchuck.upcall.xml \
-	, $(srcdir)/$(filename))
+%.h: %.xml
+	dbus-binding-tool --mode=glib-client "$<" > "$@"
 
-nm_server_stubs_c = $(patsubst %.xml,%.server-stubs.h,$(nm_server_stubs_xml))
+# Generate C server stubs from the DBus interface specifications.
+dbus_server_stubs_c = org.woodchuck.upcall.server-stubs.h
+BUILT_SOURCES += $(dbus_server_stubs_c)
 
-BUILT_SOURCES = $(nm_interfaces_h) $(nm_server_stubs_c) \
-	marshal.h marshal.c \
-	org.woodchuck.xml.h \
-	org.woodchuck.manager.xml.h \
-	org.woodchuck.stream.xml.h \
-	org.woodchuck.object.xml.h \
-	org.freedesktop.DBus.Introspectable.xml.h
+%.server-stubs.h: %.xml
+	echo "$*"
+	dbus-binding-tool --mode=glib-server \
+	  --prefix=$$(echo "$*" | sed 's/.*[/]//; s/[.]/_/g') \
+	  "$<" > "$@"
 
-# network-monitor-*.c are #included from network-monitor.c, as
-# appropriate.
-EXTRA_DIST = marshal.list network-monitor-icd2.c network-monitor-nm.c
+# Additional glib marhsallers.
+EXTRA_DIST += marshal.list
+BUILT_SOURCES += marshal.h marshal.c
 
 %.h: %.list
 	$(GLIB_GENMARSHAL) --header $< > $@~ \
@@ -61,6 +70,16 @@ EXTRA_DIST = marshal.list network-monitor-icd2.c network-monitor-nm.c
 %.c: %.list
 	$(GLIB_GENMARSHAL) --body $< > $@~ \
 	  && (if cmp -s $@ $@~; then rm $@~; else mv $@~ $@; fi)
+
+# DBus specifications as C strings.  Used by murmeltier-dbus-server.c
+# to implement org.freedesktop.DBus.Introspectable.introspect.
+dbus_interfaces_xml_h = \
+	org.woodchuck.xml.h \
+	org.woodchuck.manager.xml.h \
+	org.woodchuck.stream.xml.h \
+	org.woodchuck.object.xml.h \
+	org.freedesktop.DBus.Introspectable.xml.h
+BUILT_SOURCES += $(dbus_interfaces_xml_h)
 
 # Extract each interface and save it as a CPP define named after the
 # interface (uppercase and dots replaced by underscores) and _XML
@@ -94,70 +113,92 @@ EXTRA_DIST = marshal.list network-monitor-icd2.c network-monitor-nm.c
 	        } \
 	      }' "$<" > "$@"
 
-common_sources = $(nm_interfaces_h) marshal.h marshal.c \
-	debug.h debug.c \
-	files.h files.c \
-	dotdir.h dotdir.c \
-	sqlq.h sqlq.c \
-	signal-handler.h signal-handler.c \
+# network-monitor-*.c are #included from network-monitor.c, as
+# appropriate.
+EXTRA_DIST += network-monitor-icd2.c network-monitor-nm.c
+
+# Debugging machinery.
+debug_src = debug.h debug.c
+# If you define LOG_TO_DB, you also need the following files and
+# you'll need to link to sqlite.
+debug_log_to_db_src = $(debug_src) util.h files.h
+
+# The monitors and their dependencies (except for debug; choose either
+# debug_src or debug_log_to_db_src).
+monitors = \
 	network-monitor.h network-monitor.c \
 	ll-networking-linux.h ll-networking-linux.c \
+	dbus-util.h \
+	\
 	user-activity-monitor.h user-activity-monitor.c \
+	\
 	battery-monitor.h battery-monitor.c \
+	\
 	service-monitor.h service-monitor.c \
+	\
 	process-monitor-ptrace.h process-monitor-ptrace.c \
-	shutdown-monitor.h shutdown-monitor.c
+	signal-handler.h signal-handler.c \
+	files.h files.c \
+	\
+	shutdown-monitor.h shutdown-monitor.c \
+	\
+	marshal.h marshal.c
 
-murmeltier_SOURCES = $(common_sources) murmeltier.c \
+murmeltier_SOURCES = $(dbus_interfaces_h) $(monitors) \
+	$(dbus_interfaces_xml_h) \
+	murmeltier.c \
 	murmeltier-dbus-server.h murmeltier-dbus-server.c \
 	org.woodchuck.xml.h \
 	org.woodchuck.manager.xml.h \
 	org.woodchuck.stream.xml.h \
 	org.woodchuck.object.xml.h \
-	org.woodchuck.murmeltier-server.h
+	org.freedesktop.DBus.Introspectable.xml.h \
+	dotdir.h dotdir.c \
+	$(debug_src) \
+	util.h
 murmeltier_LDADD = $(BASE_LIBS)
 
-smart_storage_logger_SOURCES = $(common_sources) \
+smart_storage_logger_SOURCES = $(dbus_interfaces_h) $(monitors) \
 	smart-storage-logger.c \
 	smart-storage-logger-uploader.h smart-storage-logger-uploader.c \
 	pidfile.h pidfile.c \
-	md5.h md5.c
+	md5.h md5.c \
+	sqlq.h sqlq.c \
+	util.h \
+	$(debug_log_to_db_src)
 smart_storage_logger_CPPFLAGS = $(AM_CPPFLAGS) -DLOG_TO_DB
 smart_storage_logger_LDADD = $(BASE_LIBS)
 
 smart_storage_logger_recover_SOURCES = \
 	smart-storage-logger-recover.c \
-	debug.h debug.c \
-	files.h files.c
+	files.h files.c \
+	$(debug_log_to_db_src) \
+	util.h
 smart_storage_logger_recover_CPPFLAGS = $(AM_CPPFLAGS) -DLOG_TO_DB
+# Needs sqlite, glib and pthreads.
 smart_storage_logger_recover_LDADD = $(BASE_LIBS)
 
-process_tracer_CPPFLAGS = $(AM_CPPFLAGS) -DPROCESS_TRACER_STANDALONE
-process_tracer_LDADD = $(BASE_LIBS)
 process_tracer_SOURCES = process-monitor-ptrace.c process-monitor-ptrace.h \
 	signal-handler.h signal-handler.c \
-	debug.h debug.c
+	util.h \
+	$(debug_src)
+process_tracer_CPPFLAGS = $(AM_CPPFLAGS) -DPROCESS_TRACER_STANDALONE
+# Needs sqlite, glib and pthreads.
+process_tracer_LDADD = $(BASE_LIBS)
 
 ssl_tail_SOURCES = ssl-tail.c files.h files.c debug.h util.h
 ssl_tail_CPPFLAGS = $(AM_CPPFLAGS)
+# Needs sqlite.
 ssl_tail_LDADD = $(BASE_LIBS)
 
-gwoodchuck_SOURCES = gwoodchuck.c
-gwoodchuck_CPPFLAGS = $(AM_CPPFLAGS) $(DBUS_CFLAGS) $(GLIB_CFLAGS) \
-	-DGWOODCHUCK_TEST
-gwoodchuck_LDADD = $(DBUS_LIBS) $(GLIB_LIBS)
-
-libgwoodchuck_0_0_la_SOURCES = gwoodchuck.c
+libgwoodchuck_0_0_la_SOURCES = \
+	gwoodchuck.c \
+	$(dbus_interfaces_h) \
+	org.woodchuck.upcall.server-stubs.h
 libgwoodchuck_0_0_la_CPPFLAGS = $(AM_CPPFLAGS) $(DBUS_CFLAGS) $(GLIB_CFLAGS)
 
-.PHONEY: xml-to-h
-xml-to-h: $(patsubst %.xml,%.h,$(wildcard $(srcdir)/*.xml))
+gwoodchuck_SOURCES = $(libgwoodchuck_0_0_la_SOURCES)
+gwoodchuck_CPPFLAGS = $(libgwoodchuck_0_0_la_CPPFLAGS) -DGWOODCHUCK_TEST
+gwoodchuck_LDADD = $(DBUS_LIBS) $(GLIB_LIBS)
 
-%.h: %.xml
-	dbus-binding-tool --mode=glib-client "$<" > "$@"
-
-%.server-stubs.h: %.xml
-	echo "$*"
-	dbus-binding-tool --mode=glib-server \
-	  --prefix=$$(echo "$*" | sed 's/.*[/]//; s/[.]/_/g') \
-	  "$<" > "$@"
+EXTRA_DIST += smart-storage-logger-consent.py

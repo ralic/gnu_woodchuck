@@ -1,1 +1,27 @@
-  apt-get install build-essential automake autoconf libsqlite3-dev libglib2.0-dev libdbus-1-dev network-manager-dev libdbus-glib-1-dev
+Building
+========
+
+Dependencies
+------------
+
+You'll need to install a few packages:
+
+  apt-get install build-essential automake autoconf libsqlite3-dev \
+	libglib2.0-dev libdbus-1-dev libdbus-glib-1-dev \
+	network-manager-dev
+
+If you want to update the documentation, you'll also need:
+
+  apt-get install python-sphinx
+
+Building
+--------
+
+  tar xfvz woodchuck-version.tar.gz
+  cd woodchuck-version
+  autoreconf -fi
+  mkdir build
+  cd build
+  ../configure --prefix=/tmp/woodchuck
+  make
+  make install

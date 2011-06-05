@@ -1,6 +1,6 @@
 FORMATS = html pdf
 
-EXTRA_DIST = conf.py woodchuck.rst pdf/$(pdf_file)
+EXTRA_DIST = conf.py woodchuck.rst $(FORMATS)
 
 all: $(FORMATS)
 
@@ -15,6 +15,7 @@ BUILT_SOURCES = $(aux_files)
 
 VPATH += $(srcdir)/../src
 
+EXTRA_DIST += dbus2rst.py
 $(srcdir)/%.rst: %.xml
 	python $(srcdir)/dbus2rst.py -d $(srcdir) $<
 
@@ -70,16 +71,22 @@ INDIRECT_FILES = $(pdf_file) $(ps_file) $(dvi_file)
 
 # Create a pdf, ps or dvi file from the generated latex source.
 pdf-builder ps-builder dvi-builder: latex-builder
-	cd latex && $(MAKE) $(AM_MAKEFLAGS) all-$(@:-builder=)
-	$(INSTALL_DATA) -D latex/$($(@:-builder=)_file) \
-	  $(call builders_loc,$(@:-builder=))/$($(@:-builder=)_file)
+	if test x"$(SPHINX_BUILD)" == x:; \
+	then \
+	  echo "Warning: sphinx-builder was not found." \
+	    "Not building $(@:-builder=) documentation."; \
+	else \
+	  ( cd latex && $(MAKE) $(AM_MAKEFLAGS) all-$(@:-builder=) ); \
+	  $(INSTALL_DATA) -D $(call builders_loc,latex)/$($(@:-builder=)_file) \
+	    $(call builders_loc,$(@:-builder=))/$($(@:-builder=)_file); \
+	fi
 
 # Install targets for the various builders.  We just copy the
 # directory to the data doc directory.
 $(foreach target,$(SPHINX_TARGETS),install-$(target)): install-%: %-builder
 	find $(call builders_loc,$(@:install-%=%)) -type f| while read -r file; \
 	do \
-	  if test x"$$file" != x"$(@:install-%=%)/.buildinfo"; \
+	  if ! echo "$$file" | grep -q -e "$(@:install-%=%)/.buildinfo$$"; \
 	  then \
 	    $(INSTALL_DATA) -D $$file $(DESTDIR)/$(docdir)/$$file; \
 	  fi; \
