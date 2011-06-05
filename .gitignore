@@ -8,3 +8,8 @@ aclocal.m4
 # Generated files.
 *.*.*.h
 *.*.h
+*.o
+*.pyc
+doc/html
+doc/pdf
+doc/org.woodchuck.*rst
