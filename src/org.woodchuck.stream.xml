@@ -35,7 +35,7 @@
 
     <!-- Return a list of objects in this stream.  -->
     <method name="ListObjects">
-      <!-- An array of <`UUID`, `Cookie, `HumanReadableName`,
+      <!-- An array of <`UUID`, `Cookie`, `HumanReadableName`,
            `ParentUUID`>.  -->
       <arg name="Objects" type="a(sss)" direction="out"/>
     </method>

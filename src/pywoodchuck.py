@@ -25,9 +25,7 @@ never_updated=2 ** 32 - 1
 
 class PyWoodchuck:
     """
-    A high-level interface to Woodchuck.
-
-    Woodchuck provides the application developer with 
+    A high-level, pythonic interface to Woodchuck.
 
     This module assumes that a single application uses the specified
     manager and that it does so in a particular way.  First, it
@@ -35,10 +33,10 @@ class PyWoodchuck:
     hierarchical managers are not supported.  It also assumes that
     streams and objects are uniquely identified by their respective
     cookies (thereby allowing the use of
-    :func:`_Woodchuck.lookup_manager_by_cookie`).  For most
+    :func:`org.woodchuck.LookupManagerByCookie`).  For most
     applications, these limitations should not present a burden.
 
-    If applications violate these assumptions, e.g., by manipulating
+    If applications violate these assumptions, i.e., by manipulating
     the manager in an incompatible way using a low-level interface,
     PyWoodchuck may refuse to work with the manager.
 
@@ -145,7 +143,7 @@ class PyWoodchuck:
         Registers the application with Woodchuck, if not already
         registered.
 
-        :params human_readable_name: A string that can be shown to the
+        :param human_readable_name: A string that can be shown to the
             user that identifies the application.
 
         :param dbus_service_name: The application's DBus service name,

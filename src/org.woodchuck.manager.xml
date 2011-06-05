@@ -45,7 +45,7 @@
            children (false).  -->
       <arg name="Recursive" type="b"/>
 
-      <!-- An array of <`UUID`, `Cookie, `HumanReadableName`,
+      <!-- An array of <`UUID`, `Cookie`, `HumanReadableName`,
            `ParentUUID`>.  -->
       <arg name="Managers" type="a(ssss)" direction="out"/>
     </method>
@@ -87,11 +87,11 @@
 
     <!-- Return a list of streams.  -->
     <method name="ListStreams">
-      <!-- An array of <UUID, COOKIE, HUMAN_READABLE_NAME>.  -->
+      <!-- An array of <`UUID`, `Cookie`, `HumanReadableName`>.  -->
       <arg name="Streams" type="a(sss)" direction="out"/>
     </method>
 
-    <!-- Return a list of streams with the cookie COOKIE.  -->
+    <!-- Return a list of streams with the specified cookie.  -->
     <method name="LookupStreamByCookie">
       <!-- The cookie to match.  -->
       <arg name="Cookie" type="s"/>

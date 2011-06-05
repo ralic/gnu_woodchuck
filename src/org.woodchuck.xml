@@ -42,7 +42,7 @@
            manager (false).  -->
       <arg name="Recursive" type="b"/>
 
-      <!-- An array of <`UUID`, `Cookie, `HumanReadableName`,
+      <!-- An array of <`UUID`, `Cookie`, `HumanReadableName`,
            `ParentUUID`>.  -->
       <arg name="Managers" type="a(ssss)" direction="out"/>
     </method>
