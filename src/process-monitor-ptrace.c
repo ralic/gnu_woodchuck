@@ -344,10 +344,15 @@ struct pcb
   struct pcb *parent;
   GSList *children;
 
-  /* A top-level thread is one that the user explicitly requested we
-     monitor.  When it, a sibling, or a child does something, we
-     notify the user and include this thread's pid.  */
+  /* A top-level process is one that the user explicitly requested we
+     monitor.  When it or a child does something, we notify the user
+     and include this thread's pid.  */
   bool top_level;
+
+  /* When we don't know a process's parent (because we have not yet
+     gotten the PTRACE_EVENT_CLONE event), we can't send messages.  To
+     deal with this we queue events.  */
+  GSList *cb_queue;
 
   /* If a process exits, it has children and is the user-visible
      handle (i.e., the user explicitly added it), we can't destroy it.
@@ -452,6 +457,28 @@ callback_enqueue (struct tcb *tcb, int op,
 
   char *src_copy = NULL;
 
+  struct pcb *tl = NULL;
+  if (tcb)
+    {
+      /* Find the top-level process.  */
+      tl = tcb->pcb;
+      while (! tl->top_level)
+	{
+	  if (! tl->parent)
+	    /* It is possible that we have a process that doesn't have
+	       a parent and is not a top-level process.  How?  It is
+	       possible that we find out about a process because we
+	       get a signal from it, but we have not yet received the
+	       PTRACE_EVENT_CLONE event.  */
+	    {
+	      tl = NULL;
+	      break;
+	    }
+
+	  tl = tl->parent;
+	}
+    }
+
   struct wc_process_monitor_cb *cb;
   if (op == -1)
     /* Free.  Stash stat_buf in open.filename.  */
@@ -487,16 +514,8 @@ callback_enqueue (struct tcb *tcb, int op,
   cb->cb = op;
   cb->timestamp = now ();
 
-  if (tcb)
+  if (tl)
     {
-      /* Find the top-level process.  */
-      struct pcb *tl = tcb->pcb;
-      while (! tl->top_level)
-	{
-	  assert (tl->parent);
-	  tl = tl->parent;
-	}
-
       cb->top_levels_pid = tl->group_leader.tid;
       cb->top_levels_exe = tl->exe;
       cb->top_levels_arg0 = tl->arg0;
@@ -547,16 +566,57 @@ callback_enqueue (struct tcb *tcb, int op,
 
   pthread_mutex_lock (&pending_callbacks_lock);
  enqueue_with_lock:
-  /* Enqueue.  */
-  debug (4, "Enqueuing %p: %d: %s(%d) (%s)",
-	 cb, cb->top_levels_pid,
-	 wc_process_monitor_cb_str (cb->cb), cb->cb, src_copy);
+  if (tcb && ! tl)
+    {
+      /* We have a TCB, but it doesn't have a top-level yet.  Enqueue
+	 the call back on the PCB.  It will be sent after the process
+	 gets a top-level.  */
 
-  pending_callbacks = g_slist_prepend (pending_callbacks, cb);
+      debug (4, "Delaying enqueue of callback %s on "TCB_FMT,
+	     wc_process_monitor_cb_str (cb->cb), TCB_PRINTF (tcb));
+      tcb->pcb->cb_queue = g_slist_prepend (tcb->pcb->cb_queue, cb);
+    }
+  else
+    {
+      /* Enqueue.  */
+      debug (4, "Enqueuing %p: %d: %s(%d) (%s)",
+	     cb, cb->top_levels_pid,
+	     wc_process_monitor_cb_str (cb->cb), cb->cb, src_copy);
 
-  if (callback_id == 0)
-    /* Kick the idle handler.  */
-    callback_id = g_idle_add (callback_manager, NULL);
+      if (tcb && tcb->pcb->cb_queue)
+	{
+	  /* Fix up each queued callback.  */
+	  GSList *l;
+	  for (l = tcb->pcb->cb_queue; l; l = l->next)
+	    {
+	      struct wc_process_monitor_cb *cb = l->data;
+
+	      cb->top_levels_pid = tl->group_leader.tid;
+	      cb->top_levels_exe = tl->exe;
+	      cb->top_levels_arg0 = tl->arg0;
+	      cb->top_levels_arg1 = tl->arg1;
+
+	      /* We also need to set the process's strings as they may
+		 have been freed.  */
+	      cb->actor_pid = tcb->pcb->group_leader.tid;
+	      cb->actor_exe = tcb->pcb->exe;
+	      cb->actor_arg0 = tcb->pcb->arg0;
+	      cb->actor_arg1 = tcb->pcb->arg1;
+	    }
+
+	  pending_callbacks = g_slist_concat (tcb->pcb->cb_queue,
+					      pending_callbacks);
+	  tcb->pcb->cb_queue = NULL;
+	}
+
+      /* Add this to pending callbacks after adding TCB->PCB->CB_QUEUE
+	 as CB might be a free.  */
+      pending_callbacks = g_slist_prepend (pending_callbacks, cb);
+
+      if (callback_id == 0)
+	/* Kick the idle handler.  */
+	callback_id = g_idle_add (callback_manager, NULL);
+    }
 
   pthread_mutex_unlock (&pending_callbacks_lock);
 }
@@ -605,6 +665,17 @@ pcb_free (struct pcb *pcb)
 	debug (0, "Failed to remove pcb for %d from hash table?!?",
 	       (int) pcb->group_leader.tid);
 	assert (0 == 1);
+      }
+
+    if (pcb->cb_queue)
+      /* Seems we never figured out the top-level.  */
+      {
+	GSList *l;
+	for (l = pcb->cb_queue; l; l = l->next)
+	  g_free (l->data);
+
+	g_slist_free (pcb->cb_queue);
+	pcb->cb_queue = NULL;
       }
 
     if (pcb->top_level)
