@@ -1,3 +1,20 @@
+# dbus2rst.py - Extract API documentation from a dbus interface file.
+# Copyright (C) 2011 Neal H. Walfield <neal@walfield.org>
+#
+# Woodchuck is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License as
+# published by the Free Software Foundation; either version 3, or (at
+# your option) any later version.
+#
+# Woodchuck is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111, USA.
+
 import sys
 import xml.parsers.expat
 
@@ -88,8 +105,9 @@ def start_element(name, attrs):
 
         method = attrs['name']
 
-        method_comment = (fix_whitespace (last_comment, 8)
-                          if last_comment is not None else "")
+        if last_comment is None:
+            last_comment = ""
+        method_comment = fix_whitespace (last_comment, 8)
 
         args = []
 
@@ -97,13 +115,15 @@ def start_element(name, attrs):
         if method is None:
             raise ValueError ("<arg>s outside of <method>s not allowed.")
 
+        if last_comment is None:
+            last_comment = ""
+
         method_comment = method_comment \
             + "        :param " \
             + attrs.get ('direction', 'in') + " " \
             + attrs.get ('name', '') + " " \
             + attrs.get ('type', '') + ":\n" \
-            + fix_whitespace (last_comment if last_comment is not None else "",
-                              12)
+            + fix_whitespace (last_comment, 12)
 
         args.append (attrs.get ('name', None))
 
@@ -113,9 +133,11 @@ def start_element(name, attrs):
         if interface is None:
             raise ValueError ("<method>s outside of <interface>s not allowed.")
 
+        if last_comment is None:
+            last_comment = ""
+
         output_file.write ("    .. data:: " + attrs['name'] + "\n\n"
-                           + (fix_whitespace (last_comment, 8)
-                              if last_comment is not None else ""))
+                           + (fix_whitespace (last_comment, 8)))
 
     else:
         raise ValueError ("Unknown tag <" + name + ">");
