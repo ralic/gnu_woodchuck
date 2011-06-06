@@ -411,7 +411,7 @@ PROCEDURES).  A one-way hash is a deterministic procedure for
 transforming data.  It has two important properties: given the hashed
 data, it is impractical to recover the original data; and, the same
 data always results in the same transformation.  These properties
-allow us to determine how often participants frequency a particular
+allow us to determine how often participants frequent a particular
 location or web site without being able to identify the web site or
 location.  However, because the hash transforms the same data in the
 same way, it is possible to verify the existence of particular data.
@@ -473,7 +473,7 @@ please call the Homewood IRB at Johns Hopkins University at (410)
 accept_text = """
 CONSENT GRANTED
 
-Thanks for your granting your consent!  *If didn't mean to accept,
+Thanks for your granting your consent!  *If you didn't mean to accept,
 click the BACK button.*
 
 Even if you accept now, you can still withdraw your consent at any
