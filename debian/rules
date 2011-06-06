@@ -9,5 +9,8 @@ binary-post-install/smart-storage-logger::
 	cp debian/smart-storage-logger-maemo.upstart \
 		debian/smart-storage-logger/etc/event.d/smart-storage-logger
 	# Don't include unnecessary binaries.
-	rm debian/smart-storage-logger/usr/bin/process-tracer \
-	  debian/smart-storage-logger/usr/bin/netczar
+	rm -r debian/smart-storage-logger/usr/bin/process-tracer \
+	  debian/smart-storage-logger/usr/bin/murmeltier \
+	  debian/smart-storage-logger/usr/bin/gwoodchuck \
+	  debian/smart-storage-logger/usr/share/doc \
+	  debian/smart-storage-logger/usr/lib
