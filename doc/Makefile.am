@@ -31,7 +31,9 @@ dvi: ps-builder
 html: html-builder
 
 # -W: Turn warnings into errors.
-SPHINX_BUILD_OPTS = -W -d build-cache $(srcdir) 
+# -d: the directory for the build cache
+# -N: No colored output.
+SPHINX_BUILD_OPTS = -W -d build-cache -N $(srcdir)
 
 # Known sphinx builders.  See Sphinx documentation for more details,
 # in particular: http://sphinx.pocoo.org/invocation.html
