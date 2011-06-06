@@ -4,6 +4,6 @@ package = smart-storage-logger
 
 [hssl]
 name = hssl.cs.jhu.edu
-uri = http://hssl.cs.jhu.edu/~neal/smart-storage
+uri = http://hssl.cs.jhu.edu/~neal/woodchuck
 components = maemo
 
