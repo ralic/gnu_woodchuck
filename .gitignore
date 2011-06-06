@@ -12,3 +12,4 @@ aclocal.m4
 *.pyc
 doc/html
 doc/pdf
+doc/org.woodchuck.*rst
