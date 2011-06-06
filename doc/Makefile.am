@@ -17,7 +17,7 @@ VPATH += $(srcdir)/../src
 
 EXTRA_DIST += dbus2rst.py
 $(srcdir)/%.rst: %.xml
-	python $(srcdir)/dbus2rst.py -d $(srcdir) $<
+	python $(srcdir)/dbus2rst.py -d $(builddir) $<
 
 # The builders depend only on the main document.
 woodchuck.rst: dbus2rst.py $(aux_files)
