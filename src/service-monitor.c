@@ -144,11 +144,15 @@ process_info (pid_t pid, char **exep, char **arg0p, char **arg1p)
 }
 #endif
 
+static gboolean service_free_delayed_cb (gpointer user_data);
+
 static struct wc_process *
 service_new (WCServiceMonitor *m, pid_t pid, const char *dbus_name)
 {
   debug (3, "service_new (%d, %s)", pid, dbus_name);
   assert (dbus_name);
+
+  service_free_delayed_cb (NULL);
 
   struct wc_process *process = process_lookup_by_dbus_name (dbus_name);
   if (process)
@@ -354,6 +358,9 @@ blacklisted_arg0 (const char *arg0)
   return false;
 }
 
+static guint service_free_delayed_id;
+static GSList *service_free_delayed;
+
 struct service_free_delayed
 {
   WCServiceMonitor *m;
@@ -363,15 +370,24 @@ struct service_free_delayed
 static gboolean
 service_free_delayed_cb (gpointer user_data)
 {
-  struct service_free_delayed *s = user_data;
-  WCServiceMonitor *m = WC_SERVICE_MONITOR (s->m);
-  char *name = s->name;
+  while (service_free_delayed)
+    {
+      struct service_free_delayed *s = service_free_delayed->data;
+      service_free_delayed = g_slist_delete_link (service_free_delayed,
+						  service_free_delayed);
 
-  struct wc_process *process = process_lookup_by_dbus_name (name);
-  if (process)
-    service_free (m, process, name);
+      WCServiceMonitor *m = WC_SERVICE_MONITOR (s->m);
+      char *name = s->name;
 
-  g_free (user_data);
+      struct wc_process *process = process_lookup_by_dbus_name (name);
+      if (process)
+	service_free (m, process, name);
+
+      g_free (s);
+    }
+
+  g_source_remove (service_free_delayed_id);
+  service_free_delayed_id = 0;
 
   /* Don't call again.  */
   return FALSE;
@@ -405,7 +421,11 @@ name_owner_changed_signal_cb (DBusGProxy *proxy,
 	      s->m = m;
 	      strcpy (s->name, name);
 
-	      g_timeout_add_seconds (5, service_free_delayed_cb, s);
+	      service_free_delayed = g_slist_prepend (service_free_delayed, s);
+
+	      if (! service_free_delayed_id)
+		service_free_delayed_id
+		  = g_timeout_add_seconds (5, service_free_delayed_cb, NULL);
 	    }
 	}
 
