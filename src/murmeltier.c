@@ -1360,6 +1360,8 @@ woodchuck_manager_feedback_subscribe
 
   *handle = g_strdup (s->handle);
 
+  schedule ();
+
   return 0;
 }
 
