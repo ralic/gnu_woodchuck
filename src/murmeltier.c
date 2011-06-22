@@ -110,12 +110,23 @@ do_schedule (gpointer user_data)
   NCNetworkConnection *dc = nc_network_monitor_default_connection (mt->nm);
   if (! dc)
     /* No connection.  */
-    goto out;
+    {
+      debug (3, "Not scheduling: No default connection.");
+      goto out;
+    }
 
   if ((nc_network_connection_mediums (dc)
        & ~(NC_CONNECTION_MEDIUM_ETHERNET|NC_CONNECTION_MEDIUM_WIFI)) != 0)
     /* Only use ethernet and wifi based connections.  */
-    goto out;
+    {
+      char *m = 
+	nc_connection_medium_to_string (nc_network_connection_mediums (dc));
+      debug (3, "Not scheduling: Default connection includes components "
+	     "that are neither ethernet nor Wifi (%s).",
+	     m);
+      g_free (m);
+      goto out;
+    }
 
   /* The following is a very simple scheduler.  We look for streams
      and objects that have not been updated recently and update
@@ -138,9 +149,24 @@ do_schedule (gpointer user_data)
       /* Never update this stream.  */
       return 0;
 
-    if (download_time && download_time + freshness / 4 * 3 > n / 1000)
+    int64_t timeleft = 0;
+    if (download_time)
+      timeleft = (download_time + freshness) - n / 1000;
+
+    debug (3, "%s: %s stream: next update in "TIME_FMT" "
+	   "(download_time: "TIME_FMT"; freshness: "TIME_FMT")",
+	   manager_cookie, stream_cookie,
+	   TIME_PRINTF (1000 * timeleft),
+	   TIME_PRINTF (download_time * 1000 - n),
+	   TIME_PRINTF (freshness * 1000));
+
+    if (timeleft > freshness / 4)
       /* The content is fresh enough.  */
-      return 0;
+      {
+	debug (3, "%s's stream %s is fresh enough: next update in "TIME_FMT,
+	       manager_cookie, stream_cookie, TIME_PRINTF (1000 * timeleft));
+	return 0;
+      }
 
     GSList *list = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
 					manager_uuid);
