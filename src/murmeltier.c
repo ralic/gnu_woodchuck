@@ -1476,6 +1476,10 @@ woodchuck_stream_update_status
   char *stream = sqlite3_mprintf ("%Q", stream_raw);
   char *manager = NULL;
 
+  uint64_t n = now ();
+  if (download_time == 0 || download_time > n / 1000)
+    download_time = n / 1000;
+
   int instance = -1;
   int callback (void *cookie, int argc, char **argv, char **names)
   {
@@ -1591,6 +1595,10 @@ woodchuck_object_download_status
 {
   char *object = sqlite3_mprintf ("%Q", object_raw);
   char *stream = NULL;
+
+  uint64_t n = now ();
+  if (download_time == 0 || download_time > n / 1000)
+    download_time = n / 1000;
 
   int instance = -1;
   int callback (void *cookie, int argc, char **argv, char **names)
