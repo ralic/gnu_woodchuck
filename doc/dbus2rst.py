@@ -127,6 +127,14 @@ def start_element(name, attrs):
 
         args.append (attrs.get ('name', None))
 
+    elif name == 'annotation':
+        if method is not None:
+            if method_comment is None:
+                method_comment = ""
+            method_comment += \
+                fix_whitespace (
+                    " - %s: %s\n" % (attrs['name'], attrs['value']), 8)
+
     elif name == 'property':
         if method:
             raise ValueError ("<property>s not allowed in <method>s.")
@@ -186,7 +194,7 @@ def end_element(name):
 
         interface = None
 
-    elif name in ['node', 'arg', 'property']:
+    elif name in ['node', 'arg', 'property', 'annotation']:
         # Nothing to do.
         pass
 
