@@ -110,6 +110,8 @@ static struct property manager_properties[]
       { "DBusObject", G_TYPE_STRING, true },
       { "Cookie", G_TYPE_STRING, true },
       { "Priority", G_TYPE_UINT, true },
+      { "DiscoveryTime", G_TYPE_UINT64, true },
+      { "PublicationTime", G_TYPE_UINT64, true },
       /* Readonly.  */
       { "ParentUUID", G_TYPE_STRING, false },
       { NULL, G_TYPE_INVALID, false }
@@ -137,7 +139,11 @@ static struct property object_properties[]
       { "TriggerEarliest", G_TYPE_UINT64, true },
       { "TriggerLatest", G_TYPE_UINT64, true },
       { "DownloadFrequency", G_TYPE_UINT, true },
+      { "DontTransfer", G_TYPE_BOOLEAN, true },
+      { "NeedUpdate", G_TYPE_BOOLEAN, true },
       { "Priority", G_TYPE_UINT, true },
+      { "DiscoveryTime", G_TYPE_UINT64, true },
+      { "PublicationTime", G_TYPE_UINT64, true },
       /* Readonly.  */
       { "ParentUUID", G_TYPE_STRING, false },
       { "Instance", G_TYPE_UINT, false },
@@ -430,7 +436,11 @@ do_schedule (gpointer user_data)
      /* MAX(OBJECT_INSTANCE_STATUS.INSTANCE) == OBJECTS.INSTANCE + 1 */
      "     and objects.Instance == object_instance_status.instance + 1)"
      " join streams on objects.parent_uuid == streams.uuid"
-     " join managers on managers.uuid == streams.parent_uuid;",
+     " join managers on managers.uuid == streams.parent_uuid"
+     " where objects.DontTransfer == 0"
+     "  and (coalesce (object_instance_status.download_time, 0) == 0"
+     "       or objects.NeedUpdate == 1"
+     "       or objects.DownloadFrequency > 0);",
      objects_callback, NULL, &errmsg);
   if (errmsg)
     {
@@ -2230,7 +2240,9 @@ main (int argc, char *argv[])
      " (uuid PRIMARY KEY, parent_uuid NOT NULL,"
      "  Instance DEFAULT 0, HumanReadableName, Cookie, Filename, Wakeup,"
      "  TriggerTarget, TriggerEarliest, TriggerLatest,"
-     "  DownloadFrequency, Priority);"
+     "  DownloadFrequency,"
+     "  DontTransfer DEFAULT 0, NeedUpdate, Priority,"
+     "  DiscoveryTime, PublicationTime);"
      "create index if not exists objects_cookie_index on objects (cookie);"
      "create index if not exists objects_parent_uuid_index"
      " on objects (parent_uuid);"

@@ -208,7 +208,11 @@ _object_properties_to_camel_case = \
            "trigger_earliest": ("TriggerEarliest", dbus.UInt64, 0, _ttl),
            "trigger_latest": ("TriggerLatest", dbus.UInt64, 0, _ttl),
            "download_frequency": ("DownloadFrequency", dbus.UInt32, 0, _ttl),
+           "dont_transfer": ("DontTransfer", dbus.Boolean, False, _ttl),
+           "need_update": ("NeedUpdate", dbus.Boolean, True, _ttl),
            "priority": ("Priority", dbus.UInt32, 0, _ttl),
+           "discovery_time": ("DiscoveryTime", dbus.UInt64, 0, _ttl),
+           "publication_time": ("PublicationTime", dbus.UInt64, 0, _ttl),
            })
 _object_properties_from_camel_case = \
     dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)

@@ -225,7 +225,24 @@
          Default: 0.  -->
     <property name="DownloadFrequency" type="d" access="readwrite"/>
 
+    <!-- Set to true if this object should not be transferred, e.g.,
+         because the application knows the user has no interest in it.  -->
+    <property name="DontTransfer" type="b" access="readwrite"/>
+
+    <!-- Set to true if an update for this object is available.  This
+         is automatically cleared by DownloadStatus.  -->
+    <property name="NeedUpdate" type="b" access="readwrite"/>
+
     <!-- The priority, relative to other objects in the stream.  -->
     <property name="Priority" type="u" access="readwrite"/>
+
+    <!-- The time at which the object was discovered (in seconds since
+         the epoch).  This is normally the time at which the stream
+         was updated.  -->
+    <property name="DiscoveryTime" type="t" access="readwrite"/>
+
+    <!-- The time at which the object was published (in seconds since
+         the epoch).  -->
+    <property name="PublicationTime" type="t" access="readwrite"/>
   </interface>
 </node>
