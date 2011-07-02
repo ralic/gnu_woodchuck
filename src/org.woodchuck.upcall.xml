@@ -6,6 +6,8 @@
          acknowledge the feedback using FeedbackACK, otherwise, it
          will be resent.  -->
     <method name="ObjectDownloaded">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+
       <!-- The manager's UUID.  -->
       <arg name="ManagerUUID" type="s"/>
       <!-- The manager's cookie.  -->
@@ -51,6 +53,8 @@
          Respond by calling
          :func:`org.woodchuck.stream.UpdateStatus`. -->
     <method name="StreamUpdate">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+
       <!-- The manager's UUID.  -->
       <arg name="ManagerUUID" type="s"/>
       <!-- The manager's cookie.  -->
@@ -67,6 +71,8 @@
          Respond by calling
          :func:`org.woodchuck.object.DownloadStatus`. -->
     <method name="ObjectDownload">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+
       <!-- The manager's UUID.  -->
       <arg name="ManagerUUID" type="s"/>
       <!-- The manager's cookie.  -->
@@ -100,6 +106,8 @@
          Respond by calling
          :func:`org.woodchuck.object.FilesDeleted`. -->
     <method name="ObjectDeleteFiles">
+      <annotation name="org.freedesktop.DBus.Method.NoReply" value="true"/>
+
       <!-- The manager's UUID.  -->
       <arg name="ManagerUUID" type="s"/>
       <!-- The manager's cookie.  -->
