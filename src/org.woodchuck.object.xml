@@ -223,7 +223,7 @@
          downloading the feed, register each contained story as an
          individual object and mark it as downloaded immediately.
          Default: 0.  -->
-    <property name="DownloadFrequency" type="d" access="readwrite"/>
+    <property name="DownloadFrequency" type="u" access="readwrite"/>
 
     <!-- Set to true if this object should not be transferred, e.g.,
          because the application knows the user has no interest in it.  -->
