@@ -1130,7 +1130,7 @@ def Manager(**properties):
         return _managers[properties['UUID']]
     return _Manager(**properties)
 
-class _Woodchuck:
+class _Woodchuck(object):
     """The top-level Woodchuck class."""
 
     def __init__(self):
