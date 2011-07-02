@@ -227,14 +227,5 @@
 
     <!-- The priority, relative to other objects in the stream.  -->
     <property name="Priority" type="u" access="readwrite"/>
-
-    <!-- The time at which the object was discovered (in seconds since
-         the epoch).  This is normally the time at which the stream
-         was updated.  -->
-    <property name="DiscoveryTime" type="t" access="readwrite"/>
-
-    <!-- The time at which the object was published (in seconds since
-         the epoch).  -->
-    <property name="PublicationTime" type="t" access="readwrite"/>
   </interface>
 </node>

@@ -161,49 +161,57 @@ def _dbus_exception_to_woodchuck_exception(exception):
     else:
         raise exception
 
+# The default amount of time to cache values.
+_ttl = 1
+
 _manager_properties_to_camel_case = \
-    dict ({"UUID": ("UUID", dbus.UTF8String, ""),
-           "parent_UUID": ("ParentUUID", dbus.UTF8String, ""),
-           "human_readable_name": ("HumanReadableName", dbus.UTF8String, ""),
-           "cookie": ("Cookie", dbus.UTF8String, ""),
-           "dbus_service_name": ("DBusServiceName", dbus.UTF8String, ""),
-           "dbus_object": ("DBusObject", dbus.UTF8String, ""),
-           "priority": ("Priority", dbus.UInt32, 0),
+    dict ({"UUID": ("UUID", dbus.UTF8String, "", float("inf")),
+           "parent_UUID": ("ParentUUID", dbus.UTF8String, "", float("inf")),
+           "human_readable_name": ("HumanReadableName", dbus.UTF8String, "",
+                                   _ttl),
+           "cookie": ("Cookie", dbus.UTF8String, "", _ttl),
+           "dbus_service_name": ("DBusServiceName", dbus.UTF8String, "", _ttl),
+           "dbus_object": ("DBusObject", dbus.UTF8String, "", _ttl),
+           "priority": ("Priority", dbus.UInt32, 0, _ttl),
           })
 _manager_properties_from_camel_case = \
-    dict([[k2, (k, t, d)] for k, (k2, t, d)
+    dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)
           in _manager_properties_to_camel_case.items ()])
 
 _stream_properties_to_camel_case = \
-    dict ({"UUID": ("UUID", dbus.UTF8String, ""),
-           "parent_UUID": ("ParentUUID", dbus.UTF8String, ""),
-           "human_readable_name": ("HumanReadableName", dbus.UTF8String, ""),
-           "cookie": ("Cookie", dbus.UTF8String, ""),
-           "priority": ("Priority", dbus.UInt32, 0),
-           "freshness": ("Freshness", dbus.UInt32, 0),
-           "object_mostly_inline": ("ObjectsMostlyInline", dbus.Boolean, False),
+    dict ({"UUID": ("UUID", dbus.UTF8String, "", float("inf")),
+           "parent_UUID": ("ParentUUID", dbus.UTF8String, "", float("inf")),
+           "human_readable_name": ("HumanReadableName", dbus.UTF8String, "",
+                                   _ttl),
+           "cookie": ("Cookie", dbus.UTF8String, "", _ttl),
+           "priority": ("Priority", dbus.UInt32, 0, _ttl),
+           "freshness": ("Freshness", dbus.UInt32, 0, _ttl),
+           "object_mostly_inline": ("ObjectsMostlyInline", dbus.Boolean,
+                                    False, _ttl),
            })
 _stream_properties_from_camel_case = \
-    dict([[k2, (k, t, d)] for k, (k2, t, d)
+    dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)
           in _stream_properties_to_camel_case.items ()])
 
 _object_properties_to_camel_case = \
-    dict ({"UUID": ("UUID", dbus.UTF8String, ""),
-           "parent_UUID": ("ParentUUID", dbus.UTF8String, ""),
-           "instance": ("Instance", dbus.UInt32, 0),
-           "human_readable_name": ("HumanReadableName", dbus.UTF8String, ""),
-           "cookie": ("Cookie", dbus.UTF8String, ""),
-           "versions": ("Versions", lambda v: dbus.Array (v, "(stub)"), []),
-           "filename": ("Filename", dbus.UTF8String, ""),
-           "wakeup": ("Wakeup", dbus.Boolean, True),
-           "trigger_target": ("TriggerTarget", dbus.UInt64, 0),
-           "trigger_earliest": ("TriggerEarliest", dbus.UInt64, 0),
-           "trigger_latest": ("TriggerLatest", dbus.UInt64, 0),
-           "download_frequency": ("DownloadFrequency", dbus.UInt32, 0),
-           "priority": ("Priority", dbus.UInt32, 0),
+    dict ({"UUID": ("UUID", dbus.UTF8String, "", float("inf")),
+           "parent_UUID": ("ParentUUID", dbus.UTF8String, "", float("inf")),
+           "instance": ("Instance", dbus.UInt32, 0, _ttl),
+           "human_readable_name": ("HumanReadableName", dbus.UTF8String, "",
+                                   _ttl),
+           "cookie": ("Cookie", dbus.UTF8String, "", _ttl),
+           "versions": ("Versions", lambda v: dbus.Array (v, "(stub)"), [],
+                        _ttl),
+           "filename": ("Filename", dbus.UTF8String, "", _ttl),
+           "wakeup": ("Wakeup", dbus.Boolean, True, _ttl),
+           "trigger_target": ("TriggerTarget", dbus.UInt64, 0, _ttl),
+           "trigger_earliest": ("TriggerEarliest", dbus.UInt64, 0, _ttl),
+           "trigger_latest": ("TriggerLatest", dbus.UInt64, 0, _ttl),
+           "download_frequency": ("DownloadFrequency", dbus.UInt32, 0, _ttl),
+           "priority": ("Priority", dbus.UInt32, 0, _ttl),
            })
 _object_properties_from_camel_case = \
-    dict([[k2, (k, t, d)] for k, (k2, t, d)
+    dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)
           in _object_properties_to_camel_case.items ()])
 
 def _keys_convert(d, conversion):
@@ -225,7 +233,74 @@ def _keys_convert(d, conversion):
                                      else conversion[k][1][2])]
                   for k, v in d.items ()])
 
-class _Object():
+class _BaseObject(object):
+    """
+    _Object, _Stream and _Manager inherit from this class, which
+    implements common functionality, such as getting and setting
+    properties.
+    """
+    def __init__(self, initial_properties, property_map):
+        super (_BaseObject, self).__init__ ()
+
+        # Check the properties.
+        for k in initial_properties.keys ():
+            assert k in property_map
+
+        # self.properties is a dictionary mapping property names to
+        # values and the time that they were looked up.
+        now = time.time ()
+        self.properties \
+            = dict ([[k, [ v, now ]] for k, v in initial_properties.items ()])
+        self.property_map = property_map
+
+        self.dbus_properties \
+            = dbus.Interface (self.proxy,
+                              dbus_interface='org.freedesktop.DBus.Properties')
+
+    def __getattribute__(self, name):
+        try:
+            property_map = (super (_BaseObject, self)
+                            .__getattribute__('property_map'))
+        except AttributeError:
+            property_map = {}
+
+        if name not in property_map:
+            return super(_BaseObject, self).__getattribute__(name)
+
+        properties = self.__dict__['properties']
+
+        if (name in properties
+            and (time.time () - properties[name][1] < property_map[name][3])):
+            # name is cached and it is still valid.
+            return properties[name][0]
+
+        value = self.dbus_properties.Get("", property_map[name][0])
+
+        if property_map[name][3] is not None:
+            # TTL is not None.  Cache the value.
+            properties[name] = [ value, time.time () ]
+
+        return value
+
+    def __setattr__(self, name, value):
+        if ('property_map' in self.__dict__ and name in self.property_map):
+            # Write through...
+            self.dbus_properties.Set("", self.property_map[name][0],
+                                     self.property_map[name][1] (value))
+            if self.property_map[name][3] is not None:
+                # Cache the value.
+                self.properties[name] = [ value, time.time () ]
+
+        super(_BaseObject, self).__setattr__(name, value)
+
+    def __repr__(self):
+        return dict([[k, v[0]] for k, v in self.properties.items ()
+                     if k in [ 'UUID', 'parent_UUID', 'human_readable_name' ]
+                     ]).__repr__()
+    def __str__(self):
+        return self.__repr__ ().__str__ ()
+
+class _Object(_BaseObject):
     """The local representation for a Woodchuck object."""
     def __init__(self, **properties):
         """
@@ -245,33 +320,17 @@ class _Object():
             actual values.
         """
 
-        # Check the properties.
-        for k in properties.keys ():
-            assert k in _object_properties_to_camel_case
-
-        self.properties = properties
         self.proxy = dbus.SessionBus().get_object ('org.woodchuck',
                                                    '/org/woodchuck/object/'
-                                                   + self.properties['UUID'])
-        self.dbus = dbus.Interface (self.proxy,
-                                    dbus_interface='org.woodchuck.object')
-
-    def __repr__(self):
-        return self.properties.__repr__ ()
-    def __str__(self):
-        return self.__repr__ ().__str__ ()
+                                                   + properties['UUID'])
         try:
             self.dbus = dbus.Interface (self.proxy,
                                         dbus_interface='org.woodchuck.object')
         except dbus.exceptions.DBusException as exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
-    def __getattr__(self, name):
-        if name in self.properties:
-            return self.properties[name]
-        else:
-            raise AttributeError (("%s instance has no attribute '%s'"
-                                   % (self.__class__.__name__, name)))
+        super(_Object, self).__init__ (properties,
+                                       _object_properties_to_camel_case)
 
     def unregister(self):
         """Unregister the object object thereby causing Woodchuck to
@@ -489,7 +548,7 @@ def Object(**properties):
         return _objects[properties['UUID']]
     return _Object(**properties)
 
-class _Stream():
+class _Stream(_BaseObject):
     def __init__(self, **properties):
         """Instantiate a :class:`Woodchuck._Stream`.  Instantiating
         this object does not actually register a stream; the stream is
@@ -507,31 +566,17 @@ class _Stream():
             actual values.
         """
 
-        # Check the properties.
-        for k in properties.keys ():
-            assert k in _stream_properties_to_camel_case
-
-        self.properties = properties
         self.proxy = dbus.SessionBus().get_object \
             ('org.woodchuck',
-             '/org/woodchuck/stream/' + self.properties['UUID'])
+             '/org/woodchuck/stream/' + properties['UUID'])
         try:
             self.dbus = dbus.Interface (self.proxy,
                                         dbus_interface='org.woodchuck.stream')
         except dbus.exceptions.DBusException as exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
-    def __repr__(self):
-        return self.properties.__repr__ ()
-    def __str__(self):
-        return self.__repr__ ().__str__ ()
-
-    def __getattr__(self, name):
-        if name in self.properties:
-            return self.properties[name]
-        else:
-            raise AttributeError (("%s instance has no attribute '%s'"
-                                   % (self.__class__.__name__, name)))
+        super(_Stream, self).__init__ (properties,
+                                       _stream_properties_to_camel_case)
 
     def unregister(self, only_if_empty):
         """Unregister the stream object thereby causing Woodchuck to
@@ -740,7 +785,7 @@ def Stream(**properties):
         return _streams[properties['UUID']]
     return _Stream(**properties)
 
-class _Manager():
+class _Manager(_BaseObject):
     def __init__(self, **properties):
         """Instantiate a :class:`Woodchuck._Manager`.  Instantiating
         this object does not actually register a manager; the manager
@@ -758,16 +803,9 @@ class _Manager():
             manager's actual values.
         """
 
-        # Check the properties.
-        for k in properties.keys ():
-            assert k in _manager_properties_to_camel_case
-
-        self.properties = properties
         self.proxy = dbus.SessionBus().get_object \
             ('org.woodchuck',
-             '/org/woodchuck/manager/' + self.properties['UUID'])
-        self.dbus = dbus.Interface (self.proxy,
-                                    dbus_interface='org.woodchuck.manager')
+             '/org/woodchuck/manager/' + properties['UUID'])
         try:
             self.dbus = dbus.Interface (self.proxy,
                                         dbus_interface='org.woodchuck.manager')
@@ -778,17 +816,8 @@ class _Manager():
         self.feedback_subscriptions = [ 0, 0 ];
         self.feedback_subscription_handle = None;
 
-    def __repr__(self):
-        return self.properties.__repr__ ()
-    def __str__(self):
-        return self.__repr__ ().__str__ ()
-
-    def __getattr__(self, name):
-        if name in self.properties:
-            return self.properties[name]
-        else:
-            raise AttributeError (("%s instance has no attribute '%s'"
-                                   % (self.__class__.__name__, name)))
+        super(_Manager, self).__init__ (properties,
+                                        _manager_properties_to_camel_case)
 
     def unregister(self, only_if_empty=True):
         """Unregister the manager object thereby causing Woodchuck to

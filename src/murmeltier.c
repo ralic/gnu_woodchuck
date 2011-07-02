@@ -97,6 +97,59 @@ static sqlite3 *db = NULL;
 
 extern GType murmeltier_get_type (void);
 
+struct property
+{
+  char *name;
+  GType type;
+  bool readwrite;
+};
+
+static struct property manager_properties[]
+  = { { "HumanReadableName", G_TYPE_STRING, true },
+      { "DBusServiceName", G_TYPE_STRING, true },
+      { "DBusObject", G_TYPE_STRING, true },
+      { "Cookie", G_TYPE_STRING, true },
+      { "Priority", G_TYPE_UINT, true },
+      /* Readonly.  */
+      { "ParentUUID", G_TYPE_STRING, false },
+      { NULL, G_TYPE_INVALID, false }
+};
+
+static struct property stream_properties[]
+  = { { "HumanReadableName", G_TYPE_STRING, true },
+      { "Cookie", G_TYPE_STRING, true },
+      { "Priority", G_TYPE_UINT, true },
+      { "Freshness", G_TYPE_UINT, true },
+      { "ObjectsMostlyInline", G_TYPE_BOOLEAN, true },
+      /* Readonly.  */
+      { "ParentUUID", G_TYPE_STRING, false },
+      { NULL, G_TYPE_INVALID, false }
+};
+
+static struct property object_properties[]
+  = { { "HumanReadableName", G_TYPE_STRING, true },
+      { "Cookie", G_TYPE_STRING, true },
+      /* This is filled in in properties_init.  */
+      { "Versions", G_TYPE_INVALID, true },
+      { "Filename", G_TYPE_STRING, true },
+      { "Wakeup", G_TYPE_BOOLEAN, true },
+      { "TriggerTarget", G_TYPE_UINT64, true },
+      { "TriggerEarliest", G_TYPE_UINT64, true },
+      { "TriggerLatest", G_TYPE_UINT64, true },
+      { "DownloadFrequency", G_TYPE_UINT, true },
+      { "Priority", G_TYPE_UINT, true },
+      /* Readonly.  */
+      { "ParentUUID", G_TYPE_STRING, false },
+      { "Instance", G_TYPE_UINT, false },
+      { NULL, G_TYPE_INVALID, true },
+};
+
+static void
+properties_init (void)
+{
+  /* XXX: Correctly initialize object_properties[Versions].  */
+}
+
 static guint schedule_id;
 
 static gboolean
@@ -535,7 +588,8 @@ murmeltier_init (Murmeltier *mt)
 static enum woodchuck_error
 object_register (const char *parent, const char *parent_table,
 		 const char *object_table, GHashTable *properties,
-		 char *acceptable_properties[], char *required_properties[],
+		 struct property *acceptable_properties,
+		 const char *required_properties[],
 		 gboolean only_if_cookie_unique,
 		 char **uuid, GError **error)
 {
@@ -568,11 +622,11 @@ object_register (const char *parent, const char *parent_table,
     GValue *value = valuep;
 
     int i;
-    for (i = 0; acceptable_properties[i]; i ++)
-      if (strcmp (key, acceptable_properties[i]) == 0)
+    for (i = 0; acceptable_properties[i].name; i ++)
+      if (strcmp (key, acceptable_properties[i].name) == 0)
 	break;
 
-    if (! acceptable_properties[i])
+    if (! acceptable_properties[i].name)
       {
 	unknown_property = key;
 	return;
@@ -1166,12 +1220,9 @@ woodchuck_manager_manager_register (const char *manager, GHashTable *properties,
 				    gboolean only_if_cookie_unique,
 				    char **uuid, GError **error)
 {
-  char *acceptable_properties[] = { "HumanReadableName", "DBusServiceName",
-				    "DBusObject", "Cookie", "Priority",
-				    NULL };
-  char *required_properties[] = { "HumanReadableName", NULL };
+  const char *required_properties[] = { "HumanReadableName", NULL };
   return object_register (manager, "managers", "managers", properties,
-			  acceptable_properties, required_properties,
+			  manager_properties, required_properties,
 			  only_if_cookie_unique, uuid, error);
 }
 
@@ -1263,12 +1314,9 @@ woodchuck_manager_stream_register (const char *manager, GHashTable *properties,
 				   gboolean only_if_cookie_unique,
 				   char **uuid, GError **error)
 {
-  char *acceptable_properties[]
-    = { "HumanReadableName", "Cookie", "Priority", "Freshness",
-	"ObjectsMostlyInline", NULL };
-  char *required_properties[] = { "HumanReadableName", NULL };
+  const char *required_properties[] = { "HumanReadableName", NULL };
   return object_register (manager, "managers", "streams", properties,
-			  acceptable_properties, required_properties,
+			  stream_properties, required_properties,
 			  only_if_cookie_unique, uuid, error);
 }
 
@@ -1456,13 +1504,9 @@ woodchuck_stream_object_register (const char *stream, GHashTable *properties,
 				  gboolean only_if_cookie_unique,
 				  char **uuid, GError **error)
 {
-  char *acceptable_properties[]
-    = { "HumanReadableName", "Cookie", "Versions", "Filename", "Wakeup",
-	"TriggerTarget", "TriggerEarliest", "TriggerLatest",
-	"DownloadFrequency", "Priority", NULL };
-  char *required_properties[] = { "HumanReadableName", NULL };
+  const char *required_properties[] = { "HumanReadableName", NULL };
   return object_register (stream, "streams", "objects", properties,
-			  acceptable_properties, required_properties,
+			  object_properties, required_properties,
 			  only_if_cookie_unique, uuid, error);
 }
 
@@ -1882,6 +1926,260 @@ woodchuck_object_files_deleted (const char *object_raw,
 
   return ret;
 }
+
+static enum woodchuck_error
+property_get (const char *object,
+	      const char *table, struct property *properties,
+	      const char *expected_interface_name,
+	      const char *interface_name, const char *property_name,
+	      GValue *value, GError **error)
+{
+  int i;
+  for (i = 0; properties && properties[i].name; i ++)
+    if (strcmp (properties[i].name, property_name) == 0)
+      break;
+
+  if (! properties || ! properties[i].name
+      || ! (*interface_name == '\0'
+	    || strcmp (interface_name, expected_interface_name) == 0))
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "No such property: %s%s%s",
+		   interface_name, *interface_name ? "." : "", property_name);
+      return DBUS_GERROR_INVALID_ARGS;
+    }
+
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    debug (0, "Properties.Get ('%s', '%s') -> %s",
+	   interface_name, property_name, argv[0]);
+
+    char *tailptr = NULL;
+    switch (properties[i].type)
+      {
+      default:
+	debug (0, "Property %s has unhandled type (%d)!",
+	       property_name, (int) properties[i].type);
+      case G_TYPE_STRING:
+	g_value_init (value, G_TYPE_STRING);
+	if (! argv[0])
+	  g_value_set_static_string (value, "");
+	else
+	  g_value_set_string (value, argv[0]);
+	break;
+      case G_TYPE_BOOLEAN:
+	g_value_init (value, G_TYPE_BOOLEAN);
+	g_value_set_boolean (value,
+			     argv[0] ? strtol (argv[0], &tailptr, 10) : 0);
+	break;
+      case G_TYPE_INT:
+	g_value_init (value, G_TYPE_INT);
+	g_value_set_int (value, argv[0] ? strtol (argv[0], &tailptr, 10) : 0);
+	break;
+      case G_TYPE_UINT:
+	g_value_init (value, G_TYPE_UINT);
+	g_value_set_uint (value,
+			  argv[0] ? strtoul (argv[0], &tailptr, 10) : 0);
+	break;
+      case G_TYPE_INT64:
+	g_value_init (value, G_TYPE_INT64);
+	g_value_set_int64 (value,
+			   argv[0] ? strtoll (argv[0], &tailptr, 10) : 0);
+	break;
+      case G_TYPE_UINT64:
+	g_value_init (value, G_TYPE_UINT64);
+	g_value_set_uint64 (value,
+			    argv[0] ? strtoull (argv[0], &tailptr, 10) : 0);
+	break;
+      }
+    return 0;
+  }
+
+  char *errmsg = NULL;
+  sqlite3_exec_printf
+    (db, "select %s from %s where uuid = '%s';",
+     callback, NULL, &errmsg, property_name, table, object);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      return WOODCHUCK_ERROR_INTERNAL_ERROR;
+    }
+
+  return 0;
+}
+
+static enum woodchuck_error
+property_set (const char *object,
+	      const char *table, struct property *properties,
+	      const char *expected_interface_name,
+	      const char *interface_name, const char *property_name,
+	      GValue *value, GError **error)
+{
+  int i;
+  for (i = 0; properties && properties[i].name; i ++)
+    if (strcmp (properties[i].name, property_name) == 0)
+      break;
+
+  if (! properties || ! properties[i].name
+      || ! (*interface_name == '\0'
+	    || strcmp (interface_name, expected_interface_name) == 0))
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "No such property: %s%s%s",
+		   interface_name, *interface_name ? "." : "", property_name);
+      return DBUS_GERROR_INVALID_ARGS;
+    }
+
+  if (! properties[i].readwrite)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Can't set readonly property: %s%s%s",
+		   interface_name, *interface_name ? "." : "", property_name);
+      return DBUS_GERROR_INVALID_ARGS;
+    }
+
+  if (properties[i].type != G_VALUE_TYPE (value))
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Type mismatch setting %s%s%s",
+		   interface_name, *interface_name ? "." : "", property_name);
+      return DBUS_GERROR_INVALID_ARGS;
+    }
+
+  char *escaped_value = NULL;
+  switch (G_VALUE_TYPE (value))
+    {
+    case G_TYPE_STRING:
+      escaped_value = sqlite3_mprintf ("%Q", g_value_get_string (value));
+      break;
+    case G_TYPE_INT:
+      escaped_value = sqlite3_mprintf ("%d", g_value_get_int (value));
+      break;
+    case G_TYPE_UINT:
+      escaped_value = sqlite3_mprintf ("%u", g_value_get_uint (value));
+      break;
+    case G_TYPE_INT64:
+      escaped_value = sqlite3_mprintf ("%"PRId64, g_value_get_int64 (value));
+      break;
+    case G_TYPE_UINT64:
+      escaped_value = sqlite3_mprintf ("%"PRIu64, g_value_get_uint64 (value));
+      break;
+    case G_TYPE_BOOLEAN:
+      escaped_value = sqlite3_mprintf ("%d", g_value_get_boolean (value));
+      break;
+    default:
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "%s:%d: Property %s has unhandled type (%d)!",
+		   __FILE__, __LINE__,
+		   property_name, (int) G_VALUE_TYPE (value));
+      return WOODCHUCK_ERROR_INTERNAL_ERROR;
+    }
+
+  char *errmsg = NULL;
+  int err = sqlite3_exec_printf
+    (db, "update %s set %s = %s where uuid = '%s'",
+     NULL, NULL, &errmsg,
+     table, property_name, escaped_value, object);
+  sqlite3_free (escaped_value);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d: %s",
+		   __FILE__, __LINE__, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      return WOODCHUCK_ERROR_INTERNAL_ERROR;
+    }
+
+  return 0;
+}
+
+enum woodchuck_error
+woodchuck_property_get (const char *object,
+			const char *interface_name, const char *property_name,
+			GValue *value, GError **error)
+{
+  return property_get (NULL, NULL, NULL,
+		       "org.woodchuck", interface_name, property_name,
+		       value, error);
+}
+
+enum woodchuck_error
+woodchuck_property_set (const char *object,
+			const char *interface_name, const char *property_name,
+			GValue *value, GError **error)
+{
+  return property_set (NULL, NULL, NULL,
+		       "org.woodchuck", interface_name, property_name,
+		       value, error);
+}
+
+enum woodchuck_error
+woodchuck_manager_property_get (const char *object, const char *interface_name,
+				const char *property_name,
+				GValue *value, GError **error)
+{
+  return property_get (object, "managers", manager_properties,
+		       "org.woodchuck.manager", interface_name, property_name,
+		       value, error);
+}
+
+enum woodchuck_error
+woodchuck_manager_property_set (const char *object, const char *interface_name,
+				const char *property_name,
+				GValue *value, GError **error)
+{
+  return property_set (object, "managers", manager_properties,
+		       "org.woodchuck.manager", interface_name, property_name,
+		       value, error);
+}
+
+enum woodchuck_error
+woodchuck_stream_property_get (const char *object, const char *interface_name,
+			       const char *property_name,
+			       GValue *value, GError **error)
+{
+  return property_get (object, "streams", stream_properties,
+		       "org.woodchuck.stream", interface_name, property_name,
+		       value, error);
+}
+
+enum woodchuck_error
+woodchuck_stream_property_set (const char *object, const char *interface_name,
+			       const char *property_name,
+			       GValue *value, GError **error)
+{
+  return property_set (object, "streams", stream_properties,
+		       "org.woodchuck.stream", interface_name, property_name,
+		       value, error);
+}
+
+enum woodchuck_error
+woodchuck_object_property_get (const char *object, const char *interface_name,
+			       const char *property_name,
+			       GValue *value, GError **error)
+{
+#warning Support getting and setting object.Versions
+  return property_get (object, "objects", object_properties,
+		       "org.woodchuck.object", interface_name, property_name,
+		       value, error);
+}
+
+enum woodchuck_error
+woodchuck_object_property_set (const char *object, const char *interface_name,
+			       const char *property_name,
+			       GValue *value, GError **error)
+{
+  return property_set (object, "objects", object_properties,
+		       "org.woodchuck.object", interface_name, property_name,
+		       value, error);
+}
 
 int
 main (int argc, char *argv[])
@@ -1979,6 +2277,7 @@ main (int argc, char *argv[])
       return 1;
     }
 
+  properties_init ();
   murmeltier_dbus_server_init ();
 
   mt = MURMELTIER (g_object_new (MURMELTIER_TYPE, NULL));

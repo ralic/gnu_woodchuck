@@ -154,4 +154,38 @@ extern enum woodchuck_error woodchuck_object_use
 extern enum woodchuck_error woodchuck_object_files_deleted
   (const char *object, uint32_t update, uint64_t arg, GError **error);
 
+/* org.freedesktop.DBus.Properties.  */
+
+extern enum woodchuck_error woodchuck_property_get
+(const char *object, const char *interface_name, const char *property_name,
+   GValue *value, GError **error);
+
+extern enum woodchuck_error woodchuck_property_set
+  (const char *object, const char *interface_name, const char *property_name,
+   GValue *value, GError **error);
+
+extern enum woodchuck_error woodchuck_manager_property_get
+  (const char *object, const char *interface_name, const char *property_name,
+   GValue *value, GError **error);
+
+extern enum woodchuck_error woodchuck_manager_property_set
+  (const char *object, const char *interface_name, const char *property_name,
+   GValue *value, GError **error);
+
+extern enum woodchuck_error woodchuck_stream_property_get
+  (const char *object, const char *interface_name, const char *property_name,
+   GValue *value, GError **error);
+
+extern enum woodchuck_error woodchuck_stream_property_set
+  (const char *object, const char *interface_name, const char *property_name,
+   GValue *value, GError **error);
+
+extern enum woodchuck_error woodchuck_object_property_get
+  (const char *object, const char *interface_name, const char *property_name,
+   GValue *value, GError **error);
+
+extern enum woodchuck_error woodchuck_object_property_set
+  (const char *object, const char *interface_name, const char *property_name,
+   GValue *value, GError **error);
+
 #endif

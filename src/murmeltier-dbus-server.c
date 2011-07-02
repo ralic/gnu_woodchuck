@@ -37,6 +37,7 @@
 #include "org.woodchuck.stream.xml.h"
 #include "org.woodchuck.object.xml.h"
 #include "org.freedesktop.DBus.Introspectable.xml.h"
+#include "org.freedesktop.DBus.Properties.xml.h"
 
 static DBusHandlerResult
 process_message (DBusConnection *connection, DBusMessage *message,
@@ -71,7 +72,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
     org_woodchuck_manager,
     org_woodchuck_stream,
     org_woodchuck_object,
-    org_freedesktop_dbus_introspectable
+    org_freedesktop_dbus_introspectable,
+    org_freedesktop_dbus_properties
   };
   int interface = 0;
   if (strcmp (interface_str, "org.woodchuck") == 0)
@@ -84,6 +86,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
     interface = org_woodchuck_object;
   if (strcmp (interface_str, "org.freedesktop.DBus.Introspectable") == 0)
     interface = org_freedesktop_dbus_introspectable;
+  if (strcmp (interface_str, "org.freedesktop.DBus.Properties") == 0)
+    interface = org_freedesktop_dbus_properties;
 
 
 #define PATH_ROOT "/org/woodchuck"
@@ -109,6 +113,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
       debug (5, "Object type: root");
       type = root;
       if (! (interface == org_freedesktop_dbus_introspectable
+	     || interface == org_freedesktop_dbus_properties
 	     || interface == org_woodchuck))
 	interface = 0;
     }
@@ -121,6 +126,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  path += sizeof (PATH_MANAGER) - 1;
 	  type = manager;
 	  if (! (interface == org_freedesktop_dbus_introspectable
+		 || interface == org_freedesktop_dbus_properties
 		 || interface == org_woodchuck_manager))
 	    interface = 0;
 	}
@@ -130,6 +136,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  path += sizeof (PATH_STREAM) - 1;
 	  type = stream;
 	  if (! (interface == org_freedesktop_dbus_introspectable
+		 || interface == org_freedesktop_dbus_properties
 		 || interface == org_woodchuck_stream))
 	    interface = 0;
 	}
@@ -139,6 +146,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  path += sizeof (PATH_OBJECT) - 1;
 	  type = object;
 	  if (! (interface == org_freedesktop_dbus_introspectable
+		 || interface == org_freedesktop_dbus_properties
 		 || interface == org_woodchuck_object))
 	    interface = 0;
 	}
@@ -182,24 +190,28 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  xml = XML_PREFIX \
 	    ORG_WOODCHUCK_XML \
 	    ORG_FREEDESKTOP_DBUS_INTROSPECTABLE_XML \
+	    ORG_FREEDESKTOP_DBUS_PROPERTIES_XML \
 	    XML_POSTFIX;
 	  break;
 	case manager:
 	  xml = XML_PREFIX \
 	    ORG_WOODCHUCK_MANAGER_XML \
 	    ORG_FREEDESKTOP_DBUS_INTROSPECTABLE_XML \
+	    ORG_FREEDESKTOP_DBUS_PROPERTIES_XML \
 	    XML_POSTFIX;
 	  break;
 	case stream:
 	  xml = XML_PREFIX \
 	    ORG_WOODCHUCK_STREAM_XML \
 	    ORG_FREEDESKTOP_DBUS_INTROSPECTABLE_XML \
+	    ORG_FREEDESKTOP_DBUS_PROPERTIES_XML \
 	    XML_POSTFIX;
 	  break;
 	case object:
 	  xml = XML_PREFIX \
 	    ORG_WOODCHUCK_OBJECT_XML \
 	    ORG_FREEDESKTOP_DBUS_INTROSPECTABLE_XML \
+	    ORG_FREEDESKTOP_DBUS_PROPERTIES_XML \
 	    XML_POSTFIX;
 	  break;
 	}
@@ -207,6 +219,219 @@ process_message (DBusConnection *connection, DBusMessage *message,
       dbus_message_append_args (reply, DBUS_TYPE_STRING, &xml,
 				DBUS_TYPE_INVALID);
       ret = 0;
+    }
+  else if (interface == org_freedesktop_dbus_properties
+	   && strcmp (method, "Get") == 0)
+    {
+      const char *interface_name = NULL;
+      const char *property_name = NULL;
+
+      expected_sig = "ss";
+      DBusError dbus_error;
+      dbus_error_init (&dbus_error);
+      if (strcmp (expected_sig, actual_sig) != 0
+	  || ! dbus_message_get_args (message, &dbus_error, 
+				      DBUS_TYPE_STRING, &interface_name,
+				      DBUS_TYPE_STRING, &property_name,
+				      DBUS_TYPE_INVALID))
+	{
+	  dbus_error_free (&dbus_error);
+	  goto bad_signature;
+	}
+
+      GValue value = { 0 };
+      if (type == root)
+	ret = woodchuck_property_get (path, interface_name,
+				      property_name, &value, &error);
+      if (type == manager)
+	ret = woodchuck_manager_property_get (path, interface_name,
+					      property_name, &value, &error);
+      if (type == stream)
+	ret = woodchuck_stream_property_get (path, interface_name,
+					     property_name, &value, &error);
+      if (type == object)
+	ret = woodchuck_object_property_get (path, interface_name,
+					     property_name, &value, &error);
+
+      if (ret == 0)
+	{
+	  DBusMessageIter outer_iter;
+	  dbus_message_iter_init_append (reply, &outer_iter);
+
+	  void add (char dtype, void *value)
+	  {
+	    char dtypestr[2] = { dtype, '\0' };
+
+	    DBusMessageIter variant_iter;
+	    dbus_message_iter_open_container (&outer_iter,
+					      DBUS_TYPE_VARIANT,
+					      dtypestr,
+					      &variant_iter);
+
+	    dbus_message_iter_append_basic (&variant_iter, dtype, value);
+
+	    dbus_message_iter_close_container (&outer_iter, &variant_iter);
+	  }
+
+	  switch (G_VALUE_TYPE (&value))
+	    {
+	    case G_TYPE_INT:
+	      {
+		dbus_int32_t v = g_value_get_int (&value);
+		add (DBUS_TYPE_INT32, &v);
+		break;
+	      }
+	    case G_TYPE_UINT:
+	      {
+		dbus_uint32_t v = g_value_get_uint (&value);
+		add (DBUS_TYPE_UINT32, &v);
+		break;
+	      }
+	    case G_TYPE_INT64:
+	      {
+		dbus_int64_t v = g_value_get_int64 (&value);
+		add (DBUS_TYPE_INT64, &v);
+		break;
+	      }
+	    case G_TYPE_UINT64:
+	      {
+		dbus_uint64_t v = g_value_get_uint64 (&value);
+		add (DBUS_TYPE_UINT64, &v);
+		break;
+	      }
+	    case G_TYPE_BOOLEAN:
+	      {
+		dbus_bool_t v = g_value_get_boolean (&value);
+		add (DBUS_TYPE_BOOLEAN, &v);
+		break;
+	      }
+	    case G_TYPE_STRING:
+	      {
+		const char *v = g_value_get_string (&value);
+		add (DBUS_TYPE_STRING, &v);
+		break;
+	      }
+	    default:
+	      error_message = g_strdup_printf
+		("Cannot return property: unsupported type.");
+	      goto bad_signature;
+	    }
+	}
+
+      if (G_IS_VALUE (&value))
+	g_value_unset (&value);
+    }
+  else if (interface == org_freedesktop_dbus_properties
+	   && strcmp (method, "Set") == 0)
+    {
+      const char *interface_name = NULL;
+      const char *property_name = NULL;
+
+      expected_sig = "ssv";
+      DBusError dbus_error;
+      dbus_error_init (&dbus_error);
+      if ((strcmp (expected_sig, actual_sig) != 0
+	   /* Make the variant optional so that it is possible to set
+	      properties using dbus-send.  */
+	   && !(strlen (actual_sig) == 3
+		&& strncmp (expected_sig, actual_sig, 2) == 0))
+	  || ! dbus_message_get_args (message, &dbus_error, 
+				      DBUS_TYPE_STRING, &interface_name,
+				      DBUS_TYPE_STRING, &property_name,
+				      DBUS_TYPE_INVALID))
+	{
+	  dbus_error_free (&dbus_error);
+	  goto bad_signature;
+	}
+
+      GValue value = { 0 };
+
+      DBusMessageIter outer_iter;
+      dbus_message_iter_init (message, &outer_iter);
+      /* Skip interface_name and property_name.  */
+      dbus_message_iter_next (&outer_iter);
+      dbus_message_iter_next (&outer_iter);
+
+      DBusMessageIter variant_iter;
+      DBusMessageIter *iter = &outer_iter;
+      if (actual_sig[2] == 'v')
+	{
+	  dbus_message_iter_recurse (&outer_iter, &variant_iter);
+	  iter = &variant_iter;
+	}
+
+      int arg_type = dbus_message_iter_get_arg_type (iter);
+      switch (arg_type)
+	{
+	case DBUS_TYPE_INT32:
+	  {
+	    dbus_int32_t v;
+	    dbus_message_iter_get_basic (iter, &v);
+	    g_value_init (&value, G_TYPE_INT);
+	    g_value_set_int (&value, v);
+	    break;
+	  }
+	case DBUS_TYPE_UINT32:
+	  {
+	    dbus_uint32_t v;
+	    dbus_message_iter_get_basic (iter, &v);
+	    g_value_init (&value, G_TYPE_UINT);
+	    g_value_set_uint (&value, v);
+	    break;
+	  }
+	case DBUS_TYPE_INT64:
+	  {
+	    dbus_int64_t v;
+	    dbus_message_iter_get_basic (iter, &v);
+	    g_value_init (&value, G_TYPE_INT64);
+	    g_value_set_int64 (&value, v);
+	    break;
+	  }
+	case DBUS_TYPE_UINT64:
+	  {
+	    dbus_uint64_t v;
+	    dbus_message_iter_get_basic (iter, &v);
+	    g_value_init (&value, G_TYPE_UINT64);
+	    g_value_set_uint64 (&value, v);
+	    break;
+	  }
+	case DBUS_TYPE_BOOLEAN:
+	  {
+	    dbus_bool_t v;
+	    dbus_message_iter_get_basic (iter, &v);
+	    g_value_init (&value, G_TYPE_BOOLEAN);
+	    g_value_set_boolean (&value, v);
+	    break;
+	  }
+	case DBUS_TYPE_STRING:
+	  {
+	    char *v;
+	    dbus_message_iter_get_basic (iter, &v);
+	    g_value_init (&value, G_TYPE_STRING);
+	    g_value_set_string (&value, v);
+	    break;
+	  }
+	default:
+	  error_message = g_strdup_printf
+	    ("Cannot set property: unsupported type.");
+	  goto bad_signature;
+	}
+
+      if (type == root)
+	ret = woodchuck_property_set (path, interface_name,
+				      property_name, &value, &error);
+      if (type == manager)
+	ret = woodchuck_manager_property_set (path, interface_name,
+					      property_name, &value, &error);
+      if (type == stream)
+	ret = woodchuck_stream_property_set (path, interface_name,
+					     property_name, &value, &error);
+      if (type == object)
+	ret = woodchuck_object_property_set (path, interface_name,
+					     property_name, &value, &error);
+
+      if (G_IS_VALUE (&value))
+	g_value_unset (&value);
     }
   else if ((type == root && strcmp (method, "ManagerRegister") == 0)
 	   || (type == manager && strcmp (method, "ManagerRegister") == 0)

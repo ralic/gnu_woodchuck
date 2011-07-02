@@ -834,6 +834,83 @@ class PyWoodchuck:
         object.files_deleted (update, arg)
 
 
+    def stream_property_get(self, stream_identifier, property):
+        """
+        Get a stream's property.
+
+        :param stream_identifier: The stream's identifier.
+
+        :param property: A property, e.g., freshness.
+
+        See :func:`stream_property_set` for an example use of this function.
+        """
+        stream = self._stream_lookup(stream_identifier)
+        return stream.llstream.__getattribute__(property)
+
+    def stream_property_set(self, stream_identifier, property, value):
+        """
+        Set a stream's property.
+
+        :param stream_identifier: The stream's identifier.
+
+        :param property: A property, e.g., freshness.
+
+        :param value: The new value.
+
+        Example::
+
+            import pywoodchuck
+            import woodchuck
+
+            w = pywoodchuck.PyWoodchuck("HMail", "org.hmail")
+            w.stream_register("user@provider.com/INBOX", "Provider Inbox",
+                              freshness=30*60)
+
+            print w.stream_property_get ("user@provider.com/INBOX", "freshness")
+            w.stream_property_set ("user@provider.com/INBOX",
+                                   "freshness", 15*60)
+            print w.stream_property_get ("user@provider.com/INBOX", "freshness")
+        """
+        stream = self._stream_lookup(stream_identifier)
+        return stream.llstream.__setattr__(property, value)
+
+    def object_property_get(self, stream_identifier, object_identifier,
+                            property):
+        """
+        Get an object's property.
+
+        :param stream_identifier: The stream identifier.
+
+        :param object_identifier: The object's identifier.
+
+        :param property: A property, e.g., publication_time.
+
+        See :func:`stream_property_set` for an example use of a
+        similar function.
+        """
+        object = self._object_lookup(stream_identifier, object_identifier)
+        return object.__getattribute__(property)
+
+    def object_property_set(self, stream_identifier, object_identifier,
+                            property, value):
+        """
+        Set an object's property.
+
+        :param stream_identifier: The stream identifier.
+
+        :param object_identifier: The object's identifier.
+
+        :param property: A property, e.g., publication_time.
+
+        :param value: The new value.
+
+        See :func:`stream_property_set` for an example use of a
+        similar function.
+        """
+        object = self._object_lookup(stream_identifier, object_identifier)
+        return object.__setattr__(property, value)
+
+
     def object_downloaded_cb(self, stream_identifier, object_identifier,
                              status, instance, version,
                              filename, size, trigger_target, trigger_fired):
@@ -1006,8 +1083,13 @@ if __name__ == "__main__":
 
         assert len (wc.streams_list ()) == 0
 
-        wc.stream_register('id:a', 'A', freshness=2)
+        wc.stream_register('id:a', 'A', freshness=3)
+        assert wc.stream_property_get('id:a', 'freshness') == 3
+        wc.stream_property_set('id:a', 'freshness', 2)
+        assert wc.stream_property_get('id:a', 'freshness') == 2
+
         wc.stream_register('id:b', 'B', freshness=60*60)
+        assert wc.stream_property_get('id:b', 'freshness') == 60*60
 
         assert len (wc.streams_list ()) == 2
 
@@ -1024,7 +1106,14 @@ if __name__ == "__main__":
 
         for i in (1, 2, 3):
             wc.object_register('id:a', 'id:a.' + str(i), 'A.' + str(i),
-                               download_frequency=2)
+                               download_frequency=3)
+            assert wc.object_property_get('id:a', 'id:a.' + str(i),
+                                          'download_frequency') == 3
+            wc.object_property_set('id:a', 'id:a.' + str(i),
+                                   'download_frequency', 2)
+            assert wc.object_property_get('id:a', 'id:a.' + str(i),
+                                          'download_frequency') == 2
+
             print "Waiting for 5 seconds for object feedback."
             loop = glib.MainLoop ()
             glib.timeout_add_seconds (5, glib.MainLoop.quit, loop)

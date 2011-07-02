@@ -78,7 +78,8 @@ dbus_interfaces_xml_h = \
 	org.woodchuck.manager.xml.h \
 	org.woodchuck.stream.xml.h \
 	org.woodchuck.object.xml.h \
-	org.freedesktop.DBus.Introspectable.xml.h
+	org.freedesktop.DBus.Introspectable.xml.h \
+	org.freedesktop.DBus.Properties.xml.h
 BUILT_SOURCES += $(dbus_interfaces_xml_h)
 
 # Extract each interface and save it as a CPP define named after the
