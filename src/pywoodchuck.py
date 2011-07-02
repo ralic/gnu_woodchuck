@@ -61,7 +61,10 @@ class PyWoodchuck:
         them to method calls."""
         def __init__(self, pywoodchuck):
             self.pywoodchuck = pywoodchuck
-            woodchuck.Upcalls.__init__(self, "/org/woodchuck")
+            try:
+                woodchuck.Upcalls.__init__(self, "/org/woodchuck")
+            except woodchuck.WoodchuckUnavailableError:
+                return
             self.pywoodchuck.manager.feedback_subscribe (False)
 
         def object_downloaded_cb (self, manager_UUID, manager_cookie,
@@ -186,6 +189,9 @@ class PyWoodchuck:
                  human_readable_name=human_readable_name,
                  cookie=dbus_service_name,
                  dbus_service_name=dbus_service_name)
+        except woodchuck.WoodchuckUnavailableError as exception:
+            print "Unable to connect to Woodchuck server:", str (exception)
+            self.manager = None
         except woodchuck.ObjectExistsError:
             # Whoops, it failed.  Look up the manager(s) with the
             # cookie.
@@ -232,6 +238,15 @@ class PyWoodchuck:
                 print "Instantiating upcalls"
                 self.upcalls = self._upcalls (self)
                 print "Instantiated upcalls"
+
+    def available(self):
+        """
+        :returns: Whether the Woodchuck daemon is available.
+
+        If the Woodchuck daemon is not available, all other methods
+        will raise a :exc:`woodchuck.WoodchuckUnavailableError`.
+        """
+        return self.manager is not None
 
     def stream_register(self, stream_identifier,
                         human_readable_name, freshness=0):
@@ -965,6 +980,11 @@ if __name__ == "__main__":
                 % (object_identifier, stream_identifier);
 
     wc = WoodyChucky ("PyWoodchuck Test.", "org.woodchuck.pywoodchuck.test")
+    if not wc.available ():
+        print "Woodchuck server not available.  Unable to run test suite."
+        import sys
+        sys.exit (1)
+
     try:
         wc.stream_register('id:a', 'A', freshness=2)
         wc.stream_register('id:b', 'B', freshness=60*60)

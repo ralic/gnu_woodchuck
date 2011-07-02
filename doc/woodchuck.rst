@@ -310,7 +310,7 @@ PyWoodchuck
 ^^^^^^^^^^^
 
 .. autoclass:: PyWoodchuck
-    :members: stream_register, streams_list, stream_updated,
+    :members: available, stream_register, streams_list, stream_updated,
         stream_update_failed, stream_unregister, object_register,
         objects_list, object_unregister, object_downloaded,
         object_download_failed, object_used, object_files_deleted,
@@ -413,7 +413,6 @@ Exceptions
 
 .. autoexception:: woodchuck.UnknownError
 
-
-
+.. autoexception:: woodchuck.WoodchuckUnavailableError
 
 

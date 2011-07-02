@@ -136,6 +136,10 @@ class UnknownError(Error):
     """While invoking a Woodchuck method, an unknown DBus error with
     prefix org.woodchuck occured."""
 
+class WoodchuckUnavailableError(Error):
+    """The woodchuck server is unavailable.  For whatever reason, it
+    couldn't be started.  This is a Python specific exception."""
+
 def _dbus_exception_to_woodchuck_exception(exception):
     """Convert a dbus exception to a local exception."""
     if exception.get_dbus_name () == "org.woodchuck.GenericError":
@@ -151,6 +155,9 @@ def _dbus_exception_to_woodchuck_exception(exception):
     elif exception.get_dbus_name ().startswith ("org.woodchuck."):
         raise UnknownError (exception.get_dbus_name ()
                             + exception.get_dbus_message ())
+    elif (exception.get_dbus_name ()
+          == "org.freedesktop.DBus.Error.ServiceUnknown"):
+        raise WoodchuckUnavailableError (exception.get_dbus_message ())
     else:
         raise exception
 
@@ -253,6 +260,11 @@ class _Object():
         return self.properties.__repr__ ()
     def __str__(self):
         return self.__repr__ ().__str__ ()
+        try:
+            self.dbus = dbus.Interface (self.proxy,
+                                        dbus_interface='org.woodchuck.object')
+        except dbus.exceptions.DBusException as exception:
+            _dbus_exception_to_woodchuck_exception (exception)
 
     def __getattr__(self, name):
         if name in self.properties:
@@ -756,6 +768,11 @@ class _Manager():
              '/org/woodchuck/manager/' + self.properties['UUID'])
         self.dbus = dbus.Interface (self.proxy,
                                     dbus_interface='org.woodchuck.manager')
+        try:
+            self.dbus = dbus.Interface (self.proxy,
+                                        dbus_interface='org.woodchuck.manager')
+        except dbus.exceptions.DBusException as exception:
+            _dbus_exception_to_woodchuck_exception (exception)
 
         # [0]: descendents_too = False; [1]: descendents_too = True
         self.feedback_subscriptions = [ 0, 0 ];
@@ -1085,11 +1102,17 @@ class _Woodchuck:
 
     def __init__(self):
         # Establish a connection with the Woodchuck server.
-        self._woodchuck_object \
-            = dbus.SessionBus().get_object ('org.woodchuck', '/org/woodchuck')
-        self._woodchuck \
-            = dbus.Interface (self._woodchuck_object,
-                              dbus_interface='org.woodchuck')
+        try:
+            self._woodchuck_object \
+                = dbus.SessionBus().get_object ('org.woodchuck',
+                                                '/org/woodchuck')
+            self._woodchuck \
+                = dbus.Interface (self._woodchuck_object,
+                                  dbus_interface='org.woodchuck')
+        except dbus.exceptions.DBusException as exception:
+            self._woodchuck_object = None
+            self._woodchuck = None
+            _dbus_exception_to_woodchuck_exception (exception)
 
     def manager_register(self, only_if_cookie_unique=True, **properties):
         """Register a new top-level manager.
@@ -1269,7 +1292,17 @@ class Upcalls(dbus.service.Object):
 
         if not _watching_woodchuck_owner:
             bus.watch_name_owner ("org.woodchuck", _woodchuck_owner_update)
-            _woodchuck_owner_update (bus.get_name_owner ("org.woodchuck"))
+            try:
+                owner = bus.get_name_owner ("org.woodchuck")
+            except dbus.exceptions.DBusException as exception:
+                if (exception.get_dbus_name () ==
+                    "org.freedesktop.DBus.Error.NameHasNoOwner"):
+                    raise WoodchuckUnavailableError (
+                        exception.get_dbus_message ())
+                else:
+                    raise
+
+            _woodchuck_owner_update (owner)
 
     @dbus.service.method(dbus_interface='org.woodchuck.upcall',
                          in_signature='ssssssuu(ustub)sttt',
