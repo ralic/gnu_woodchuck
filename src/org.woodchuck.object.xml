@@ -197,7 +197,7 @@
          only meaningful if the Woodchuck server downloads the file
          (i.e., `UseSimpleDownloader` is true).
          -->
-    <property name="Wakeup" type="s" access="readwrite"/>
+    <property name="Wakeup" type="b" access="readwrite"/>
 
     <!-- Approximately when the download should be performed, in
          seconds since the epoch.  (If the property Period is not
