@@ -178,6 +178,8 @@ _manager_properties_from_camel_case = \
     dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)
           in _manager_properties_to_camel_case.items ()])
 
+manager_properties=_manager_properties_to_camel_case.keys ()
+
 _stream_properties_to_camel_case = \
     dict ({"UUID": ("UUID", dbus.UTF8String, "", float("inf")),
            "parent_UUID": ("ParentUUID", dbus.UTF8String, "", float("inf")),
@@ -192,6 +194,8 @@ _stream_properties_to_camel_case = \
 _stream_properties_from_camel_case = \
     dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)
           in _stream_properties_to_camel_case.items ()])
+
+stream_properties=_stream_properties_to_camel_case.keys ()
 
 _object_properties_to_camel_case = \
     dict ({"UUID": ("UUID", dbus.UTF8String, "", float("inf")),
@@ -217,6 +221,8 @@ _object_properties_to_camel_case = \
 _object_properties_from_camel_case = \
     dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)
           in _object_properties_to_camel_case.items ()])
+
+object_properties=_object_properties_to_camel_case.keys ()
 
 def _keys_convert(d, conversion):
     """Convert properties from the python domain to the DBus domain
@@ -298,9 +304,11 @@ class _BaseObject(object):
         super(_BaseObject, self).__setattr__(name, value)
 
     def __repr__(self):
-        return dict([[k, v[0]] for k, v in self.properties.items ()
-                     if k in [ 'UUID', 'parent_UUID', 'human_readable_name' ]
-                     ]).__repr__()
+        return ("woodchuck." + self.__class__.__name__ + "("
+                + dict([[k, v[0]] for k, v in self.properties.items ()
+                        if k in [ 'UUID', 'parent_UUID', 'human_readable_name' ]
+                        ]).__repr__()
+                + ")")
     def __str__(self):
         return self.__repr__ ().__str__ ()
 

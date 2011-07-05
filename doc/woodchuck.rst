@@ -319,6 +319,14 @@ PyWoodchuck
         object_downloaded_cb, stream_update_cb, object_download_cb,
         object_delete_files_cb
 
+.. autoclass:: _Stream
+    :members: unregister, updated, update_failed, object_register,
+        objects_list, object_downloaded, object_download_failed,
+	object_files_deleted
+
+.. autoclass:: _Object
+    :members: unregister, downloaded, download_failed, used, files_deleted
+
 Constants
 ^^^^^^^^^
 
