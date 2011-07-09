@@ -1285,19 +1285,8 @@ org_woodchuck_upcall_object_download (GWoodchuck *wc,
 
   if (wc->vtable && wc->vtable->object_download)
     {
-      int64_t ret = wc->vtable->object_download (stream_cookie, object_cookie,
-						 quality, wc->user_data);
-      if (ret == 0)
-	gwoodchuck_object_files_deleted (wc, stream_cookie, object_cookie,
-					 WOODCHUCK_DELETE_DELETED, 0, error);
-      else if (ret > 0)
-	gwoodchuck_object_files_deleted (wc, stream_cookie, object_cookie,
-					 WOODCHUCK_DELETE_REFUSED, ret, error);
-      else
-	gwoodchuck_object_files_deleted (wc, stream_cookie, object_cookie,
-					 WOODCHUCK_DELETE_COMPRESSED, -1 * ret,
-					 error);
-
+      uint32_t ret = wc->vtable->object_download (stream_cookie, object_cookie,
+						  quality, wc->user_data);
       return TRUE;
     }
 
@@ -1327,8 +1316,20 @@ org_woodchuck_upcall_object_delete_files (GWoodchuck *wc,
 	}
       filenames[i] = NULL;
 
-      return wc->vtable->object_delete (stream_cookie, object_cookie,
-					filenames, wc->user_data);
+      int64_t ret = wc->vtable->object_delete (stream_cookie, object_cookie,
+					       filenames, wc->user_data);
+      if (ret == 0)
+	gwoodchuck_object_files_deleted (wc, stream_cookie, object_cookie,
+					 WOODCHUCK_DELETE_DELETED, 0, error);
+      else if (ret > 0)
+	gwoodchuck_object_files_deleted (wc, stream_cookie, object_cookie,
+					 WOODCHUCK_DELETE_REFUSED, ret, error);
+      else
+	gwoodchuck_object_files_deleted (wc, stream_cookie, object_cookie,
+					 WOODCHUCK_DELETE_COMPRESSED, -1 * ret,
+					 error);
+
+      return TRUE;
     }
 
   return FALSE;
