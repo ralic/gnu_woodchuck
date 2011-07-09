@@ -612,6 +612,8 @@ class _Stream(_BaseObject, DictMixin):
             Woodchuck should use its simple downloader to fetch the
             object.
 
+        :returns: Returns a :class:`_Object` instance.
+
         .. Note:: The caller may provide either `expected_size` or
             `versions`, but not both."""
         assert not (expected_size is not None and versions is not None)
@@ -634,6 +636,8 @@ class _Stream(_BaseObject, DictMixin):
 
         llobject = self.llobject.object_register (True, **properties)
         self._objects[object_identifier] = _Object (self, llobject)
+
+        return self._objects[object_identifier]
 
     def objects_list(self):
         """
@@ -1062,6 +1066,8 @@ class PyWoodchuck(DictMixin):
             interpretted as meaning that the stream is never updated
             and thus calling.
 
+        :returns: Returns a :class:`_Stream` instance.
+
         Example::
 
             import pywoodchuck
@@ -1084,6 +1090,8 @@ class PyWoodchuck(DictMixin):
             human_readable_name=human_readable_name,
             cookie=stream_identifier,
             freshness=freshness)
+
+        return self[stream_identifier]
 
     def streams_list(self):
         """
