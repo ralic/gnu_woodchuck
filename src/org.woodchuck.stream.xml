@@ -155,5 +155,8 @@
          article text.  This is unlike a Podcast feed, which often
          just includes links to the objects' contents.  -->
     <property name="ObjectsMostlyInline" type="b" access="readwrite"/>
+
+    <!-- The time at which the stream was registered.  -->
+    <property name="RegistrationTime" type="t" access="read"/>
   </interface>
 </node>

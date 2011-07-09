@@ -173,6 +173,8 @@ _manager_properties_to_camel_case = \
            "dbus_service_name": ("DBusServiceName", dbus.UTF8String, "", _ttl),
            "dbus_object": ("DBusObject", dbus.UTF8String, "", _ttl),
            "priority": ("Priority", dbus.UInt32, 0, _ttl),
+           "registration_time": ("RegistrationTime", dbus.UInt64, 0,
+                                 float("inf")),
           })
 _manager_properties_from_camel_case = \
     dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)
@@ -190,6 +192,8 @@ _stream_properties_to_camel_case = \
            "freshness": ("Freshness", dbus.UInt32, 0, _ttl),
            "object_mostly_inline": ("ObjectsMostlyInline", dbus.Boolean,
                                     False, _ttl),
+           "registration_time": ("RegistrationTime", dbus.UInt64, 0,
+                                 float("inf")),
            })
 _stream_properties_from_camel_case = \
     dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)
@@ -217,6 +221,8 @@ _object_properties_to_camel_case = \
            "priority": ("Priority", dbus.UInt32, 0, _ttl),
            "discovery_time": ("DiscoveryTime", dbus.UInt64, 0, _ttl),
            "publication_time": ("PublicationTime", dbus.UInt64, 0, _ttl),
+           "registration_time": ("RegistrationTime", dbus.UInt64, 0,
+                                 float("inf")),
            })
 _object_properties_from_camel_case = \
     dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)

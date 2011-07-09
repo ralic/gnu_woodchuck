@@ -113,6 +113,7 @@ static struct property manager_properties[]
       { "DiscoveryTime", G_TYPE_UINT64, true },
       { "PublicationTime", G_TYPE_UINT64, true },
       /* Readonly.  */
+      { "RegistrationTime", G_TYPE_UINT64, false },
       { "ParentUUID", G_TYPE_STRING, false },
       { NULL, G_TYPE_INVALID, false }
 };
@@ -124,6 +125,7 @@ static struct property stream_properties[]
       { "Freshness", G_TYPE_UINT, true },
       { "ObjectsMostlyInline", G_TYPE_BOOLEAN, true },
       /* Readonly.  */
+      { "RegistrationTime", G_TYPE_UINT64, false },
       { "ParentUUID", G_TYPE_STRING, false },
       { NULL, G_TYPE_INVALID, false }
 };
@@ -145,6 +147,7 @@ static struct property object_properties[]
       { "DiscoveryTime", G_TYPE_UINT64, true },
       { "PublicationTime", G_TYPE_UINT64, true },
       /* Readonly.  */
+      { "RegistrationTime", G_TYPE_UINT64, false },
       { "ParentUUID", G_TYPE_STRING, false },
       { "Instance", G_TYPE_UINT, false },
       { NULL, G_TYPE_INVALID, true },
@@ -2215,14 +2218,16 @@ main (int argc, char *argv[])
     (db,
      "create table if not exists managers"
      " (uuid PRIMARY KEY, parent_uuid NOT NULL, HumanReadableName,"
-     "  DBusServiceName, DBusObject, Cookie, Priority);"
+     "  DBusServiceName, DBusObject, Cookie, Priority,"
+     "  RegistrationTime DEFAULT (strftime ('%s', 'now')));"
      "create index if not exists managers_cookie_index on managers (cookie);"
      "create index if not exists managers_parent_uuid_index on managers"
      " (parent_uuid);"
 
      "create table if not exists streams"
      " (uuid PRIMARY KEY, parent_uuid NOT NULL, instance,"
-     "  HumanReadableName, Cookie, Priority, Freshness, ObjectsMostlyInline);"
+     "  HumanReadableName, Cookie, Priority, Freshness, ObjectsMostlyInline,"
+     "  RegistrationTime DEFAULT (strftime ('%s', 'now')));"
      "create index if not exists streams_cookie_index on streams (cookie);"
      "create index if not exists streams_parent_uuid_index"
      " on streams (parent_uuid);"
@@ -2242,7 +2247,8 @@ main (int argc, char *argv[])
      "  TriggerTarget, TriggerEarliest, TriggerLatest,"
      "  DownloadFrequency,"
      "  DontTransfer DEFAULT 0, NeedUpdate, Priority,"
-     "  DiscoveryTime, PublicationTime);"
+     "  DiscoveryTime, PublicationTime,"
+     "  RegistrationTime DEFAULT (strftime ('%s', 'now')));"
      "create index if not exists objects_cookie_index on objects (cookie);"
      "create index if not exists objects_parent_uuid_index"
      " on objects (parent_uuid);"

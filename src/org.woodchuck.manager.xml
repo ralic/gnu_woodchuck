@@ -171,5 +171,8 @@
     <!-- The priority, relative to other managers with the same parent
          manager.  -->
     <property name="Priority" type="u" access="readwrite"/>
+
+    <!-- The time at which the object was registered.  -->
+    <property name="RegistrationTime" type="t" access="read"/>
   </interface>
 </node>

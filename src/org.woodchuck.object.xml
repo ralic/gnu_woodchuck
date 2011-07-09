@@ -244,5 +244,8 @@
     <!-- The time at which the object was published (in seconds since
          the epoch).  -->
     <property name="PublicationTime" type="t" access="readwrite"/>
+
+    <!-- The time at which the object was registered.  -->
+    <property name="RegistrationTime" type="t" access="read"/>
   </interface>
 </node>
