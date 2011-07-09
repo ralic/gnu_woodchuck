@@ -69,9 +69,11 @@
 	-->
       <arg name="RequestType" type="u"/>
 
-      <!-- Array of <`ExpectedSize`, `Utility`> tuples.  See
-           :data:`org.woodchuck.object.Versions` for a description.  -->
-      <arg name="Versions" type="a(tu)"/>
+      <!-- Array of <`ExpectedSize`, `ExpectedTransferUp`,
+           `ExpectedTransferDown`, `Utility`> tuples.  See
+           :data:`org.woodchuck.object.Versions` for a description.
+           -->
+      <arg name="Versions" type="a(xttu)"/>
 
       <!--
 	  The desirability of executing the job now:

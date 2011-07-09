@@ -155,14 +155,22 @@
          local identifiers.  -->
     <property name="Cookie" type="s" access="readwrite"/>
 
-    <!-- An array of <`URL`, `ExpectedSize`, `Utility`,
-         `UseSimpleDownloader`> tuples.  Each tuple designates the
-         same object, but with a different quality.
+    <!-- An array of <`URL`, `ExpectedSize`, `ExpectedTransferUp`,
+         `ExpectedTransferDown`, `Utility`, `UseSimpleDownloader`>
+         tuples.  Each tuple designates the same object, but with a
+         different quality.
 
 	 `URL` is optional.  Its value is only interpretted by
 	 Woodchuck if `UseSimpleDownloader` is also true.
 
-         `ExpectedSize` is the expected transfer size, in bytes.
+         `ExpectedSize` is the expected amount of disk space required
+         when this transfer completes.  If this is negative, this
+         indicates that transferring this objects frees space.
+
+         `ExpectedTransferUp` is the expected upload size, in bytes.
+
+         `ExpectedTransferDown` is the expected download size, in
+         bytes.
 
          `Utility` is the utility of this version of the object
          relative to other versions of this object.  Woodchuck
@@ -183,7 +191,7 @@
          Woodchuck also specified which version of the object to
          download.
     -->
-    <property name="Versions" type="a(stub)" access="readwrite"/>
+    <property name="Versions" type="a(sxttub)" access="readwrite"/>
 
     <!-- Where to save the file(s).  If FILENAME ends in a /,
          interpreted as a directory and the file is named after the

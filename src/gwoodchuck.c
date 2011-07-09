@@ -786,7 +786,9 @@ gwoodchuck_object_register (GWoodchuck *wc,
 			    const char *stream_identifier,
 			    const char *object_identifier,
 			    const char *human_readable_name,
-			    uint64_t expected_size,
+			    int64_t expected_size,
+			    uint64_t expected_transfer_up,
+			    uint64_t expected_transfer_down,
 			    uint32_t download_frequency,
 			    GError **caller_error)
 {
@@ -841,9 +843,19 @@ gwoodchuck_object_register (GWoodchuck *wc,
   g_value_array_append (strct, &url_value);
 
   GValue expected_size_value = { 0 };
-  g_value_init (&expected_size_value, G_TYPE_UINT64);
-  g_value_set_uint64 (&expected_size_value, expected_size);
+  g_value_init (&expected_size_value, G_TYPE_INT64);
+  g_value_set_int64 (&expected_size_value, expected_size);
   g_value_array_append (strct, &expected_size_value);
+
+  GValue expected_transfer_up_value = { 0 };
+  g_value_init (&expected_transfer_up_value, G_TYPE_UINT64);
+  g_value_set_uint64 (&expected_transfer_up_value, expected_transfer_up);
+  g_value_array_append (strct, &expected_transfer_up_value);
+
+  GValue expected_transfer_down_value = { 0 };
+  g_value_init (&expected_transfer_down_value, G_TYPE_UINT64);
+  g_value_set_uint64 (&expected_transfer_down_value, expected_transfer_down);
+  g_value_array_append (strct, &expected_transfer_down_value);
 
   GValue utility_value = { 0 };
   g_value_init (&utility_value, G_TYPE_UINT);
@@ -858,16 +870,17 @@ gwoodchuck_object_register (GWoodchuck *wc,
   GPtrArray *versions = g_ptr_array_new ();
   g_ptr_array_add (versions, strct);
 
-  static GType astub;
-  if (! astub)
-    astub = dbus_g_type_get_collection
+  static GType asxttub;
+  if (! asxttub)
+    asxttub = dbus_g_type_get_collection
       ("GPtrArray",
        dbus_g_type_get_struct ("GValueArray",
-			       G_TYPE_STRING, G_TYPE_UINT64, G_TYPE_UINT,
+			       G_TYPE_STRING, G_TYPE_INT64,
+			       G_TYPE_UINT64, G_TYPE_UINT64, G_TYPE_UINT,
 			       G_TYPE_BOOLEAN, G_TYPE_INVALID));
 
   GValue versions_value = { 0 };
-  g_value_init (&versions_value, astub);
+  g_value_init (&versions_value, asxttub);
   g_value_set_boxed (&versions_value, versions);
 
   g_hash_table_insert (properties, "Versions", &versions_value);
@@ -1211,12 +1224,16 @@ org_woodchuck_upcall_object_downloaded (GWoodchuck *wc,
     = g_value_get_uint (g_value_array_get_nth (version_strct, 0));
   const char *url
     = g_value_get_string (g_value_array_get_nth (version_strct, 1));
-  uint64_t expected_size
-    = g_value_get_uint64 (g_value_array_get_nth (version_strct, 2));
+  int64_t expected_size
+    = g_value_get_int64 (g_value_array_get_nth (version_strct, 2));
+  unt64_t expected_transfer_up
+    = g_value_get_uint64 (g_value_array_get_nth (version_strct, 3));
+  unt64_t expected_transfer_down
+    = g_value_get_uint64 (g_value_array_get_nth (version_strct, 4));
   uint32_t utility
-    = g_value_get_uint (g_value_array_get_nth (version_strct, 3));
+    = g_value_get_uint (g_value_array_get_nth (version_strct, 5));
   gboolean use_simple_downloader
-    = g_value_get_boolean (g_value_array_get_nth (version_strct, 4));
+    = g_value_get_boolean (g_value_array_get_nth (version_strct, 6));
 #endif
 
   return FALSE;
@@ -1254,12 +1271,16 @@ org_woodchuck_upcall_object_download (GWoodchuck *wc,
     = g_value_get_uint (g_value_array_get_nth (version_strct, 0));
   const char *url
     = g_value_get_string (g_value_array_get_nth (version_strct, 1));
-  uint64_t expected_size
-    = g_value_get_uint64 (g_value_array_get_nth (version_strct, 2));
+  int64_t expected_size
+    = g_value_get_int64 (g_value_array_get_nth (version_strct, 2));
+  unt64_t expected_transfer_up
+    = g_value_get_uint64 (g_value_array_get_nth (version_strct, 3));
+  unt64_t expected_transfer_down
+    = g_value_get_uint64 (g_value_array_get_nth (version_strct, 4));
   uint32_t utility
-    = g_value_get_uint (g_value_array_get_nth (version_strct, 3));
+    = g_value_get_uint (g_value_array_get_nth (version_strct, 5));
   gboolean use_simple_downloader
-    = g_value_get_boolean (g_value_array_get_nth (version_strct, 4));
+    = g_value_get_boolean (g_value_array_get_nth (version_strct, 6));
 #endif
 
   if (wc->vtable && wc->vtable->object_download)
@@ -1401,7 +1422,7 @@ main (int argc, char *argv[])
 
 	  if (! gwoodchuck_object_register
 	      (wc, streams[i].identifier, streams[i].objects[j].identifier,
-	       streams[i].objects[j].human_readable_name, 100 + j * 10, 0,
+	       streams[i].objects[j].human_readable_name, 100 + j * 10, 0, 0, 0,
 	       &error))
 	    {
 	      if (error->code == WOODCHUCK_ERROR_OBJECT_EXISTS)

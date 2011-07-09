@@ -45,7 +45,9 @@ extern enum woodchuck_error woodchuck_lookup_manager_by_cookie
 
 struct woodchuck_download_desirability_version
 {
-  uint64_t expected_size;
+  int64_t expected_size;
+  uint64_t expected_transfer_up;
+  uint64_t expected_transfer_down;
   uint32_t utility;
 };
 

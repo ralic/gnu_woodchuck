@@ -228,6 +228,10 @@ extern gboolean gwoodchuck_stream_unregister (GWoodchuck *wc,
 
    EXPECTED_SIZE is the expected size of the object, in bytes.
 
+   EXPECTED_TRANSFER_UP is the expected upload size.
+
+   EXPECTED_TRANSFER_DOWN is the expected download size.
+
    DOWNLOAD_FREQUENCY is how often the object should be updated (i.e.,
    the desired freshness), in seconds.  If the object is immutable,
    this should be set to 0, meaning that the object will be downloaded
@@ -236,7 +240,9 @@ extern gboolean gwoodchuck_object_register (GWoodchuck *wc,
 					    const char *stream_identifier,
 					    const char *object_identifier,
 					    const char *human_readable_name,
-					    uint64_t expected_size,
+					    int64_t expected_size,
+					    uint64_t expected_transfer_up,
+					    uint64_t expected_transfer_down,
 					    uint32_t download_frequency,
 					    GError **error);
 

@@ -375,7 +375,7 @@ do_schedule (gpointer user_data)
 	struct subscription *s = list->data;
 	list = list->next;
 
-	GValueArray *versions = g_value_array_new (5);
+	GValueArray *versions = g_value_array_new (7);
 
 	GValue index_value = { 0 };
 	g_value_init (&index_value, G_TYPE_UINT);
@@ -389,9 +389,19 @@ do_schedule (gpointer user_data)
 	g_value_array_append (versions, &url_value);
 
 	GValue expected_size_value = { 0 };
-	g_value_init (&expected_size_value, G_TYPE_UINT64);
-	g_value_set_uint64 (&expected_size_value, 0);
+	g_value_init (&expected_size_value, G_TYPE_INT64);
+	g_value_set_int64 (&expected_size_value, 0);
 	g_value_array_append (versions, &expected_size_value);
+
+	GValue expected_transfer_up_value = { 0 };
+	g_value_init (&expected_transfer_up_value, G_TYPE_UINT64);
+	g_value_set_uint64 (&expected_transfer_up_value, 0);
+	g_value_array_append (versions, &expected_transfer_up_value);
+
+	GValue expected_transfer_down_value = { 0 };
+	g_value_init (&expected_transfer_down_value, G_TYPE_UINT64);
+	g_value_set_uint64 (&expected_transfer_down_value, 0);
+	g_value_array_append (versions, &expected_transfer_down_value);
 
 	GValue utility_value = { 0 };
 	g_value_init (&utility_value, G_TYPE_UINT);
@@ -656,18 +666,19 @@ object_register (const char *parent, const char *parent_table,
       {
 	if (strcmp (key, "Versions") == 0)
 	  {
-	    static GType astub;
-	    if (! astub)
-	      astub = dbus_g_type_get_collection
+	    static GType asxttub;
+	    if (! asxttub)
+	      asxttub = dbus_g_type_get_collection
 		("GPtrArray",
 		 dbus_g_type_get_struct ("GValueArray",
-					 G_TYPE_STRING, G_TYPE_UINT64,
+					 G_TYPE_STRING, G_TYPE_INT64,
+					 G_TYPE_UINT64, G_TYPE_UINT64,
 					 G_TYPE_UINT, G_TYPE_BOOLEAN,
 					 G_TYPE_INVALID));
 
-	    if (! G_VALUE_HOLDS (value, astub))
+	    if (! G_VALUE_HOLDS (value, asxttub))
 	      {
-		debug (0, "Versions does not have type astub.");
+		debug (0, "Versions does not have type asxttub.");
 		bad_type = key;
 	      }
 	    else if (versions)
@@ -855,21 +866,28 @@ object_register (const char *parent, const char *parent_table,
 	    = g_value_get_string (g_value_array_get_nth (strct, 0));
 	  char *url_escaped = sqlite3_mprintf ("%Q", url);
 
-	  uint64_t expected_size
-	    = g_value_get_uint64 (g_value_array_get_nth (strct, 1));
+	  int64_t expected_size
+	    = g_value_get_int64 (g_value_array_get_nth (strct, 1));
+	  uint64_t expected_transfer_up
+	    = g_value_get_uint64 (g_value_array_get_nth (strct, 2));
+	  uint64_t expected_transfer_down
+	    = g_value_get_uint64 (g_value_array_get_nth (strct, 3));
 	  uint32_t utility
-	    = g_value_get_uint (g_value_array_get_nth (strct, 2));
+	    = g_value_get_uint (g_value_array_get_nth (strct, 4));
 	  gboolean use_simple_downloader
-	    = g_value_get_boolean (g_value_array_get_nth (strct, 3));
+	    = g_value_get_boolean (g_value_array_get_nth (strct, 5));
 
 	  g_string_append_printf
 	    (sql,
 	     "insert into object_versions"
 	     " (uuid, version, parent_uuid,"
-	     "  url, expected_size, utility, use_simple_downloader)"
+	     "  url, expected_size, expected_transfer_up,"
+	     "  expected_transfer_down, utility, use_simple_downloader)"
 	     " values"
-	     " ('%s', %d, '%s', %s, %"PRId64", %d, %d);\n",
+	     " ('%s', %d, '%s', %s, %"PRId64", %"PRIu64", %"PRIu64", %d, %d);"
+	     "\n",
 	     *uuid, i, parent, url_escaped, expected_size,
+	     expected_transfer_up, expected_transfer_down,
 	     utility, use_simple_downloader);
 
 	  sqlite3_free (url_escaped);
@@ -2257,7 +2275,8 @@ main (int argc, char *argv[])
 	org.woodchuck.Object.Versions property.  */
      "create table if not exists object_versions"
      " (uuid NOT NULL, version NOT NULL, parent_uuid NOT NULL,"
-     "  url, expected_size, utility, use_simple_downloader,"
+     "  url, expected_size, expected_transfer_up, expected_transfer_down,"
+     "  utility, use_simple_downloader,"
      "  UNIQUE (uuid, version, url));"
      "create index if not exists object_versions_parent_uuid_index"
      " on object_versions (parent_uuid);"

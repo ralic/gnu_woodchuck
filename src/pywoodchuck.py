@@ -592,12 +592,19 @@ class _Stream(_BaseObject, DictMixin):
             downloaded.  If 0 or None, this is a one-shot download.
             Default: None.
 
-        :expected_size: The expected size of the download, in bytes.
+        :expected_size: The expected amount of disk space required
+            after this transfer completes.  If this object represents
+            an upload and space will be freed after the transfer
+            completes, this should be negative.
 
-        :versions: An array of [`URL`, `expected_size`, `utility`,
-            use_simple_downloader`] specifying alternate versions of
-            the object.  `expected_size` is the expected size of the
-            download, in bytes.  `utility` is the utility of this
+        :versions: An array of [`URL`, `expected_size`,
+            `expected_transfer_up`, `expected_transfer_down`,
+            `utility`, use_simple_downloader`] specifying alternate
+            versions of the object.  `expected_size` is the expected
+            amount of disk space required when this transfer
+            completes.  `expected_transfer_up` is the expected upload
+            size, in bytes.  `expected_transfer_down` is the expected
+            download size, in bytes.  `utility` is the utility of this
             version relative to other versions.  The utility is
             assumed to be a linear function, i.e.,a version with 10
             has twice as much value as another version with 5.
@@ -617,8 +624,9 @@ class _Stream(_BaseObject, DictMixin):
 
         if versions is None and expected_size is not None:
             versions = (
-                # URL, expected_size, utility, use_simple_downloader
-                ("", expected_size, 0, False),
+                # URL, expected_size, expected_transfer_up,
+                # expected_transfer_down, utility, use_simple_downloader
+                ("", expected_size, 0, 0, 0, False),
                 )
 
         if versions is not None:
@@ -1429,7 +1437,9 @@ class PyWoodchuck(DictMixin):
 
         :param version: The version that was downloaded.  An array of:
             the index in the version array, the URL, the expected
-            size, the utility and the value of use simple downloader.
+            size, the expected bytes uploaded, expected bytes
+            downloaded, the utility and the value of use simple
+            downloader.
 
         :param filename: The name of the file containing the data.
 
@@ -1492,6 +1502,7 @@ class PyWoodchuck(DictMixin):
 
         :param version: The version to download.  An array of: the
             index in the version array, the URL, the expected size,
+            the expected bytes uploaded, expected bytes downloaded,
             the utility and the value of use simple downloader.
 
         :param filename: The name of the filename property.
@@ -1592,7 +1603,9 @@ if __name__ == "__main__":
 
         for i in (1, 2, 3):
             wc.object_register('id:a', 'id:a.' + str(i), 'A.' + str(i),
-                               download_frequency=3)
+                               download_frequency=3,
+                               versions=(("", 100, 100, 2, 1, False),
+                                         ("", 20, 20, 2, 0, False)))
             assert wc.object_property_get('id:a', 'id:a.' + str(i),
                                           'download_frequency') == 3
             wc.object_property_set('id:a', 'id:a.' + str(i),

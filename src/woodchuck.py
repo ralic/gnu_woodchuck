@@ -208,7 +208,7 @@ _object_properties_to_camel_case = \
            "human_readable_name": ("HumanReadableName", dbus.UTF8String, "",
                                    _ttl),
            "cookie": ("Cookie", dbus.UTF8String, "", _ttl),
-           "versions": ("Versions", lambda v: dbus.Array (v, "(stub)"), [],
+           "versions": ("Versions", lambda v: dbus.Array (v, "(sxttub)"), [],
                         _ttl),
            "filename": ("Filename", dbus.UTF8String, "", _ttl),
            "wakeup": ("Wakeup", dbus.Boolean, True, _ttl),
@@ -1403,7 +1403,10 @@ class Upcalls(dbus.service.Object):
 
         :param version: The version that was downloaded.  An array of:
             the index in the version array, the URL, the expected
-            size, the utility and the value of use simple downloader.
+            object size on disk (negative if transferring the object
+            will free space), the expected upload size, the expected
+            download size, the utility and the value of use simple
+            downloader.
 
         :param filename: The name of the file containing the data.
 
@@ -1449,7 +1452,7 @@ class Upcalls(dbus.service.Object):
         pass
     
     @dbus.service.method(dbus_interface='org.woodchuck.upcall',
-                         in_signature='ssssss(ustub)su', out_signature='',
+                         in_signature='ssssss(usxttub)su', out_signature='',
                          sender_keyword="sender")
     def ObjectDownload(self, manager_UUID, manager_cookie,
                        stream_UUID, stream_cookie,
@@ -1487,9 +1490,11 @@ class Upcalls(dbus.service.Object):
 
         :param object_cookie: The object's cookie.
 
-        :param version: The version to download.  An array of: the
-            index in the version array, the URL, the expected size,
-            the utility and the value of use simple downloader.
+        :param version: The version to download.  the index in the
+            version array, the URL, the expected object size on disk
+            (negative if transferring the object will free space), the
+            expected upload size, the expected download size, the
+            utility and the value of use simple downloader.
 
         :param filename: The name of the filename property.
 

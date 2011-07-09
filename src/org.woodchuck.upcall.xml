@@ -36,7 +36,7 @@
       <!-- Index and value of the version downloaded from the versions
            array (at the time of download).  See
            :data:`org.woodchuck.object.Versions`.  -->
-      <arg name="Version" type="ustub"/>
+      <arg name="Version" type="usxttub"/>
       <!-- The location of the data.  -->
       <arg name="Filename" type="s"/>
       <!-- The size (in bytes).  -->
@@ -91,7 +91,7 @@
       <!-- Index and value of the version to download from the
            versions array (at the time of the upcall).  See
            :data:`org.woodchuck.object.Versions`. -->
-      <arg name="Version" type="(ustub)"/>
+      <arg name="Version" type="(usxttub)"/>
       <!-- The value of :data:`org.woodchuck.object.Filename`.  -->
       <arg name="Filename" type="s"/>
 

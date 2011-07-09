@@ -531,7 +531,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 		      }
 		    case DBUS_TYPE_ARRAY:
 		      {
-			if (strcmp ("a(stub)",
+			if (strcmp ("a(sxttub)",
 				    dbus_message_iter_get_signature
 				    (&variant_iter)) != 0)
 			  goto register_bad_type;
@@ -620,6 +620,17 @@ process_message (DBusConnection *connection, DBusMessage *message,
 								   &s);
 				      g_value_init (value, gtype);
 				      g_value_set_uint64 (value, s);
+				      break;
+				    }
+				  case DBUS_TYPE_INT64:
+				    {
+				      gtype = G_TYPE_INT64;
+
+				      uint64_t s = 0;
+				      dbus_message_iter_get_basic (&struct_iter,
+								   &s);
+				      g_value_init (value, gtype);
+				      g_value_set_int64 (value, s);
 				      break;
 				    }
 				  case DBUS_TYPE_BOOLEAN:
@@ -955,7 +966,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
       uint32_t desirability = 0;
       uint32_t version = 0;
 
-      expected_sig = "ua(tu)";
+      expected_sig = "ua(xttu)";
       DBusError dbus_error;
       dbus_error_init (&dbus_error);
       if (strcmp (expected_sig, actual_sig) != 0
@@ -990,6 +1001,12 @@ process_message (DBusConnection *connection, DBusMessage *message,
 
 	  dbus_message_iter_get_basic (&struct_iter,
 				       &versions[i].expected_size);
+	  dbus_message_iter_next (&struct_iter);
+	  dbus_message_iter_get_basic (&struct_iter,
+				       &versions[i].expected_transfer_up);
+	  dbus_message_iter_next (&struct_iter);
+	  dbus_message_iter_get_basic (&struct_iter,
+				       &versions[i].expected_transfer_down);
 	  dbus_message_iter_next (&struct_iter);
 	  dbus_message_iter_get_basic (&struct_iter,
 				       &versions[i].utility);
