@@ -415,7 +415,7 @@ class _Stream(_BaseObject, DictMixin):
     def __getitem__(self, object_identifier):
         try:
             return self._object_lookup (object_identifier)
-        except woodchuck.NoSuchObject as exception:
+        except woodchuck.NoSuchObject, exception:
             raise KeyError (exception.args[0])
 
     def __contains__(self, object_identifier):
@@ -819,7 +819,7 @@ class PyWoodchuck(DictMixin):
                 stream = self.pywoodchuck._stream_lookup (
                     stream_cookie, stream_UUID)
                 object = stream._object_lookup (object_cookie, object_UUID)
-            except woodchuck.NoSuchObject as exception:
+            except woodchuck.NoSuchObject, exception:
                 print "Woodchuck invoked " \
                     "org.woodchuck.upcall.ObjectDownloaded", \
                     "for non-existant object: ", str (exception)
@@ -835,7 +835,7 @@ class PyWoodchuck(DictMixin):
             try:
                 stream = self.pywoodchuck._stream_lookup \
                     (stream_cookie, stream_UUID)
-            except woodchuck.NoSuchObject as exception:
+            except woodchuck.NoSuchObject, exception:
                 print "Woodchuck invoked " \
                     "org.woodchuck.upcall.ObjectDownloaded", \
                     "for non-existant object: ", str (exception)
@@ -852,7 +852,7 @@ class PyWoodchuck(DictMixin):
                 stream = self.pywoodchuck._stream_lookup (
                     stream_cookie, stream_UUID)
                 object = stream._object_lookup (object_cookie, object_UUID)
-            except woodchuck.NoSuchObject as exception:
+            except woodchuck.NoSuchObject, exception:
                 print "Woodchuck invoked " \
                     "org.woodchuck.upcall.ObjectDownload", \
                     "for non-existant object: ", str (exception)
@@ -869,7 +869,7 @@ class PyWoodchuck(DictMixin):
                 stream = self.pywoodchuck._stream_lookup (
                     stream_cookie, stream_UUID)
                 object = stream._object_lookup (object_cookie, object_UUID)
-            except woodchuck.NoSuchObject as exception:
+            except woodchuck.NoSuchObject, exception:
                 print "Woodchuck invoked " \
                     "org.woodchuck.upcall.ObjectDeleteFiles", \
                     "for non-existant object: ", str (exception)
@@ -927,7 +927,7 @@ class PyWoodchuck(DictMixin):
                  human_readable_name=human_readable_name,
                  cookie=dbus_service_name,
                  dbus_service_name=dbus_service_name)
-        except woodchuck.WoodchuckUnavailableError as exception:
+        except woodchuck.WoodchuckUnavailableError, exception:
             print "Unable to connect to Woodchuck server:", str (exception)
             self.manager = None
         except woodchuck.ObjectExistsError:
@@ -999,7 +999,7 @@ class PyWoodchuck(DictMixin):
     def __getitem__(self, stream_identifier):
         try:
             return self._stream_lookup (stream_identifier)
-        except woodchuck.NoSuchObject as exception:
+        except woodchuck.NoSuchObject, exception:
             raise KeyError (exception.args[0])
 
     def __contains__(self, stream_identifier):
@@ -1142,7 +1142,7 @@ class PyWoodchuck(DictMixin):
         """
         try:
             del self[stream_identifier]
-        except KeyError as exception:
+        except KeyError, exception:
             raise woodchuck.NoSuchObject (exception.args[0])
 
     def stream_updated(self, stream_identifier, *args, **kwargs):
@@ -1573,7 +1573,7 @@ if __name__ == "__main__":
         try:
             failed = False
             wc.stream_register('id:b', 'B')
-        except woodchuck.ObjectExistsError as exception:
+        except woodchuck.ObjectExistsError, exception:
             failed = True
         assert failed
 
@@ -1582,7 +1582,7 @@ if __name__ == "__main__":
         try:
             failed = False
             wc.stream_unregister('id:b')
-        except woodchuck.NoSuchObject as exception:
+        except woodchuck.NoSuchObject, exception:
             failed = True
         assert failed
 
