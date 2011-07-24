@@ -437,7 +437,7 @@ class _Stream(_BaseObject, DictMixin):
 
     def keys(self):
         for o in self.llobject.list_objects ():
-            yield _Object (self, o)
+            yield o.cookie
 
     def __len__(self):
         return len (self.llobject.list_objects ())
@@ -648,7 +648,7 @@ class _Stream(_BaseObject, DictMixin):
         .. Note:: This function is equivalent to iterating over the
             stream::
 
-                for obj in stream:
+                for obj in stream.values ():
                     print obj.identifier, obj.human_readable_name
 
         Example::
@@ -918,7 +918,8 @@ class PyWoodchuck(DictMixin):
 
             w = mywoodchuck("RSS Reader", "org.rssreader")
 
-        The returned object behaves like a dict.  
+        The returned object behaves like a dict, which maps stream
+        identifiers to :class:`_Stream` objects.
         """
         try:
             # Try to register a new manager.
@@ -1014,7 +1015,7 @@ class PyWoodchuck(DictMixin):
 
     def keys(self):
         for s in self.manager.list_streams ():
-            yield _Stream (self, s)
+            yield s.cookie
 
     def __len__(self):
         return len (self.manager.list_streams ())
@@ -1118,11 +1119,11 @@ class PyWoodchuck(DictMixin):
                 w = pywoodchuck.PyWoodchuck("Application", "org.application")
                 w.stream_register("id:foo", "Foo")
                 w.stream_register("id:bar", "Bar")
-                for s in w:
+                for s in w.values ():
                     print "%s: %s" % (s.human_readable_name, s.identifier)
                     del w[s.identifier]
         """
-        for s in self:
+        for s in self.values ():
             yield s
 
     def stream_unregister(self, stream_identifier):
@@ -1211,7 +1212,7 @@ class PyWoodchuck(DictMixin):
 
             And for iterating over a :class:`_Stream` object:
 
-                for obj in pywoodchuck[stream_identifier]: pass
+                for obj in pywoodchuck[stream_identifier].values (): pass
 
         :param stream_identifier: The stream's identifier.
         """
