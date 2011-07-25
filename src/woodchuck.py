@@ -20,6 +20,7 @@
 import dbus
 import dbus.service
 import time
+import threading
 
 """A low-level wrapper of the org.woodchuck DBus interfaces."""
 
@@ -249,12 +250,28 @@ def _keys_convert(d, conversion):
                                      else conversion[k][1][2])]
                   for k, v in d.items ()])
 
+# The dbus library is not thread safe.  Ensure that all calls are
+# executed in the same thread.
+_main_thread = None
+def _check_main_thread(f):
+    def wrapper(*args, **kwargs):
+        global _main_thread
+        if _main_thread is None:
+            _main_thread = threading.currentThread()
+        else:
+            assert _main_thread == threading.currentThread(), \
+                "woodchuck (due to its use of DBus) is not thread-safe. " \
+                + "Fix your code."
+        return f(*args, **kwargs)
+    return wrapper
+
 class _BaseObject(object):
     """
     _Object, _Stream and _Manager inherit from this class, which
     implements common functionality, such as getting and setting
     properties.
     """
+    @_check_main_thread
     def __init__(self, initial_properties, property_map):
         super (_BaseObject, self).__init__ ()
 
@@ -273,6 +290,7 @@ class _BaseObject(object):
             = dbus.Interface (self.proxy,
                               dbus_interface='org.freedesktop.DBus.Properties')
 
+    @_check_main_thread
     def __getattribute__(self, name):
         try:
             property_map = (super (_BaseObject, self)
@@ -298,6 +316,7 @@ class _BaseObject(object):
 
         return value
 
+    @_check_main_thread
     def __setattr__(self, name, value):
         if ('property_map' in self.__dict__ and name in self.property_map):
             # Write through...
@@ -320,6 +339,7 @@ class _BaseObject(object):
 
 class _Object(_BaseObject):
     """The local representation for a Woodchuck object."""
+    @_check_main_thread
     def __init__(self, **properties):
         """
         Instantiate a :class:`Woodchuck._Object`.  Instantiating this
@@ -350,6 +370,7 @@ class _Object(_BaseObject):
         super(_Object, self).__init__ (properties,
                                        _object_properties_to_camel_case)
 
+    @_check_main_thread
     def unregister(self):
         """Unregister the object object thereby causing Woodchuck to
         permanently forget about the object.
@@ -365,6 +386,7 @@ class _Object(_BaseObject):
         if ret:
             del _objects[self.properties['UUID']]
 
+    @_check_main_thread
     def download(self, request_type):
         """
         Request that Woodchuck download the object.  This only makes
@@ -379,6 +401,7 @@ class _Object(_BaseObject):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
+    @_check_main_thread
     def download_status(self, status, indicator=None,
                         transferred_up=None, transferred_down=None,
                         download_time=None, download_duration=None,
@@ -469,6 +492,7 @@ class _Object(_BaseObject):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
+    @_check_main_thread
     def used(self, start=None, duration=None, use_mask=None):
         """
         Mark the object as having been used.
@@ -502,6 +526,7 @@ class _Object(_BaseObject):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
+    @_check_main_thread
     def files_deleted(self, update=None, arg=None):
         """
         Indicate that some or all of the object's files have been
@@ -567,6 +592,7 @@ def Object(**properties):
     return _Object(**properties)
 
 class _Stream(_BaseObject):
+    @_check_main_thread
     def __init__(self, **properties):
         """Instantiate a :class:`Woodchuck._Stream`.  Instantiating
         this object does not actually register a stream; the stream is
@@ -596,6 +622,7 @@ class _Stream(_BaseObject):
         super(_Stream, self).__init__ (properties,
                                        _stream_properties_to_camel_case)
 
+    @_check_main_thread
     def unregister(self, only_if_empty):
         """Unregister the stream object thereby causing Woodchuck to
         permanently forget about the stream and any object it
@@ -623,6 +650,7 @@ class _Stream(_BaseObject):
         if ret:
             del _streams[self.properties['UUID']]
 
+    @_check_main_thread
     def object_register(self, only_if_cookie_unique=True, **properties):
         """Register a new object.
     
@@ -649,6 +677,7 @@ class _Stream(_BaseObject):
         properties['UUID'] = UUID
         return Object (**properties)
 
+    @_check_main_thread
     def list_objects(self):
         """List this stream's objects.
 
@@ -665,6 +694,7 @@ class _Stream(_BaseObject):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
+    @_check_main_thread
     def lookup_object_by_cookie(self, cookie):
         """Return the set of objects with the specified cookie.
 
@@ -683,6 +713,7 @@ class _Stream(_BaseObject):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
+    @_check_main_thread
     def update_status(self, status, indicator=None,
                       transferred_up=None, transferred_down=None,
                       download_time=None, download_duration=None,
@@ -804,6 +835,7 @@ def Stream(**properties):
     return _Stream(**properties)
 
 class _Manager(_BaseObject):
+    @_check_main_thread
     def __init__(self, **properties):
         """Instantiate a :class:`Woodchuck._Manager`.  Instantiating
         this object does not actually register a manager; the manager
@@ -837,6 +869,7 @@ class _Manager(_BaseObject):
         super(_Manager, self).__init__ (properties,
                                         _manager_properties_to_camel_case)
 
+    @_check_main_thread
     def unregister(self, only_if_empty=True):
         """Unregister the manager object thereby causing Woodchuck to
         permanently forget about the manager and any streams and
@@ -863,6 +896,7 @@ class _Manager(_BaseObject):
         if ret:
             del _managers[self.properties['UUID']]
 
+    @_check_main_thread
     def manager_register(self, only_if_cookie_unique=True,
                          **properties):
         """Register a child manager.
@@ -908,6 +942,7 @@ class _Manager(_BaseObject):
         properties['UUID'] = UUID
         return Manager (**properties)
 
+    @_check_main_thread
     def list_managers(self, recursive=False):
         """List managers that are a descendent of this one.
 
@@ -928,6 +963,7 @@ class _Manager(_BaseObject):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
+    @_check_main_thread
     def lookup_manager_by_cookie(self, cookie, recursive=False):
         """Return the set of managers with the specified cookie that
         are a descendent of this one.
@@ -949,6 +985,7 @@ class _Manager(_BaseObject):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
+    @_check_main_thread
     def stream_register(self, only_if_cookie_unique=True, **properties):
         """Register a new stream.
     
@@ -990,6 +1027,7 @@ class _Manager(_BaseObject):
         properties['UUID'] = UUID
         return Stream (**properties)
 
+    @_check_main_thread
     def list_streams(self):
         """List this manager's streams.
 
@@ -1006,6 +1044,7 @@ class _Manager(_BaseObject):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
+    @_check_main_thread
     def lookup_stream_by_cookie(self, cookie):
         """Return the set of streams with the specified cookie.
 
@@ -1024,6 +1063,7 @@ class _Manager(_BaseObject):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
+    @_check_main_thread
     def feedback_subscribe(self, descendents_too=True):
         """Request that Woodchuck begin making upcalls for this
         manager.
@@ -1080,6 +1120,7 @@ class _Manager(_BaseObject):
 
         return idx
 
+    @_check_main_thread
     def feedback_unsubscribe(self, handle):
         """Cancel an upcall subscription.
 
@@ -1112,6 +1153,7 @@ class _Manager(_BaseObject):
             self.feedback_subscriptions[1] = 0
             return
 
+    @_check_main_thread
     def feedback_ack(self, object_UUID, object_instance):
         """Invoke org.woodchuck.manager.FeedbackAck."""
         try:
@@ -1147,6 +1189,7 @@ def Manager(**properties):
 class _Woodchuck(object):
     """The top-level Woodchuck class."""
 
+    @_check_main_thread
     def __init__(self):
         # Establish a connection with the Woodchuck server.
         try:
@@ -1161,6 +1204,7 @@ class _Woodchuck(object):
             self._woodchuck = None
             _dbus_exception_to_woodchuck_exception (exception)
 
+    @_check_main_thread
     def manager_register(self, only_if_cookie_unique=True, **properties):
         """Register a new top-level manager.
     
@@ -1197,6 +1241,7 @@ class _Woodchuck(object):
         properties['UUID'] = UUID
         return Manager (**properties)
     
+    @_check_main_thread
     def list_managers(self, recursive=False):
         """List known managers.
 
@@ -1220,6 +1265,7 @@ class _Woodchuck(object):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
     
+    @_check_main_thread
     def lookup_manager_by_cookie(self, cookie, recursive=False):
         """Return the set of managers with the specified cookie.
 
@@ -1328,6 +1374,7 @@ class Upcalls(dbus.service.Object):
           from dbus.mainloop.qt import DBusQtMainLoop
           DBusQtMainLoop(set_as_default=True)
     """
+    @_check_main_thread
     def __init__(self, path):
         """
         :param path: The object that will receive the upcalls from
