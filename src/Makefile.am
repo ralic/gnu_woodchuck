@@ -155,8 +155,9 @@ murmeltier_SOURCES = $(dbus_interfaces_h) $(monitors) \
 	org.woodchuck.object.xml.h \
 	org.freedesktop.DBus.Introspectable.xml.h \
 	dotdir.h dotdir.c \
-	$(debug_src) \
+	$(debug_log_to_db_src) \
 	util.h
+murmeltier_CPPFLAGS = $(AM_CPPFLAGS) -DLOG_TO_DB -DDOT_DIR=.murmeltier
 murmeltier_LDADD = $(BASE_LIBS)
 
 smart_storage_logger_SOURCES = $(dbus_interfaces_h) $(monitors) \
