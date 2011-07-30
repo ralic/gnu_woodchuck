@@ -143,20 +143,24 @@ class WoodchuckUnavailableError(Error):
 
 def _dbus_exception_to_woodchuck_exception(exception):
     """Convert a dbus exception to a local exception."""
-    if exception.get_dbus_name () == "org.woodchuck.GenericError":
+    try:
+        dbus_name = str (exception.get_dbus_name ())
+    except AttributeError:
+        dbus_name = ""
+
+    if dbus_name == "org.woodchuck.GenericError":
         raise GenericError (exception.get_dbus_message ())
-    elif exception.get_dbus_name () == "org.woodchuck.ObjectExists":
+    elif dbus_name == "org.woodchuck.ObjectExists":
         raise ObjectExistsError (exception.get_dbus_message ())
-    elif exception.get_dbus_name () == "org.woodchuck.MethodNotImplemented":
+    elif dbus_name == "org.woodchuck.MethodNotImplemented":
         raise NotImplementedError (exception.get_dbus_message ())
-    elif exception.get_dbus_name () == "org.woodchuck.InternalError":
+    elif dbus_name == "org.woodchuck.InternalError":
         raise InternalError (exception.get_dbus_message ())
-    elif exception.get_dbus_name () == "org.woodchuck.InvalidArgs":
+    elif dbus_name == "org.woodchuck.InvalidArgs":
         raise InvalidArgsError (exception.get_dbus_message ())
-    elif exception.get_dbus_name ().startswith ("org.woodchuck."):
-        raise UnknownError (exception.get_dbus_name ()
-                            + exception.get_dbus_message ())
-    elif (exception.get_dbus_name ()
+    elif dbus_name.startswith ("org.woodchuck."):
+        raise UnknownError (dbus_name + exception.get_dbus_message ())
+    elif (dbus_name
           == "org.freedesktop.DBus.Error.ServiceUnknown"):
         raise WoodchuckUnavailableError (exception.get_dbus_message ())
     else:
