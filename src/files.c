@@ -24,6 +24,9 @@
 #include "debug.h"
 #include "files.h"
 
+#define STRINGIFY(s) STRINGIFY_(s)
+#define STRINGIFY_(s) #s
+
 char *base;
 int base_len;
 char *dot_dir;
@@ -44,7 +47,7 @@ files_init (void)
 #endif
   base_len = strlen (base);
 
-  asprintf (&dot_dir, "%s/"DOT_DIR, base);
+  asprintf (&dot_dir, "%s/"STRINGIFY(DOT_DIR), base);
   dot_dir_len = strlen (dot_dir);
 }
 

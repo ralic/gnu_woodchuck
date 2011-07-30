@@ -167,7 +167,8 @@ smart_storage_logger_SOURCES = $(dbus_interfaces_h) $(monitors) \
 	sqlq.h sqlq.c \
 	util.h \
 	$(debug_log_to_db_src)
-smart_storage_logger_CPPFLAGS = $(AM_CPPFLAGS) -DLOG_TO_DB
+smart_storage_logger_CPPFLAGS = $(AM_CPPFLAGS) \
+	-DLOG_TO_DB -DDOT_DIR=.smart-storage-logger
 smart_storage_logger_LDADD = $(BASE_LIBS)
 
 smart_storage_logger_recover_SOURCES = \
@@ -175,7 +176,8 @@ smart_storage_logger_recover_SOURCES = \
 	files.h files.c \
 	$(debug_log_to_db_src) \
 	util.h
-smart_storage_logger_recover_CPPFLAGS = $(AM_CPPFLAGS) -DLOG_TO_DB
+smart_storage_logger_recover_CPPFLAGS = $(AM_CPPFLAGS) \
+	-DLOG_TO_DB -DDOT_DIR=.smart-storage-logger
 # Needs sqlite, glib and pthreads.
 smart_storage_logger_recover_LDADD = $(BASE_LIBS)
 

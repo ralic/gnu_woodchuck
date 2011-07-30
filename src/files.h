@@ -32,7 +32,9 @@ extern int base_len;
 
 /* The directory (under the user's home directory) in which we store
    the log file.  */
-#define DOT_DIR ".smart-storage"
+#ifndef DOT_DIR
+# define DOT_DIR ".woodchuck"
+#endif
 /* The directory's absolute path.  */
 extern char *dot_dir;
 /* strlen (dot_dir).  */
