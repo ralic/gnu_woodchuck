@@ -203,6 +203,7 @@ do_schedule (gpointer user_data)
     const char *stream_cookie = argv[i] ?: ""; i ++;
     const char *manager_uuid = argv[i] ?: ""; i ++;
     const char *manager_cookie = argv[i] ?: ""; i ++;
+    const char *dbus_service_name = argv[i] ?: ""; i ++;
     uint32_t freshness = argv[i] ? atoi (argv[i]) : 0; i ++;
     uint64_t download_time = argv[i] ? atoll (argv[i]) : 0; i ++;
     uint32_t last_trys_status = argv[i] ? atoi (argv[i]) : 0; i ++;
@@ -261,27 +262,47 @@ do_schedule (gpointer user_data)
 	g_string_free (s, TRUE);
       }
 
-    while (list)
+    void inform (DBusGProxy *proxy, const char *handle)
+    {
+      GError *error = NULL;
+      if (! (org_woodchuck_upcall_stream_update
+	     (proxy, manager_uuid, manager_cookie,
+	      stream_uuid, stream_cookie, &error)))
+	{
+	  debug (0, "Executing org_woodchuck_upcall_stream_update "
+		 "(%s, %s, %s, %s, %s) upcall failed: %s",
+		 handle, manager_uuid, manager_cookie,
+		 stream_uuid, stream_cookie,
+		 error ? error->message : "<Unknown>");
+
+	  if (error)
+	    g_error_free (error);
+	  error = NULL;
+	}
+    }
+
+    if (! list && dbus_service_name && *dbus_service_name)
       {
-	struct subscription *s = list->data;
-	list = list->next;
-
-	GError *error = NULL;
-	if (! (org_woodchuck_upcall_stream_update
-	       (s->proxy, manager_uuid, manager_cookie,
-		stream_uuid, stream_cookie, &error)))
+	DBusGProxy *proxy = dbus_g_proxy_new_for_name
+	  (mt->session_bus, dbus_service_name,
+	   "/org/woodchuck", "org.woodchuck.start");
+	if (proxy)
 	  {
-	    debug (0, "Executing org_woodchuck_upcall_stream_update "
-		   "(%s, %s, %s, %s, %s) upcall failed: %s",
-		   s->handle, manager_uuid, manager_cookie,
-		   stream_uuid, stream_cookie,
-		   error ? error->message : "<Unknown>");
-
-	    if (error)
-	      g_error_free (error);
-	    error = NULL;
+	    inform (proxy, "START");
+	    g_object_unref (proxy);
 	  }
+	else
+	  debug (0, "Failed to create a DBus proxy object for %s",
+		 dbus_service_name);
       }
+    else
+      while (list)
+	{
+	  struct subscription *s = list->data;
+	  list = list->next;
+
+	  inform (s->proxy, s->handle);
+	}
 
     return 0;
   }
@@ -289,7 +310,7 @@ do_schedule (gpointer user_data)
   int err = sqlite3_exec
     (db,
      "select streams.uuid, streams.cookie,"
-     "  streams.parent_uuid, managers.cookie,"
+     "  streams.parent_uuid, managers.cookie, managers.DBusServiceName,"
      "  streams.Freshness, stream_updates.download_time, stream_updates.status"
      " from streams left join stream_updates"
      " on (streams.uuid == stream_updates.uuid"
