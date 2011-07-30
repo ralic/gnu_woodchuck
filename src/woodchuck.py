@@ -458,6 +458,8 @@ class _Object(_BaseObject):
               files=( ("/home/user/Podcasts/Foo/Episode1.ogg", True,
                        woodchuck.DeletionPolicy.DeleteWithoutConsultation),))
         """
+        status = dbus.UInt32 (status)
+
         if indicator is None:
             indicator = 0x80000000
         indicator = dbus.UInt32 (indicator)
