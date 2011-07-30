@@ -1,0 +1,5 @@
+debian/tmp/usr/bin/smart-storage-logger
+debian/tmp/usr/bin/smart-storage-logger-consent
+debian/tmp/usr/bin/smart-storage-logger-recover
+debian/tmp/usr/bin/ssl-tail
+debian/tmp/usr/share/woodchuck/ssl-receiver.cert

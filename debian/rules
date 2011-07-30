@@ -4,13 +4,14 @@ include /usr/share/cdbs/1/rules/debhelper.mk
 include /usr/share/cdbs/1/class/autotools.mk
 
 binary-post-install/smart-storage-logger::
-	mkdir -p debian/smart-storage-logger/etc/event.d
 	# Maemo's version of dh_installinit is too old to automate this for us.
+	mkdir -p debian/smart-storage-logger/etc/event.d
 	cp debian/smart-storage-logger-maemo.upstart \
 		debian/smart-storage-logger/etc/event.d/smart-storage-logger
-	# Don't include unnecessary binaries.
-	rm -r debian/smart-storage-logger/usr/bin/process-tracer \
-	  debian/smart-storage-logger/usr/bin/murmeltier \
-	  debian/smart-storage-logger/usr/bin/gwoodchuck \
-	  debian/smart-storage-logger/usr/share/doc \
-	  debian/smart-storage-logger/usr/lib
+
+binary-post-install/murmeltier::
+	# Maemo's version of dh_installinit is too old to automate this for us.
+	mkdir -p debian/murmeltier/etc/event.d
+	cp debian/murmeltier-maemo.upstart \
+		debian/murmeltier/etc/event.d/murmeltier
+

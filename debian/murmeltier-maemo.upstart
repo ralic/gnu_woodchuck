@@ -1,0 +1,32 @@
+author "Neal H. Walfield <neal@cs.jhu.edu>"
+description "Murmeltier.  See http://hssl.cs.jhu.edu/~neal/smart-storage"
+
+start on started hildon-desktop
+stop on ACT_DEAD
+stop on starting shutdown
+
+console none
+
+# Make sure the user's dbus session bus is accessible.
+script
+	REAL_USER=`whoami`
+	USER=$REAL_USER
+	if [ x"$REAL_USER" = xroot ]; 
+	then
+	  USER=user
+	fi
+	source /tmp/session_bus_address.$USER
+
+	/usr/sbin/waitdbus system
+	/usr/sbin/waitdbus session
+
+	WRAPPER=""
+	if [ x"$REAL_USER" = xroot ]; 
+	then
+	  WRAPPER="su - $USER -c"
+	fi
+	exec $WRAPPER /usr/bin/murmeltier
+end script
+
+respawn
+nice 5
