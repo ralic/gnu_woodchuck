@@ -1,1 +1,1 @@
-EXTRA_DIST = woodchuck/woodchuck.h woodchuck/gwoodchuck.h
+nobase_include_HEADERS = woodchuck/woodchuck.h woodchuck/gwoodchuck.h
