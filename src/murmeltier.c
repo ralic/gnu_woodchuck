@@ -350,13 +350,18 @@ do_schedule (gpointer user_data)
     uint64_t trigger_target = argv[i] ? atoll (argv[i]) : 0; i ++;
     uint64_t trigger_earliest = argv[i] ? atoll (argv[i]) : 0; i ++;
     uint64_t trigger_latest = argv[i] ? atoll (argv[i]) : 0; i ++;
+    bool need_update = argv[i] ? atoi (argv[i]) : false; i ++;
     int instance = argv[i] ? atoi (argv[i]) : 0; i ++;
 
-    if (transfer_time && last_trys_status == 0 && transfer_frequency == 0)
     debug (4, "Considering object %s(%s): transfer_time: "TIME_FMT";"
-	   " last_trys_status: %"PRId32"; transfer_frequency: %"PRId32,
+	   " last_trys_status: %"PRId32"; transfer_frequency: %"PRId32";"
+	   " need update: %s",
 	   object_uuid, object_cookie, TIME_PRINTF (transfer_time),
-	   last_trys_status, transfer_frequency);
+	   last_trys_status, transfer_frequency,
+	   need_update ? "true" : "false");
+
+    if (transfer_time && last_trys_status == 0 && transfer_frequency == 0
+	&& ! need_update)
       /* The object has been successfully transferred and it is a
 	 one-shot object.  Ignore.  */
       {
@@ -367,7 +372,8 @@ do_schedule (gpointer user_data)
 
     if (last_trys_status == 0
 	&& transfer_time
-	&& transfer_time + transfer_frequency / 4 * 3 > n / 1000)
+	&& transfer_time + transfer_frequency / 4 * 3 > n / 1000
+	&& ! need_update)
       /* The content is fresh enough.  */
       {
 	debug (4, "%s(%s) Content fresh enough.",
@@ -484,7 +490,7 @@ do_schedule (gpointer user_data)
      "  objects.TransferFrequency, object_instance_status.transfer_time,"
      "  object_instance_status.status,"
      "  objects.TriggerTarget, objects.TriggerEarliest, objects.TriggerLatest,"
-     "  objects.instance"
+     "  objects.NeedUpdate, objects.instance"
      " from objects left join object_instance_status"
      " on (objects.uuid == object_instance_status.uuid"
      /* MAX(OBJECT_INSTANCE_STATUS.INSTANCE) == OBJECTS.INSTANCE + 1 */
