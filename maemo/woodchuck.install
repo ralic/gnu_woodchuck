@@ -1,0 +1,9 @@
+[install]
+catalogues = hssl
+package = murmeltier
+
+[hssl]
+name = hssl.cs.jhu.edu
+uri = http://hssl.cs.jhu.edu/~neal/woodchuck
+components = maemo
+
