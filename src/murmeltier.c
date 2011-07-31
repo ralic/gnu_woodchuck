@@ -977,7 +977,7 @@ object_register (const char *parent, const char *parent_table,
  out:
   if (abort_transaction)
     {
-      err = sqlite3_exec (db, "abort transaction", NULL, NULL, &errmsg);
+      err = sqlite3_exec (db, "rollback transaction", NULL, NULL, &errmsg);
       if (errmsg)
 	{
 	  if (! ret)
@@ -1130,6 +1130,13 @@ object_unregister (const char *uuid,
 	  g_set_error (error, G_MURMELTIER_ERROR, 0,
 		       "%s has descendents, not removing.", uuid);
 	  ret = WOODCHUCK_ERROR_OBJECT_EXISTS;
+	  sqlite3_exec (db, "rollback transaction;", NULL, NULL, &errmsg);
+	  if (errmsg)
+	    {
+	      debug (0, "Aborting transaction: %s", errmsg);
+	      sqlite3_free (errmsg);
+	      errmsg = NULL;
+	    }
 	}
       else if (count == 1)
 	ret = WOODCHUCK_ERROR_NO_SUCH_OBJECT;
@@ -1147,7 +1154,7 @@ object_unregister (const char *uuid,
       if (ret)
 	/* Something went wrong.  Abort.  */
 	{
-	  sqlite3_exec (db, "abort transaction;",
+	  sqlite3_exec (db, "rollback transaction;",
 			NULL, NULL, NULL);
 	  return ret;
 	}
@@ -1706,7 +1713,7 @@ woodchuck_stream_update_status
       sqlite3_free (errmsg);
       errmsg = NULL;
 
-      sqlite3_exec (db, "abort transaction;\n", NULL, NULL, NULL);
+      sqlite3_exec (db, "rollback transaction;\n", NULL, NULL, NULL);
 
       ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
       goto out;
@@ -1846,7 +1853,7 @@ woodchuck_object_transfer_status
       sqlite3_free (errmsg);
       errmsg = NULL;
 
-      sqlite3_exec (db, "abort transaction;\n", NULL, NULL, NULL);
+      sqlite3_exec (db, "rollback transaction;\n", NULL, NULL, NULL);
 
       ret = WOODCHUCK_ERROR_INTERNAL_ERROR;
       goto out;
