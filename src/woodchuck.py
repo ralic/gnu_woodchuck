@@ -892,10 +892,10 @@ class _Manager(_BaseObject):
           try:
               manager.unregister (True)
           except woodchuck.NoSuchObject as exception:
-              print "Can't remove stream %s: Does not exist: %s"
+              print "Can't remove stream %s: Does not exist: %s" \\
                   % (str (manager), exception)
           except woodchuck.ObjectExistsError as exception:
-              print "Can't remove manager %s: Not empty: %s"
+              print "Can't remove manager %s: Not empty: %s" \\
                   % (str (manager), exception)"""
         try:
             ret = self.dbus.Unregister (only_if_empty)
@@ -926,17 +926,17 @@ class _Manager(_BaseObject):
             w = woodchuck.Woodchuck ()
             manager = w.manager_register(
                 only_if_cookie_unique=True,
-                human_readable_name='Web Browser',
-                cookie='org.webbrowser',
-                dbus_service_name='org.webbrowser')
+                human_readable_name="Web Browser",
+                cookie="org.webbrowser",
+                dbus_service_name="org.webbrowser")
 
             web_cache = manager.manager_register(
                 only_if_cookie_unique=False,
-                human_readable_name='Web Cache')
+                human_readable_name="Web Cache")
 
             download_later = manager.manager_register(
                 only_if_cookie_unique=False,
-                human_readable_name='Downloads for Later')
+                human_readable_name="Downloads for Later")
 
             manager.unregister (only_if_empty=False)
         """
@@ -1016,10 +1016,10 @@ class _Manager(_BaseObject):
 
             cookie=str (random.random())
             m = w.manager_register(True, cookie=cookie,
-                human_readable_name='Test Manager')
+                human_readable_name="Test Manager")
 
             s = m.stream_register(True, cookie=cookie,
-                human_readable_name='Test Stream')
+                human_readable_name="Test Stream")
 
             print m.list_streams ()
 
@@ -1233,9 +1233,9 @@ class _Woodchuck(object):
             w = woodchuck.Woodchuck ()
             manager = w.manager_register(
                 only_if_cookie_unique=True,
-                human_readable_name='RSS Reader',
-                cookie='org.rssreader',
-                dbus_service_name='org.rssreader')
+                human_readable_name="RSS Reader",
+                cookie="org.rssreader",
+                dbus_service_name="org.rssreader")
             manager.unregister ()
         """
         assert 'parent_UUID' not in properties
@@ -1263,7 +1263,7 @@ class _Woodchuck(object):
             import woodchuck
             print "The top-level managers are:"
             for m in woodchuck.Woodchuck().list_managers (False):
-                print m.human_readable_name ": " m.cookie
+                print m.human_readable_name + ": " + m.cookie
         """
         try:
             return [Manager(UUID=UUID, human_readable_name=human_readable_name,
@@ -1293,7 +1293,7 @@ class _Woodchuck(object):
 
           cookie=str (random.random())
           m = w.manager_register(True, cookie=cookie,
-              human_readable_name='Test')
+              human_readable_name="Test")
 
           managers = w.lookup_manager_by_cookie(cookie, False)
           assert len (managers) == 1
