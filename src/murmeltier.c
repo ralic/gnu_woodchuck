@@ -223,14 +223,6 @@ do_schedule (gpointer user_data)
 	   TIME_PRINTF (transfer_time * 1000 - n),
 	   TIME_PRINTF (freshness * 1000));
 
-    if (timeleft > freshness / 4)
-      /* The content is fresh enough.  */
-      {
-	debug (3, "%s's stream %s is fresh enough: next update in "TIME_FMT,
-	       manager_cookie, stream_cookie, TIME_PRINTF (1000 * timeleft));
-	return 0;
-      }
-
     GSList *list = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
 					manager_uuid);
 
@@ -262,6 +254,21 @@ do_schedule (gpointer user_data)
 	g_string_free (s, TRUE);
       }
 
+    if (timeleft > freshness / 4)
+      /* The content is fresh enough.  */
+      {
+	debug (3, "%s's stream %s is fresh enough: next update in "TIME_FMT,
+	       manager_cookie, stream_cookie, TIME_PRINTF (1000 * timeleft));
+	return 0;
+      }
+    else
+      debug (3, "Calling stream_update on stream %s: "
+	     "timeleft ("TIME_FMT") <= "
+	     "freshness ("TIME_FMT") / 4 ("TIME_FMT")",
+	     stream_cookie, TIME_PRINTF (1000 * timeleft),
+	     TIME_PRINTF (1000 * (uint64_t) freshness),
+	     TIME_PRINTF (1000 * (uint64_t) (freshness / 4)));
+
     void inform (DBusGProxy *proxy, const char *handle)
     {
       GError *error = NULL;
@@ -288,6 +295,7 @@ do_schedule (gpointer user_data)
 	   "/org/woodchuck", "org.woodchuck.start");
 	if (proxy)
 	  {
+	    debug (3, "Starting %s", dbus_service_name);
 	    inform (proxy, "START");
 	    g_object_unref (proxy);
 	  }
@@ -345,15 +353,27 @@ do_schedule (gpointer user_data)
     int instance = argv[i] ? atoi (argv[i]) : 0; i ++;
 
     if (transfer_time && last_trys_status == 0 && transfer_frequency == 0)
+    debug (4, "Considering object %s(%s): transfer_time: "TIME_FMT";"
+	   " last_trys_status: %"PRId32"; transfer_frequency: %"PRId32,
+	   object_uuid, object_cookie, TIME_PRINTF (transfer_time),
+	   last_trys_status, transfer_frequency);
       /* The object has been successfully transferred and it is a
 	 one-shot object.  Ignore.  */
-      return 0;
+      {
+	debug (4, "%s(%s) already transferred.",
+	       object_uuid, object_cookie);
+	return 0;
+      }
 
     if (last_trys_status == 0
 	&& transfer_time
 	&& transfer_time + transfer_frequency / 4 * 3 > n / 1000)
       /* The content is fresh enough.  */
-      return 0;
+      {
+	debug (4, "%s(%s) Content fresh enough.",
+	       object_uuid, object_cookie);
+	return 0;
+      }
 
     GSList *list = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
 					manager_uuid);
@@ -658,8 +678,8 @@ object_register (const char *parent, const char *parent_table,
 
   const char *cookie = NULL;
 
-  debug (0, "Parent: '%s' (%p)", parent, parent);
-  debug (0, "Properties:");
+  debug (4, "Parent: '%s' (%p)", parent, parent);
+  debug (4, "Properties:");
   void iter (gpointer keyp, gpointer valuep, gpointer user_data)
   {
     char *key = keyp;
@@ -1033,6 +1053,8 @@ lookup_by (const char *table,
 
       return WOODCHUCK_ERROR_INTERNAL_ERROR;
     }
+
+  debug (4, "%d objects matched.", (*objects)->len);
 
   return 0;
 }
@@ -1605,6 +1627,16 @@ woodchuck_stream_update_status
   if (transfer_time == 0 || transfer_time > n / 1000)
     transfer_time = n / 1000;
 
+  debug (4, DEBUG_BOLD ("stream: %s; status: %"PRIx32"; indicator: %"PRIx32"; "
+			"transferred: "BYTES_FMT"/"BYTES_FMT"; "
+			"transfer: "TIME_FMT"/"TIME_FMT"; "
+			"objects: %"PRId32";%"PRId32";%"PRId32),
+	 stream_raw, status, indicator,
+	 BYTES_PRINTF (transferred_up), BYTES_PRINTF (transferred_down),
+	 TIME_PRINTF (n - 1000 * transfer_time),
+	 TIME_PRINTF (1000 * (uint64_t) transfer_duration),
+	 new_objects, updated_objects, objects_inline);
+
   int instance = -1;
   int callback (void *cookie, int argc, char **argv, char **names)
   {
@@ -2004,7 +2036,7 @@ property_get (const char *object,
 
   int callback (void *cookie, int argc, char **argv, char **names)
   {
-    debug (0, "Properties.Get ('%s', '%s') -> %s",
+    debug (4, "Properties.Get ('%s', '%s') -> %s",
 	   interface_name, property_name, argv[0]);
 
     char *tailptr = NULL;

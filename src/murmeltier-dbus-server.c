@@ -1336,7 +1336,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
       reply = dbus_message_new_error (message, error_name,
 				      error->message);
 
-      debug (3, "Returning %s: %s", error_name, error->message);
+      debug (3, "%s.%s on %s: Returning %s: %s",
+	     interface_str, method, path, error_name, error->message);
 
       g_error_free (error);
       error = NULL;
