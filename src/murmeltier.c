@@ -161,6 +161,8 @@ properties_init (void)
 
 static guint schedule_id;
 
+static uint64_t last_schedule;
+
 static gboolean
 do_schedule (gpointer user_data)
 {
@@ -510,6 +512,8 @@ do_schedule (gpointer user_data)
     }
 
  out:
+  last_schedule = now ();
+
   /* Don't call again.  */
   return FALSE;
 }
@@ -522,8 +526,12 @@ schedule (void)
   if (schedule_id)
     return;
 
-  /* Delay for a couple of seconds to aggregate multiple events.  */
-  schedule_id = g_timeout_add_seconds (2, do_schedule, NULL);
+  int64_t last_schedule_delta = (now () - last_schedule) / 1000;
+  /* Minimum interval: 2 minutes.  But at least 10 sec to aggregate
+     multiple events.  */
+  int delay = MAX (10, 120LL - last_schedule_delta);
+
+  schedule_id = g_timeout_add_seconds (delay, do_schedule, NULL);
 }
 
 /* When a client exits, clean up any feedback subscriptions it may
