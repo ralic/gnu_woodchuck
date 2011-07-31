@@ -490,7 +490,7 @@ class _Object(_BaseObject):
             object_size = 2 ** 64 - 1
         object_size = dbus.UInt64 (object_size)
 
-        files = dbus.Array (files if files is not None else [], "(stu)")
+        files = dbus.Array (files if files is not None else [], "(sbu)")
 
         try:
             self.dbus.TransferStatus(status, indicator,
