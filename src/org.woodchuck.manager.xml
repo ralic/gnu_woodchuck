@@ -160,7 +160,7 @@
     <property name="Cookie" type="s" access="readwrite"/>
 
     <!-- The DBus service name of the service to start when there is
-         work to do, e.g., streams to update or objects to download.
+         work to do, e.g., streams to update or objects to transfer.
          See :class:`org.woodchuck.upcall`.  -->
     <property name="DBusServiceName" type="s" access="readwrite"/>
 

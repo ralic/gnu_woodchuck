@@ -50,7 +50,7 @@
       <arg name="Objects" type="a(ss)" direction="out"/>
     </method>
 
-    <!-- Indicate that a stream has been downloaded.
+    <!-- Indicate that a stream has been updated.
 
          This is typically called in reaction to a
          :func:`org.woodchuck.upcall.StreamUpdate` upcall, but should
@@ -65,7 +65,7 @@
            * 0x101: Unable to contact server.
            * 0x102: Transfer incomplete.
 
-           Hard errors (give up trying to download this object):
+           Hard errors (give up trying to update this stream):
 
 	   * 0x200: Other.
            * 0x201: File gone.
@@ -103,12 +103,12 @@
            pass -1.  -->
       <arg name="TransferredDown" type="t"/>
 
-      <!-- The time at which the download was started (in seconds
+      <!-- The time at which the update was started (in seconds
            since the epoch).  Pass 0 if unknown. -->
-      <arg name="DownloadTime" type="t"/>
-      <!-- The time, in seconds, it took to perform the download.
+      <arg name="TransferTime" type="t"/>
+      <!-- The time, in seconds, it took to perform the transfer.
            Pass 0 if unknown.  -->
-      <arg name="DownloadDuration" type="u"/>
+      <arg name="TransferDuration" type="u"/>
 
       <!-- The number of new objects discovered.  If not known, pass
            -1.  -->

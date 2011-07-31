@@ -956,11 +956,11 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  ret = woodchuck_stream_unregister (path, predicate, &error);
 	}
     }
-  else if (type == root && strcmp (method, "DownloadDesirability") == 0)
+  else if (type == root && strcmp (method, "TransferDesirability") == 0)
     {
       /* In.  */
       uint32_t request_type;
-      struct woodchuck_download_desirability_version *versions = NULL;
+      struct woodchuck_transfer_desirability_version *versions = NULL;
       int version_count = 0;
       /* Out.  */
       uint32_t desirability = 0;
@@ -1015,7 +1015,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  i ++;
 	}
 
-      ret = woodchuck_download_desirability_version
+      ret = woodchuck_transfer_desirability
 	(request_type, versions, version_count,
 	 &desirability, &version, &error);
 
@@ -1104,7 +1104,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 
       ret = woodchuck_object_unregister (path, &error);
     }
-  else if (type == object && strcmp (method, "Download") == 0)
+  else if (type == object && strcmp (method, "Transfer") == 0)
     {
       /* In.  */
       uint32_t request_type = 0;
@@ -1121,9 +1121,9 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	  goto bad_signature;
 	}
 
-      ret = woodchuck_object_download (path, request_type, &error);
+      ret = woodchuck_object_transfer (path, request_type, &error);
     }
-  else if ((type == object && strcmp (method, "DownloadStatus") == 0)
+  else if ((type == object && strcmp (method, "TransferStatus") == 0)
 	   || (type == stream && strcmp (method, "UpdateStatus") == 0))
     {
       /* In.  */
@@ -1131,12 +1131,12 @@ process_message (DBusConnection *connection, DBusMessage *message,
       uint32_t indicator;
       uint64_t transferred_up;
       uint64_t transferred_down;
-      uint64_t download_time;
-      uint32_t download_duration;
+      uint64_t transfer_time;
+      uint32_t transfer_duration;
 
-      /* DownloadStatus.  */
+      /* TransferStatus.  */
       uint64_t object_size;
-      struct woodchuck_object_download_status_files *files = NULL;
+      struct woodchuck_object_transfer_status_files *files = NULL;
       int files_count = 0;
 
       /* UpdateStatus.  */
@@ -1144,7 +1144,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
       uint32_t updated_objects;
       uint32_t objects_inline;
 
-      if (strcmp (method, "DownloadStatus") == 0)
+      if (strcmp (method, "TransferStatus") == 0)
 	expected_sig = "uutttuta(sbu)";
       else
 	expected_sig = "uutttuuuu";
@@ -1157,8 +1157,8 @@ process_message (DBusConnection *connection, DBusMessage *message,
 				      DBUS_TYPE_UINT32, &indicator,
 				      DBUS_TYPE_UINT64, &transferred_up,
 				      DBUS_TYPE_UINT64, &transferred_down,
-				      DBUS_TYPE_UINT64, &download_time,
-				      DBUS_TYPE_UINT32, &download_duration,
+				      DBUS_TYPE_UINT64, &transfer_time,
+				      DBUS_TYPE_UINT32, &transfer_duration,
 				      DBUS_TYPE_INVALID))
 	{
 	  dbus_error_free (&dbus_error);
@@ -1172,7 +1172,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
       for (i = 0; i < 6; i ++)
 	dbus_message_iter_next (&outer_iter);
 
-      if (strcmp (method, "DownloadStatus") == 0)
+      if (strcmp (method, "TransferStatus") == 0)
 	{
 	  dbus_message_iter_get_basic (&outer_iter, &object_size);
 	  dbus_message_iter_next (&outer_iter);
@@ -1209,9 +1209,9 @@ process_message (DBusConnection *connection, DBusMessage *message,
 	      i ++;
 	    }
 
-	  ret = woodchuck_object_download_status
+	  ret = woodchuck_object_transfer_status
 	    (path, status, indicator, transferred_up, transferred_down,
-	     download_time, download_duration, object_size,
+	     transfer_time, transfer_duration, object_size,
 	     files, files_count, &error);
 	}
       else
@@ -1227,7 +1227,7 @@ process_message (DBusConnection *connection, DBusMessage *message,
 
 	  ret = woodchuck_stream_update_status
 	    (path, status, indicator, transferred_up, transferred_down,
-	     download_time, download_duration, new_objects,
+	     transfer_time, transfer_duration, new_objects,
 	     updated_objects, objects_inline, &error);
 	}
     }

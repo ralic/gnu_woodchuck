@@ -27,20 +27,20 @@ from functools import wraps
 
 class RequestType:
     """Values for the request_type argument of
-    :func:`_Object.download`."""
+    :func:`_Object.transfer`."""
 
-    #: The user initiated the download request.
+    #: The user initiated the transfer request.
     UserInitiated = 0
-    #: The application initiated the download request.
+    #: The application initiated the transfer request.
     ApplicationInitiated = 0
 
-class DownloadStatus:
+class TransferStatus:
     """Values for the Indicator argument of
-    :func:`woodchuck._Object.download_status`,
+    :func:`woodchuck._Object.transfer_status`,
     :func:`woodchuck._Stream.update_status` and
-    :func:`woodchuck.Upcalls.object_downloaded_cb`.
+    :func:`woodchuck.Upcalls.object_transferred_cb`.
     """
-    #: The download was successful.
+    #: The transfer was successful.
     Success = 0
 
     #: An unspecified transient error occurred.
@@ -58,7 +58,7 @@ class DownloadStatus:
 
 class Indicator:
     """Values for the Indicator argument of
-    :func:`woodchuck._Object.download_status`,
+    :func:`woodchuck._Object.transfer_status`,
     :func:`woodchuck._Stream.update_status`."""
     #: An audio sound was emitted.
     Audio = 0x1
@@ -89,7 +89,7 @@ class Indicator:
 
 class DeletionPolicy:
     """Values for the `deletion_policy` argument of
-    :func:`woodchuck._Object.download_status`."""
+    :func:`woodchuck._Object.transfer_status`."""
 
     #: The file is precious and will only be deleted by the user.
     Precious = 0
@@ -221,7 +221,7 @@ _object_properties_to_camel_case = \
            "trigger_target": ("TriggerTarget", dbus.UInt64, 0, _ttl),
            "trigger_earliest": ("TriggerEarliest", dbus.UInt64, 0, _ttl),
            "trigger_latest": ("TriggerLatest", dbus.UInt64, 0, _ttl),
-           "download_frequency": ("DownloadFrequency", dbus.UInt32, 0, _ttl),
+           "transfer_frequency": ("TransferFrequency", dbus.UInt32, 0, _ttl),
            "dont_transfer": ("DontTransfer", dbus.Boolean, False, _ttl),
            "need_update": ("NeedUpdate", dbus.Boolean, True, _ttl),
            "priority": ("Priority", dbus.UInt32, 0, _ttl),
@@ -393,33 +393,33 @@ class _Object(_BaseObject):
             del _objects[self.properties['UUID']]
 
     @_check_main_thread
-    def download(self, request_type):
+    def transfer(self, request_type):
         """
-        Request that Woodchuck download the object.  This only makes
-        sense for object's that use Woodchuck's simple downloader.
+        Request that Woodchuck transfer the object.  This only makes
+        sense for object's that use Woodchuck's simple transferer.
 
         :param request_type: Whether the request is user initiated or
-            application initiated.  See :class:`DownloadStatus` for
+            application initiated.  See :class:`TransferStatus` for
             possible values.
         """
         try:
-            self.dbus.Download (request_type)
+            self.dbus.Transfer (request_type)
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
     @_check_main_thread
-    def download_status(self, status, indicator=None,
+    def transfer_status(self, status, indicator=None,
                         transferred_up=None, transferred_down=None,
-                        download_time=None, download_duration=None,
+                        transfer_time=None, transfer_duration=None,
                         object_size=None, files=None):
         """
         Tell Woodchuck that the object has been transferred.  Call
-        this function whenever an object is downloaded (or uploaded),
-        not only in response to a :func:`_Upcalls.object_download_cb`
+        this function whenever an object is transferred (or uploaded),
+        not only in response to a :func:`_Upcalls.object_transfer_cb`
         upcall.
 
         :param status: On success, 0.  Otherwise, the error code.  See
-            :class:`DownloadStatus` for possible values.
+            :class:`TransferStatus` for possible values.
 
         :param indicator: What indicators, if any, were shown to the
             user indicating that the stream was updated.  A bit-wise
@@ -428,13 +428,13 @@ class _Object(_BaseObject):
         :param transferred_up: The number of bytes uploaded.  If not
             known, set to None.  Default: None.
 
-        :param transferred_down: The number of bytes downloaded.  If
+        :param transferred_down: The number of bytes transferred.  If
             not known, set to None.  Default: None.
 
-        :param download_time: The time at which the update was
+        :param transfer_time: The time at which the update was
             started.  If not known, set to None.  Default: None.
 
-        :param download_duration: The amount of time the update took,
+        :param transfer_duration: The amount of time the update took,
             in seconds.  If not known, set to None.  Default: None.
 
         :param object_size: The amount of disk space used by the
@@ -447,20 +447,20 @@ class _Object(_BaseObject):
             and the file's deletion policy (see
             :class:`woodchuck.DeletionPolicy` for possible values).
 
-        Example of reporting an object download for an object that
+        Example of reporting an object transfer for an object that
         Woodchuck can deleted without consulting the user::
 
-          download_time = int (time.time ())
+          transfer_time = int (time.time ())
           ...
-          # Perform the download
+          # Perform the transfer
           ...
-          download_duration = int (time.time ()) - download_time
+          transfer_duration = int (time.time ()) - transfer_time
           stream.update_status(
               status=0,
               transferred_up=4096,
               transferred_down=1024000,
-              download_time=download_time,
-              download_duration=download_duration,
+              transfer_time=transfer_time,
+              transfer_duration=transfer_duration,
               files=( ("/home/user/Podcasts/Foo/Episode1.ogg", True,
                        woodchuck.DeletionPolicy.DeleteWithoutConsultation),))
         """
@@ -478,13 +478,13 @@ class _Object(_BaseObject):
             transferred_down = 2 ** 64 - 1
         transferred_down = dbus.UInt64 (transferred_down)
 
-        if download_time is None:
-            download_time = int (time.time ())
-        download_time = dbus.UInt64 (download_time)
+        if transfer_time is None:
+            transfer_time = int (time.time ())
+        transfer_time = dbus.UInt64 (transfer_time)
 
-        if download_duration is None:
-            download_duration = 0
-        download_duration = dbus.UInt32 (download_duration)
+        if transfer_duration is None:
+            transfer_duration = 0
+        transfer_duration = dbus.UInt32 (transfer_duration)
 
         if object_size is None:
             object_size = 2 ** 64 - 1
@@ -493,9 +493,9 @@ class _Object(_BaseObject):
         files = dbus.Array (files if files is not None else [], "(stu)")
 
         try:
-            self.dbus.DownloadStatus(status, indicator,
+            self.dbus.TransferStatus(status, indicator,
                                      transferred_up, transferred_down,
-                                     download_time, download_duration,
+                                     transfer_time, transfer_duration,
                                      object_size, files)
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
@@ -724,7 +724,7 @@ class _Stream(_BaseObject):
     @_check_main_thread
     def update_status(self, status, indicator=None,
                       transferred_up=None, transferred_down=None,
-                      download_time=None, download_duration=None,
+                      transfer_time=None, transfer_duration=None,
                       new_objects=None, updated_objects=None,
                       objects_inline=None):
         """
@@ -733,7 +733,7 @@ class _Stream(_BaseObject):
         a :func:`_Upcalls.stream_update_cb` upcall.
 
         :param status: On success, 0.  Otherwise, the error code.  See
-            :class:`DownloadStatus` for possible values.
+            :class:`TransferStatus` for possible values.
 
         :param indicator: What indicators, if any, were shown to the
             user indicating that the stream was updated.  A bit-wise
@@ -742,13 +742,13 @@ class _Stream(_BaseObject):
         :param transferred_up: The number of bytes uploaded.  If not
             known, set to None.  Default: None.
 
-        :param transferred_down: The number of bytes downloaded.  If
+        :param transferred_down: The number of bytes transferred.  If
             not known, set to None.  Default: None.
 
-        :param download_time: The time at which the update was
+        :param transfer_time: The time at which the update was
             started.  If not known, set to None.  Default: None.
 
-        :param download_duration: The amount of time the update took,
+        :param transfer_duration: The amount of time the update took,
             in seconds.  If not known, set to None.  Default: None.
 
         :param new_objects: The number of newly discovered objects.  If
@@ -770,22 +770,22 @@ class _Stream(_BaseObject):
 
             ...
             
-            download_time = int (time.time ())
+            transfer_time = int (time.time ())
             ...
-            # Perform the download
+            # Perform the transfer
             ...
-            download_duration = int (time.time ()) - download_time
+            transfer_duration = int (time.time ()) - transfer_time
             stream.update_status (status=0,
                                   transferred_up=2048,
                                   transferred_down=64000,
-                                  download_time=download_time,
-                                  download_duration=download_duration,
+                                  transfer_time=transfer_time,
+                                  transfer_duration=transfer_duration,
                                   new_objects=5,
                                   objects_inline=5)
 
         Note: The five new objects should immediately be registered
-        using :func:`_Stream.object_register` and marked as downloaded
-        using :func:`_Object.download_status`.
+        using :func:`_Stream.object_register` and marked as transferred
+        using :func:`_Object.transfer_status`.
 
         Example of a failed update due to a network problem, e.g., the
         host is unreachable::
@@ -799,10 +799,10 @@ class _Stream(_BaseObject):
             transferred_up = 2 ** 64 - 1
         if transferred_down is None:
             transferred_down = 2 ** 64 - 1
-        if download_time is None:
-            download_time = 0
-        if download_duration is None:
-            download_duration = 0
+        if transfer_time is None:
+            transfer_time = 0
+        if transfer_duration is None:
+            transfer_duration = 0
         if new_objects is None:
             new_objects = 2 ** 32 - 1
         if updated_objects is None:
@@ -813,7 +813,7 @@ class _Stream(_BaseObject):
         try:
             self.dbus.UpdateStatus(status, indicator,
                                    transferred_up, transferred_down,
-                                   download_time, download_duration,
+                                   transfer_time, transfer_duration,
                                    new_objects, updated_objects, objects_inline)
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
@@ -1351,9 +1351,9 @@ class Upcalls(dbus.service.Object):
 
     To use this class, implement your own class, which inherits from
     this one and overrides the virtual methods of the upcalls that you
-    are interested in (:func:`Upcalls.object_downloaded_cb`,
+    are interested in (:func:`Upcalls.object_transferred_cb`,
     :func:`Upcalls.stream_update_cb`,
-    :func:`Upcalls.object_download_cb` and
+    :func:`Upcalls.object_transfer_cb` and
     :func:`object_delete_files_cb`).  Instantiate the class and then
     call :func:`woodchuck.feedback_subscribe` to begin receiving
     feedback.
@@ -1361,8 +1361,8 @@ class Upcalls(dbus.service.Object):
     Example::
 
         class Upcalls(woodchuck.Upcalls):
-            def object_downloaded_cb (self, **kwargs):
-                # Download the kwargs[object_UUID] object.
+            def object_transferred_cb (self, **kwargs):
+                # Transfer the kwargs[object_UUID] object.
                 ...
         upcalls = Upcalls ()
         subscription = Manager.feedback_subscribe (False)
@@ -1410,7 +1410,7 @@ class Upcalls(dbus.service.Object):
                          in_signature='ssssssuu(ustub)sttt',
                          out_signature='',
                          sender_keyword="sender")
-    def ObjectDownloaded(self, manager_UUID, manager_cookie,
+    def ObjectTransferred(self, manager_UUID, manager_cookie,
                          stream_UUID, stream_cookie,
                          object_UUID, object_cookie,
                          status, instance, version, filename, size,
@@ -1418,25 +1418,25 @@ class Upcalls(dbus.service.Object):
         if not _is_woodchuck (sender):
             return False
 
-        return self.object_downloaded_cb(manager_UUID, manager_cookie,
-                                         stream_UUID, stream_cookie,
-                                         object_UUID, object_cookie,
-                                         status, instance, version,
-                                         filename, size,
-                                         trigger_target, trigger_fired)
+        return self.object_transferred_cb(manager_UUID, manager_cookie,
+                                          stream_UUID, stream_cookie,
+                                          object_UUID, object_cookie,
+                                          status, instance, version,
+                                          filename, size,
+                                          trigger_target, trigger_fired)
 
-    def object_downloaded_cb(self, manager_UUID, manager_cookie,
-                             stream_UUID, stream_cookie,
-                             object_UUID, object_cookie,
-                             status, instance, version, filename, size,
-                             trigger_target, trigger_fired):
+    def object_transferred_cb(self, manager_UUID, manager_cookie,
+                              stream_UUID, stream_cookie,
+                              object_UUID, object_cookie,
+                              status, instance, version, filename, size,
+                              trigger_target, trigger_fired):
         """Virtual method that should be implemented by the child
         class if it is interested in
-        org.woodchuck.upcall.ObjectDownloaded upcalls.
+        org.woodchuck.upcall.ObjectTransferred upcalls.
 
-        This upcall is invoked when Woodchuck downloads an object on
+        This upcall is invoked when Woodchuck transfers an object on
         behalf of a manager.  This is only done for objects using the
-        simple downloader.
+        simple transferer.
 
         :param manager_UUID: The manager's UUID.
 
@@ -1450,28 +1450,28 @@ class Upcalls(dbus.service.Object):
 
         :param object_cookie: The object's cookie.
 
-        :param status: Whether the download was successfully.  The
-            value is taken from :class:`woodchuck.DownloadStatus`.
+        :param status: Whether the transfer was successfully.  The
+            value is taken from :class:`woodchuck.TransferStatus`.
 
-        :param instance: The number of download attempts (not
+        :param instance: The number of transfer attempts (not
             including this one).
 
-        :param version: The version that was downloaded.  An array of:
+        :param version: The version that was transferred.  An array of:
             the index in the version array, the URL, the expected
             object size on disk (negative if transferring the object
             will free space), the expected upload size, the expected
-            download size, the utility and the value of use simple
-            downloader.
+            transfer size, the utility and the value of use simple
+            transferer.
 
         :param filename: The name of the file containing the data.
 
         :param size: The size of the file, in bytes.
 
         :param trigger_target: The time the application requested the
-            object be downloaded.
+            object be transferred.
 
         :param trigger_fired: The time at which the file was actually
-            downloaded.
+            transferred.
         """
         pass
     
@@ -1509,29 +1509,29 @@ class Upcalls(dbus.service.Object):
     @dbus.service.method(dbus_interface='org.woodchuck.upcall',
                          in_signature='ssssss(usxttub)su', out_signature='',
                          sender_keyword="sender")
-    def ObjectDownload(self, manager_UUID, manager_cookie,
+    def ObjectTransfer(self, manager_UUID, manager_cookie,
                        stream_UUID, stream_cookie,
                        object_UUID, object_cookie,
                        version, filename, quality, sender):
         if not _is_woodchuck (sender):
             return False
 
-        self.object_download_cb (manager_UUID, manager_cookie,
+        self.object_transfer_cb (manager_UUID, manager_cookie,
                                  stream_UUID, stream_cookie,
                                  object_UUID, object_cookie,
                                  version, filename, quality)
 
-    def object_download_cb (self, manager_UUID, manager_cookie,
+    def object_transfer_cb (self, manager_UUID, manager_cookie,
                             stream_UUID, stream_cookie,
                             object_UUID, object_cookie,
                             version, filename, quality):
         """Virtual method that should be implemented by the child
         class if it is interested in
-        org.woodchuck.upcall.ObjectDownload upcalls.
+        org.woodchuck.upcall.ObjectTransfer upcalls.
 
-        This upcall is invoked when Woodchuck downloads an object on
+        This upcall is invoked when Woodchuck transfers an object on
         behalf of a manager.  This is only done for objects using the
-        simple downloader.
+        simple transferer.
 
         :param manager_UUID: The manager's UUID.
 
@@ -1545,17 +1545,17 @@ class Upcalls(dbus.service.Object):
 
         :param object_cookie: The object's cookie.
 
-        :param version: The version to download.  the index in the
+        :param version: The version to transfer.  the index in the
             version array, the URL, the expected object size on disk
             (negative if transferring the object will free space), the
-            expected upload size, the expected download size, the
-            utility and the value of use simple downloader.
+            expected upload size, the expected transfer size, the
+            utility and the value of use simple transferer.
 
         :param filename: The name of the filename property.
 
         :param quality: The degree to which quality should be
             sacrified to reduce the number of bytes transferred.  The
-            target quality of the download.  From 1 (most compressed)
+            target quality of the transfer.  From 1 (most compressed)
             to 5 (highest available fidelity).
         """
         pass

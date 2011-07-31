@@ -117,13 +117,13 @@ greatly simplify the changes to the application as it eliminates the
 need for the application to manage a map between Woodchuck's UUIDs and
 local stream and object identifiers.
 
-Woodchuck makes an upcall, StreamUpdate and ObjectDownload, to the
-application when the application should update a stream or download an
+Woodchuck makes an upcall, StreamUpdate and ObjectTransfer, to the
+application when the application should update a stream or transfer an
 object, respecitvely.  After updating a stream, the application
 invokes stream.UpdateStatus and registers any newly discovered objects
-using stream.ObjectRegister.  ObjectDownload tells the application to
-download an object.  After attempting the download, the application
-responds by calling object.DownloadStatus.
+using stream.ObjectRegister.  ObjectTransfer tells the application to
+transfer an object.  After attempting the transfer, the application
+responds by calling object.TransferStatus.
 
 When a user uses an object, an application can report this to
 Woodchuck using object.Used.  The application can include a bitmask
@@ -179,10 +179,10 @@ transferred inline as part of a stream update.  That is, a stream
 update consists not of an enumeration of new objects and references,
 but the objects' contents.  When such an application updates a stream,
 it registers new objects as usual and also marks them as having been
-downloaded.
+transferred.
 
 It should be relatively easy for Woodchuck to detect that the objects
-were delivered inline: the download time is the same as the stream
+were delivered inline: the transfer time is the same as the stream
 update time.  Nevertheless, I've exposed a stream property named
 stream.ObjectsMostInline, which an application can set if it expects
 this behavior.
@@ -215,7 +215,7 @@ application should fetch the X MBs of most useful data.
 
 If it turns out there are too many packages, just register those for
 which prefetching makes sense.  But, always report the number of
-actually downloaded packages when calling
+actually transferred packages when calling
 *org.woochuck.stream.UpdateStatus*.
 
 Weather
@@ -232,7 +232,7 @@ Updating the stream means getting the latest weather.  But then, the
 stream appears to have no objects.  How do we track use?  What about
 publication time?  One solution is that after each update, the
 application creates a new object and marks it as having been
-downloaded.  The application should not register missed updates.
+transferred.  The application should not register missed updates.
 Mostly likely it doesn't even know how frequently the weather is
 updated.  To indicate that a new update is available, create a new
 object.  If the update is only available in the future, set the
@@ -312,20 +312,20 @@ PyWoodchuck
 .. autoclass:: PyWoodchuck
     :members: available, stream_register, streams_list, stream_updated,
         stream_update_failed, stream_unregister, object_register,
-        objects_list, object_unregister, object_downloaded,
-        object_download_failed, object_used, object_files_deleted,
+        objects_list, object_unregister, object_transferred,
+        object_transfer_failed, object_used, object_files_deleted,
 	stream_property_get, stream_property_set,
 	object_property_get, object_property_set,
-        object_downloaded_cb, stream_update_cb, object_download_cb,
+        object_transferred_cb, stream_update_cb, object_transfer_cb,
         object_delete_files_cb
 
 .. autoclass:: _Stream
     :members: unregister, updated, update_failed, object_register,
-        objects_list, object_downloaded, object_download_failed,
+        objects_list, object_transferred, object_transfer_failed,
 	object_files_deleted
 
 .. autoclass:: _Object
-    :members: unregister, downloaded, download_failed, used, files_deleted
+    :members: unregister, transferred, transfer_failed, used, files_deleted
 
 Constants
 ^^^^^^^^^
@@ -383,8 +383,8 @@ Upcall
 ^^^^^^
 
 .. autoclass:: woodchuck.Upcalls
-    :members: object_downloaded_cb, stream_update_cb,
-        object_download_cb, object_delete_files_cb
+    :members: object_transferred_cb, stream_update_cb,
+        object_transfer_cb, object_delete_files_cb
 
 Constants
 ^^^^^^^^^
@@ -392,7 +392,7 @@ Constants
 .. autoclass:: woodchuck.RequestType
    :members: UserInitiated, ApplicationInitiated
 
-.. autoclass:: woodchuck.DownloadStatus
+.. autoclass:: woodchuck.TransferStatus
    :members:
 
 .. autoclass:: woodchuck.Indicator

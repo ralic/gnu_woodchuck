@@ -34,7 +34,7 @@
 #include "org.woodchuck.stream.h"
 #include "org.woodchuck.object.h"
 
-static gboolean org_woodchuck_upcall_object_downloaded
+static gboolean org_woodchuck_upcall_object_transferred
   (GWoodchuck *wc, const char *manager_uuid, const char *manager_cookie,
    const char *stream_uuid, const char *stream_cookie,
    const char *object_uuid, const char *object_cookie,
@@ -50,7 +50,7 @@ static gboolean org_woodchuck_upcall_stream_update (GWoodchuck *wc,
 						    const char *stream_cookie,
 						    GError **error);
 
-static gboolean org_woodchuck_upcall_object_download
+static gboolean org_woodchuck_upcall_object_transfer
   (GWoodchuck *wc, const char *manager_uuid, const char *manager_cookie,
    const char *stream_uuid, const char *stream_cookie,
    const char *object_uuid, const char *object_cookie,
@@ -789,7 +789,7 @@ gwoodchuck_object_register (GWoodchuck *wc,
 			    int64_t expected_size,
 			    uint64_t expected_transfer_up,
 			    uint64_t expected_transfer_down,
-			    uint32_t download_frequency,
+			    uint32_t transfer_frequency,
 			    GError **caller_error)
 {
   GError *error = NULL;
@@ -862,10 +862,10 @@ gwoodchuck_object_register (GWoodchuck *wc,
   g_value_set_uint (&utility_value, 1);
   g_value_array_append (strct, &utility_value);
 
-  GValue use_simple_downloader_value = { 0 };
-  g_value_init (&use_simple_downloader_value, G_TYPE_BOOLEAN);
-  g_value_set_boolean (&use_simple_downloader_value, FALSE);
-  g_value_array_append (strct, &use_simple_downloader_value);
+  GValue use_simple_transferer_value = { 0 };
+  g_value_init (&use_simple_transferer_value, G_TYPE_BOOLEAN);
+  g_value_set_boolean (&use_simple_transferer_value, FALSE);
+  g_value_array_append (strct, &use_simple_transferer_value);
 
   GPtrArray *versions = g_ptr_array_new ();
   g_ptr_array_add (versions, strct);
@@ -964,11 +964,11 @@ gwoodchuck_object_unregister (GWoodchuck *wc,
 }
 
 gboolean
-gwoodchuck_object_downloaded_full
+gwoodchuck_object_transferred_full
   (GWoodchuck *wc, const char *stream_identifier, const char *object_identifier,
    uint32_t indicator_mask, uint64_t transferred_up, uint64_t transferred_down,
-   uint64_t download_time, uint32_t download_duration, uint64_t object_size,
-   struct gwoodchuck_object_downloaded_file *files, int files_count,
+   uint64_t transfer_time, uint32_t transfer_duration, uint64_t object_size,
+   struct gwoodchuck_object_transferred_file *files, int files_count,
    GError **caller_error)
 {
   GError *error = NULL;
@@ -1020,9 +1020,9 @@ gwoodchuck_object_downloaded_full
       g_ptr_array_add (files_ptr_array, strct);
     }
 
-  gboolean ret = org_woodchuck_object_download_status
+  gboolean ret = org_woodchuck_object_transfer_status
       (object->proxy, 0, indicator_mask, transferred_up, transferred_down,
-       download_time, download_duration, object_size, files_ptr_array,
+       transfer_time, transfer_duration, object_size, files_ptr_array,
        &error);
 
   for (i = 0; i < files_count; i ++)
@@ -1041,26 +1041,26 @@ gwoodchuck_object_downloaded_full
 }
 
 gboolean
-gwoodchuck_object_downloaded
+gwoodchuck_object_transferred
   (GWoodchuck *wc, const char *stream_identifier, const char *object_identifier,
    uint32_t indicator_mask, uint64_t object_size,
-   uint32_t download_duration, const char *filename,
+   uint32_t transfer_duration, const char *filename,
    uint32_t deletion_policy, GError **error)
 {
-  struct gwoodchuck_object_downloaded_file file =
+  struct gwoodchuck_object_transferred_file file =
     {
       filename, TRUE, deletion_policy
     };
 
-  return gwoodchuck_object_downloaded_full
+  return gwoodchuck_object_transferred_full
     (wc, stream_identifier, object_identifier,
      indicator_mask, 0, object_size,
-     time (NULL) - download_duration, download_duration, object_size,
+     time (NULL) - transfer_duration, transfer_duration, object_size,
      &file, 1, error);
 }
 
 gboolean
-gwoodchuck_object_download_failed (GWoodchuck *wc,
+gwoodchuck_object_transfer_failed (GWoodchuck *wc,
 				   const char *stream_identifier,
 				   const char *object_identifier,
 				   uint32_t reason,
@@ -1091,7 +1091,7 @@ gwoodchuck_object_download_failed (GWoodchuck *wc,
 
   GPtrArray *files_ptr_array = g_ptr_array_new ();
 
-  gboolean ret = org_woodchuck_object_download_status
+  gboolean ret = org_woodchuck_object_transfer_status
       (object->proxy, reason, 0, 0, transferred,
        time (NULL), 0, 0, files_ptr_array, &error);
   g_ptr_array_free (files_ptr_array, TRUE);
@@ -1203,7 +1203,7 @@ gwoodchuck_object_files_deleted (GWoodchuck *wc,
 
 /* Process upcalls.  */
 static gboolean
-org_woodchuck_upcall_object_downloaded (GWoodchuck *wc,
+org_woodchuck_upcall_object_transferred (GWoodchuck *wc,
 					const char *manager_uuid,
 					const char *manager_cookie,
 					const char *stream_uuid,
@@ -1232,7 +1232,7 @@ org_woodchuck_upcall_object_downloaded (GWoodchuck *wc,
     = g_value_get_uint64 (g_value_array_get_nth (version_strct, 4));
   uint32_t utility
     = g_value_get_uint (g_value_array_get_nth (version_strct, 5));
-  gboolean use_simple_downloader
+  gboolean use_simple_transferer
     = g_value_get_boolean (g_value_array_get_nth (version_strct, 6));
 #endif
 
@@ -1254,7 +1254,7 @@ org_woodchuck_upcall_stream_update (GWoodchuck *wc,
 }
 
 static gboolean
-org_woodchuck_upcall_object_download (GWoodchuck *wc,
+org_woodchuck_upcall_object_transfer (GWoodchuck *wc,
 				      const char *manager_uuid,
 				      const char *manager_cookie,
 				      const char *stream_uuid,
@@ -1279,13 +1279,13 @@ org_woodchuck_upcall_object_download (GWoodchuck *wc,
     = g_value_get_uint64 (g_value_array_get_nth (version_strct, 4));
   uint32_t utility
     = g_value_get_uint (g_value_array_get_nth (version_strct, 5));
-  gboolean use_simple_downloader
+  gboolean use_simple_transferer
     = g_value_get_boolean (g_value_array_get_nth (version_strct, 6));
 #endif
 
-  if (wc->vtable && wc->vtable->object_download)
+  if (wc->vtable && wc->vtable->object_transfer)
     {
-      uint32_t ret = wc->vtable->object_download (stream_cookie, object_cookie,
+      uint32_t ret = wc->vtable->object_transfer (stream_cookie, object_cookie,
 						  quality, wc->user_data);
       return TRUE;
     }
@@ -1444,7 +1444,7 @@ main (int argc, char *argv[])
 		}
 	    }
 
-	  struct gwoodchuck_object_downloaded_file file =
+	  struct gwoodchuck_object_transferred_file file =
 	    {
 	      "/tmp/foo",
 	      TRUE,
@@ -1454,14 +1454,14 @@ main (int argc, char *argv[])
 	  int k;
 	  for (k = 0; k < 3; k ++)
 	    {
-	      if (! gwoodchuck_object_downloaded_full
+	      if (! gwoodchuck_object_transferred_full
 		  (wc, streams[i].identifier, streams[i].objects[j].identifier,
 		   0, 100, 200 + j * 10,
 		   time (NULL), j,
 		   100 + j * 10,
 		   &file, 1, &error))
 		{
-		  fprintf (stderr, "gwoodchuck_object_downloaded(%s, %s): %s",
+		  fprintf (stderr, "gwoodchuck_object_transferred(%s, %s): %s",
 			   streams[i].human_readable_name,
 			   streams[i].objects[j].human_readable_name,
 			   error->message);
@@ -1485,11 +1485,11 @@ main (int argc, char *argv[])
 		}
 	    }
 
-	  if (! gwoodchuck_object_download_failed
+	  if (! gwoodchuck_object_transfer_failed
 	      (wc, streams[i].identifier, streams[i].objects[j].identifier,
-	       WOODCHUCK_DOWNLOAD_TRANSIENT_NETWORK, 100, &error))
+	       WOODCHUCK_TRANSFER_TRANSIENT_NETWORK, 100, &error))
 	    {
-	      fprintf (stderr, "gwoodchuck_object_download_failed(%s, %s): %s",
+	      fprintf (stderr, "gwoodchuck_object_transfer_failed(%s, %s): %s",
 		       streams[i].human_readable_name,
 		       streams[i].objects[j].human_readable_name,
 		       error->message);
@@ -1529,7 +1529,7 @@ main (int argc, char *argv[])
 
       if (! gwoodchuck_stream_update_failed
 	  (wc, streams[i].identifier,
-	   WOODCHUCK_DOWNLOAD_TRANSIENT_NETWORK, 200, &error))
+	   WOODCHUCK_TRANSFER_TRANSIENT_NETWORK, 200, &error))
 	{
 	  fprintf (stderr, "gwoodchuck_stream_update_failed(%s): %s",
 		   streams[i].human_readable_name, error->message);

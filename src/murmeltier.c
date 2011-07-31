@@ -140,7 +140,7 @@ static struct property object_properties[]
       { "TriggerTarget", G_TYPE_UINT64, true },
       { "TriggerEarliest", G_TYPE_UINT64, true },
       { "TriggerLatest", G_TYPE_UINT64, true },
-      { "DownloadFrequency", G_TYPE_UINT, true },
+      { "TransferFrequency", G_TYPE_UINT, true },
       { "DontTransfer", G_TYPE_BOOLEAN, true },
       { "NeedUpdate", G_TYPE_BOOLEAN, true },
       { "Priority", G_TYPE_UINT, true },
@@ -205,7 +205,7 @@ do_schedule (gpointer user_data)
     const char *manager_cookie = argv[i] ?: ""; i ++;
     const char *dbus_service_name = argv[i] ?: ""; i ++;
     uint32_t freshness = argv[i] ? atoi (argv[i]) : 0; i ++;
-    uint64_t download_time = argv[i] ? atoll (argv[i]) : 0; i ++;
+    uint64_t transfer_time = argv[i] ? atoll (argv[i]) : 0; i ++;
     uint32_t last_trys_status = argv[i] ? atoi (argv[i]) : 0; i ++;
 
     if (freshness == UINT32_MAX)
@@ -213,14 +213,14 @@ do_schedule (gpointer user_data)
       return 0;
 
     int64_t timeleft = 0;
-    if (download_time)
-      timeleft = (download_time + freshness) - n / 1000;
+    if (transfer_time)
+      timeleft = (transfer_time + freshness) - n / 1000;
 
     debug (3, "%s: %s stream: next update in "TIME_FMT" "
-	   "(download_time: "TIME_FMT"; freshness: "TIME_FMT")",
+	   "(transfer_time: "TIME_FMT"; freshness: "TIME_FMT")",
 	   manager_cookie, stream_cookie,
 	   TIME_PRINTF (1000 * timeleft),
-	   TIME_PRINTF (download_time * 1000 - n),
+	   TIME_PRINTF (transfer_time * 1000 - n),
 	   TIME_PRINTF (freshness * 1000));
 
     if (timeleft > freshness / 4)
@@ -239,11 +239,11 @@ do_schedule (gpointer user_data)
 	GString *s = g_string_new ("");
 	g_string_append_printf
 	  (s, "Stream: %s, %s; Manager: %s, %s; "
-	   "Freshness: %"PRId32"; Download time: %"PRId64"/delta: "TIME_FMT"; "
+	   "Freshness: %"PRId32"; Transfer time: %"PRId64"/delta: "TIME_FMT"; "
 	   "last try's status: %"PRId32" ->",
 	   stream_uuid, stream_cookie, manager_uuid, manager_cookie,
-	   freshness, download_time,
-	   TIME_PRINTF (download_time == 0 ? 0 : (download_time * 1000 - n)),
+	   freshness, transfer_time,
+	   TIME_PRINTF (transfer_time == 0 ? 0 : (transfer_time * 1000 - n)),
 	   last_trys_status);
 
 	if (! list)
@@ -311,7 +311,7 @@ do_schedule (gpointer user_data)
     (db,
      "select streams.uuid, streams.cookie,"
      "  streams.parent_uuid, managers.cookie, managers.DBusServiceName,"
-     "  streams.Freshness, stream_updates.download_time, stream_updates.status"
+     "  streams.Freshness, stream_updates.transfer_time, stream_updates.status"
      " from streams left join stream_updates"
      " on (streams.uuid == stream_updates.uuid"
      /* MAX(STREAMS_UPDATES.INSTANCE) == STREAMS.INSTANCE + 1 */
@@ -336,22 +336,22 @@ do_schedule (gpointer user_data)
     const char *stream_cookie = argv[i] ?: ""; i ++;
     const char *manager_uuid = argv[i] ?: ""; i ++;
     const char *manager_cookie = argv[i] ?: ""; i ++;
-    uint32_t download_frequency = argv[i] ? atoi (argv[i]) : 0; i ++;
-    uint64_t download_time = argv[i] ? atoll (argv[i]) : 0; i ++;
+    uint32_t transfer_frequency = argv[i] ? atoi (argv[i]) : 0; i ++;
+    uint64_t transfer_time = argv[i] ? atoll (argv[i]) : 0; i ++;
     uint32_t last_trys_status = argv[i] ? atoi (argv[i]) : 0; i ++;
     uint64_t trigger_target = argv[i] ? atoll (argv[i]) : 0; i ++;
     uint64_t trigger_earliest = argv[i] ? atoll (argv[i]) : 0; i ++;
     uint64_t trigger_latest = argv[i] ? atoll (argv[i]) : 0; i ++;
     int instance = argv[i] ? atoi (argv[i]) : 0; i ++;
 
-    if (download_time && last_trys_status == 0 && download_frequency == 0)
-      /* The object has been successfully downloaded and it is a
+    if (transfer_time && last_trys_status == 0 && transfer_frequency == 0)
+      /* The object has been successfully transferred and it is a
 	 one-shot object.  Ignore.  */
       return 0;
 
     if (last_trys_status == 0
-	&& download_time
-	&& download_time + download_frequency / 4 * 3 > n / 1000)
+	&& transfer_time
+	&& transfer_time + transfer_frequency / 4 * 3 > n / 1000)
       /* The content is fresh enough.  */
       return 0;
 
@@ -363,15 +363,15 @@ do_schedule (gpointer user_data)
 	GString *s = g_string_new ("");
 	g_string_append_printf
 	  (s, "Object: %s, %s; Stream: %s, %s; Manager: %s, %s; "
-	   "download frequency: %"PRId32", "
+	   "transfer frequency: %"PRId32", "
 	   "time: @ %"PRId64"/delta: "TIME_FMT"; "
 	   "last try's status: %"PRId32"; "
 	   "trigger: <%"PRId64", %"PRId64", %"PRId64">; instance: %d; "
 	   "subscriptions: ",
 	   object_uuid, object_cookie,
 	   stream_uuid, stream_cookie, manager_uuid, manager_cookie,
-	   download_frequency, download_time,
-	   TIME_PRINTF (download_time == 0 ? 0 : (download_time * 1000 - n)),
+	   transfer_frequency, transfer_time,
+	   TIME_PRINTF (transfer_time == 0 ? 0 : (transfer_time * 1000 - n)),
 	   last_trys_status, trigger_target, trigger_earliest, trigger_latest,
 	   instance);
 
@@ -429,18 +429,18 @@ do_schedule (gpointer user_data)
 	g_value_set_uint (&utility_value, 1);
 	g_value_array_append (versions, &utility_value);
 
-	GValue use_simple_downloader_value = { 0 };
-	g_value_init (&use_simple_downloader_value, G_TYPE_BOOLEAN);
-	g_value_set_boolean (&use_simple_downloader_value, FALSE);
-	g_value_array_append (versions, &use_simple_downloader_value);
+	GValue use_simple_transferer_value = { 0 };
+	g_value_init (&use_simple_transferer_value, G_TYPE_BOOLEAN);
+	g_value_set_boolean (&use_simple_transferer_value, FALSE);
+	g_value_array_append (versions, &use_simple_transferer_value);
 
 	GError *error = NULL;
-	if (! (org_woodchuck_upcall_object_download
+	if (! (org_woodchuck_upcall_object_transfer
 	       (s->proxy, manager_uuid, manager_cookie,
 		stream_uuid, stream_cookie, object_uuid, object_cookie,
 		versions, "", 5, &error)))
 	  {
-	    debug (0, "Executing org_woodchuck_upcall_object_download "
+	    debug (0, "Executing org_woodchuck_upcall_object_transfer "
 		   "(%s, %s, %s, %s, %s, %s, %s, [], '', 5) upcall failed: %s",
 		   s->handle, manager_uuid, manager_cookie,
 		   stream_uuid, stream_cookie,
@@ -461,7 +461,7 @@ do_schedule (gpointer user_data)
      "select objects.uuid, objects.cookie,"
      "  streams.uuid, streams.cookie,"
      "  streams.parent_uuid, managers.cookie,"
-     "  objects.DownloadFrequency, object_instance_status.download_time,"
+     "  objects.TransferFrequency, object_instance_status.transfer_time,"
      "  object_instance_status.status,"
      "  objects.TriggerTarget, objects.TriggerEarliest, objects.TriggerLatest,"
      "  objects.instance"
@@ -472,9 +472,9 @@ do_schedule (gpointer user_data)
      " join streams on objects.parent_uuid == streams.uuid"
      " join managers on managers.uuid == streams.parent_uuid"
      " where objects.DontTransfer == 0"
-     "  and (coalesce (object_instance_status.download_time, 0) == 0"
+     "  and (coalesce (object_instance_status.transfer_time, 0) == 0"
      "       or objects.NeedUpdate == 1"
-     "       or objects.DownloadFrequency > 0);",
+     "       or objects.TransferFrequency > 0);",
      objects_callback, NULL, &errmsg);
   if (errmsg)
     {
@@ -489,7 +489,7 @@ do_schedule (gpointer user_data)
 }
 
 /* Call this when it appears that an action can be executed, e.g.,
-   updating a stream or downloading an object.  */
+   updating a stream or transferring an object.  */
 static void
 schedule (void)
 {
@@ -614,7 +614,7 @@ murmeltier_init (Murmeltier *mt)
 			       NULL, NULL);
 
   /* Approximately every hour, check to see if there is something that
-     needs to be downloaded.  */
+     needs to be transferred.  */
   g_timeout_add_seconds (60 * 60, schedule_periodically, mt);
 
 
@@ -895,7 +895,7 @@ object_register (const char *parent, const char *parent_table,
 	    = g_value_get_uint64 (g_value_array_get_nth (strct, 3));
 	  uint32_t utility
 	    = g_value_get_uint (g_value_array_get_nth (strct, 4));
-	  gboolean use_simple_downloader
+	  gboolean use_simple_transferer
 	    = g_value_get_boolean (g_value_array_get_nth (strct, 5));
 
 	  g_string_append_printf
@@ -903,13 +903,13 @@ object_register (const char *parent, const char *parent_table,
 	     "insert into object_versions"
 	     " (uuid, version, parent_uuid,"
 	     "  url, expected_size, expected_transfer_up,"
-	     "  expected_transfer_down, utility, use_simple_downloader)"
+	     "  expected_transfer_down, utility, use_simple_transferer)"
 	     " values"
 	     " ('%s', %d, '%s', %s, %"PRId64", %"PRIu64", %"PRIu64", %d, %d);"
 	     "\n",
 	     *uuid, i, parent, url_escaped, expected_size,
 	     expected_transfer_up, expected_transfer_down,
-	     utility, use_simple_downloader);
+	     utility, use_simple_transferer);
 
 	  sqlite3_free (url_escaped);
 	}
@@ -1258,12 +1258,12 @@ woodchuck_lookup_manager_by_cookie (const char *cookie, gboolean recursive,
 }
 
 enum woodchuck_error
-woodchuck_download_desirability_version
+woodchuck_transfer_desirability
   (uint32_t request_type,
-   struct woodchuck_download_desirability_version *versions, int version_count,
+   struct woodchuck_transfer_desirability_version *versions, int version_count,
    uint32_t *desirability, uint32_t *version, GError **error)
 {
-#warning Implement woodchuck_download_desirability_version
+#warning Implement woodchuck_transfer_desirability
   return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
 }
 
@@ -1593,7 +1593,7 @@ enum woodchuck_error
 woodchuck_stream_update_status
   (const char *stream_raw, uint32_t status, uint32_t indicator,
    uint64_t transferred_up, uint64_t transferred_down,
-   uint64_t download_time, uint32_t download_duration, 
+   uint64_t transfer_time, uint32_t transfer_duration, 
    uint32_t new_objects, uint32_t updated_objects,
    uint32_t objects_inline, GError **error)
 {
@@ -1601,8 +1601,9 @@ woodchuck_stream_update_status
   char *manager = NULL;
 
   uint64_t n = now ();
-  if (download_time == 0 || download_time > n / 1000)
-    download_time = n / 1000;
+
+  if (transfer_time == 0 || transfer_time > n / 1000)
+    transfer_time = n / 1000;
 
   int instance = -1;
   int callback (void *cookie, int argc, char **argv, char **names)
@@ -1646,7 +1647,7 @@ woodchuck_stream_update_status
      "insert into stream_updates"
      " (uuid, instance, parent_uuid,"
      "  status, indicator, transferred_up, transferred_down,"
-     "  download_time, download_duration,"
+     "  transfer_time, transfer_duration,"
      "  new_objects, updated_objects, objects_inline)"
      " values"
      " (%s, %d, '%s',"
@@ -1656,7 +1657,7 @@ woodchuck_stream_update_status
      "end transaction;",
      NULL, NULL, &errmsg,
      stream, instance, manager, status, indicator,
-     transferred_up, transferred_down, download_time, download_duration,
+     transferred_up, transferred_down, transfer_time, transfer_duration,
      new_objects, updated_objects, objects_inline,
      instance + 1, stream);
   if (errmsg)
@@ -1693,10 +1694,10 @@ woodchuck_object_unregister (const char *object, GError **error)
 }
 
 enum woodchuck_error
-woodchuck_object_download (const char *object, uint32_t request_type,
+woodchuck_object_transfer (const char *object, uint32_t request_type,
 			   GError **error)
 {
-#warning Implement woodchuck_object_download
+#warning Implement woodchuck_object_transfer
   return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
 }
 
@@ -1710,19 +1711,19 @@ woodchuck_stream_lookup_object_by_cookie
 }
 
 enum woodchuck_error
-woodchuck_object_download_status
+woodchuck_object_transfer_status
   (const char *object_raw, uint32_t status, uint32_t indicator,
    uint64_t transferred_up, uint64_t transferred_down,
-   uint64_t download_time, uint32_t download_duration, uint64_t object_size,
-   struct woodchuck_object_download_status_files *files, int files_count,
+   uint64_t transfer_time, uint32_t transfer_duration, uint64_t object_size,
+   struct woodchuck_object_transfer_status_files *files, int files_count,
    GError **error)
 {
   char *object = sqlite3_mprintf ("%Q", object_raw);
   char *stream = NULL;
 
   uint64_t n = now ();
-  if (download_time == 0 || download_time > n / 1000)
-    download_time = n / 1000;
+  if (transfer_time == 0 || transfer_time > n / 1000)
+    transfer_time = n / 1000;
 
   int instance = -1;
   int callback (void *cookie, int argc, char **argv, char **names)
@@ -1785,7 +1786,7 @@ woodchuck_object_download_status
      "insert into object_instance_status"
      " (uuid, instance, parent_uuid,"
      "  status, transferred_up, transferred_down,"
-     "  download_time, download_duration, object_size, indicator)"
+     "  transfer_time, transfer_duration, object_size, indicator)"
      " values"
      "  (%s, %d, '%s',"
      "   %"PRId32", %"PRId64", %"PRId64", %"PRId64", %"PRId32","
@@ -1795,7 +1796,7 @@ woodchuck_object_download_status
      "end transaction;",
      NULL, NULL, &errmsg,
      object, instance, stream, status, transferred_up, transferred_down,
-     download_time, download_duration, object_size, indicator,
+     transfer_time, transfer_duration, object_size, indicator,
      sql ? sql->str : "", instance + 1, object);
   if (sql)
     g_string_free (sql, TRUE);
@@ -2274,7 +2275,7 @@ main (int argc, char *argv[])
      "create table if not exists stream_updates"
      " (uuid NOT NULL, instance, parent_uuid NOT NULL,"
      "  status, indicator, transferred_up, transferred_down,"
-     "  download_time, download_duration,"
+     "  transfer_time, transfer_duration,"
      "  new_objects, updated_objects, objects_inline,"
      "  UNIQUE (uuid, instance));"
      "create index if not exists stream_updates_parent_uuid_index"
@@ -2284,7 +2285,7 @@ main (int argc, char *argv[])
      " (uuid PRIMARY KEY, parent_uuid NOT NULL,"
      "  Instance DEFAULT 0, HumanReadableName, Cookie, Filename, Wakeup,"
      "  TriggerTarget, TriggerEarliest, TriggerLatest,"
-     "  DownloadFrequency,"
+     "  TransferFrequency,"
      "  DontTransfer DEFAULT 0, NeedUpdate, Priority,"
      "  DiscoveryTime, PublicationTime,"
      "  RegistrationTime DEFAULT (strftime ('%s', 'now')));"
@@ -2297,17 +2298,17 @@ main (int argc, char *argv[])
      "create table if not exists object_versions"
      " (uuid NOT NULL, version NOT NULL, parent_uuid NOT NULL,"
      "  url, expected_size, expected_transfer_up, expected_transfer_down,"
-     "  utility, use_simple_downloader,"
+     "  utility, use_simple_transferer,"
      "  UNIQUE (uuid, version, url));"
      "create index if not exists object_versions_parent_uuid_index"
      " on object_versions (parent_uuid);"
 
      /* An object instance's status.  Columns are as per
-	org.woodchuck.object.DownloadStatus.  */
+	org.woodchuck.object.TransferStatus.  */
      "create table if not exists object_instance_status"
      " (uuid NOT NULL, instance NOT NULL, parent_uuid NOT NULL,"
      "  status, transferred_up, transferred_down,"
-     "  download_time, download_duration, object_size, indicator,"
+     "  transfer_time, transfer_duration, object_size, indicator,"
      "  deleted, preserve_until, compressed_size,"
      "  UNIQUE (uuid, instance));"
      "create index if not exists object_status_parent_uuid_index"

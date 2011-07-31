@@ -153,15 +153,15 @@ class _Object(_BaseObject):
         self.llobject.unregister ()
         del self.containing_dict[object_identifier]
 
-    def downloaded(self, indicator=None,
-                   transferred_up=None, transferred_down=None,
-                   download_time=None, download_duration=None,
-                   object_size=None, files=None):
+    def transferred(self, indicator=None,
+                    transferred_up=None, transferred_down=None,
+                    transfer_time=None, transfer_duration=None,
+                    object_size=None, files=None):
         """
-        Tell Woodchuck that the object was successfully downloaded.
+        Tell Woodchuck that the object was successfully transferred.
 
-        Call this function whenever an object download is attempted,
-        not only in response to a :func:`object_download_cb` upcall.
+        Call this function whenever an object transfer is attempted,
+        not only in response to a :func:`object_transfer_cb` upcall.
 
         :param indicator: What indicators, if any, were shown to the
             user indicating that the stream was updated.  A bit-wise
@@ -170,14 +170,14 @@ class _Object(_BaseObject):
         :param transferred_up: The number of bytes uploaded.  If not
             known, set to None.  Default: None.
 
-        :param transferred_down: The number of bytes downloaded.  If
+        :param transferred_down: The number of bytes transferred.  If
             not known, set to None.  Default: None.
 
-        :param download_time: The time at which the update was started
+        :param transfer_time: The time at which the update was started
             (in seconds since the epoch).  If not known, set to None.
             Default: None.
 
-        :param download_duration: The amount of time the update took,
+        :param transfer_duration: The amount of time the update took,
             in seconds.  If not known, set to None.  Default: None.
 
         :param object_size: The resulting on-disk size of the object,
@@ -203,10 +203,10 @@ class _Object(_BaseObject):
                 "http://podcast.site/SomePodcast/Episode-15.ogg",
                 "Episode 15: Title")
 
-            # Download the file.
+            # Transfer the file.
 
             w["http://podcast.site/SomePodcast.rss"]\\
-                ["http://podcast.site/SomePodcast/Episode-15.ogg"].downloaded(
+                ["http://podcast.site/SomePodcast/Episode-15.ogg"].transferred(
                 indicator=(woodchuck.Indicator.ApplicationVisual
                            |woodchuck.Indicator.DesktopSmallVisual
                            |woodchuck.Indicator.ObjectSpecific),
@@ -217,29 +217,29 @@ class _Object(_BaseObject):
 
             del w["http://podcast.site/SomePodcast.rss"]
         """
-        self.llobject.download_status (
+        self.llobject.transfer_status (
             0, indicator, transferred_up, transferred_down,
-            download_time, download_duration,
+            transfer_time, transfer_duration,
             object_size, files)
 
-    def download_failed(self, reason,
+    def transfer_failed(self, reason,
                         transferred_up=None, transferred_down=None):
         """
-        Indicate that the program failed to download the object.
+        Indicate that the program failed to transfer the object.
 
         :param reason: The reason the update failed.  Taken from
-            :class:`woodchuck.DownloadStatus`.
+            :class:`woodchuck.TransferStatus`.
 
         :param transferred_up: The number of bytes uploaded.  If not
             known, set to None.  Default: None.
 
-        :param transferred_down: The number of bytes downloaded.  If
+        :param transferred_down: The number of bytes transferred.  If
             not known, set to None.  Default: None.
 
         Example: For an example of a similar function, see
         :func:`_Stream.stream_update_failed`.
         """
-        self.llobject.download_status (
+        self.llobject.transfer_status (
             reason, 0, transferred_up, transferred_down)
 
     def used(self, start=None, duration=None, use_mask=0xffffffffffffffff):
@@ -334,7 +334,7 @@ class _Object(_BaseObject):
                 "2721812449",
                 "Subject Line")
 
-            w["user@provider.com/INBOX"]["2721812449"].downloaded (
+            w["user@provider.com/INBOX"]["2721812449"].transferred (
                 transferred_up=3308, transferred_down=991203,
                 files=[ ["/home/user/Maildir/.inbox/cur/2721812449",
                          True,
@@ -469,7 +469,7 @@ class _Stream(_BaseObject, DictMixin):
 
     def updated(self, indicator=0,
                 transferred_up=None, transferred_down=None,
-                download_time=None, download_duration=None,
+                transfer_time=None, transfer_duration=None,
                 new_objects=None, updated_objects=None,
                 objects_inline=None):
         """
@@ -486,14 +486,14 @@ class _Stream(_BaseObject, DictMixin):
         :param transferred_up: The number of bytes uploaded.  If not
             known, set to None.  Default: None.
 
-        :param transferred_down: The number of bytes downloaded.  If
+        :param transferred_down: The number of bytes transferred.  If
             not known, set to None.  Default: None.
 
-        :param download_time: The time at which the update was started
+        :param transfer_time: The time at which the update was started
             (in seconds since the epoch).  If not known, set to None.
             Default: None.
 
-        :param download_duration: The amount of time the update took,
+        :param transfer_duration: The amount of time the update took,
             in seconds.  If not known, set to None.  Default: None.
 
         :param new_objects: The number of newly discovered objects.  If
@@ -517,27 +517,27 @@ class _Stream(_BaseObject, DictMixin):
           
             w.stream_register("stream identifier", "human_readable_name")
 
-            download_time = int (time.time ())
+            transfer_time = int (time.time ())
 
-            # Perform the download
+            # Perform the transfer
 
-            download_duration = int (time.time ()) - download_time
+            transfer_duration = int (time.time ()) - transfer_time
 
             w["stream identifier"].updated (
                 transferred_up=2048, transferred_down=64000,
-                download_time=download_time,
-                download_duration=download_duration,
+                transfer_time=transfer_time,
+                transfer_duration=transfer_duration,
                 new_objects=5, objects_inline=5)
 
             del w["stream identifier"]
 
         .. Note:: The five new objects should immediately be
             registered using :func:`object_register` and marked as
-            downloaded using :func:`_Object.downloaded`.
+            transferred using :func:`_Object.transferred`.
         """
         self.llobject.update_status (
             0, indicator, transferred_up, transferred_down,
-            download_time, download_duration,
+            transfer_time, transfer_duration,
             new_objects, updated_objects, objects_inline)
 
     def update_failed(self, reason, transferred_up=None, transferred_down=None):
@@ -547,12 +547,12 @@ class _Stream(_BaseObject, DictMixin):
         response to a :func:`stream_update_cb` upcall.
 
         :param reason: The reason the update failed.  Taken from
-            :class:`woodchuck.DownloadStatus`.
+            :class:`woodchuck.TransferStatus`.
 
         :param transferred_up: The number of bytes uploaded.  If not
             known, set to None.  Default: None.
 
-        :param transferred_down: The number of bytes downloaded.  If
+        :param transferred_down: The number of bytes transferred.  If
             not known, set to None.  Default: None.
 
         Example of reporting a failed stream update::
@@ -564,10 +564,10 @@ class _Stream(_BaseObject, DictMixin):
           
             w.stream_register("stream identifier", "human_readable_name")
 
-            # Try to download the data.
+            # Try to transfer the data.
 
             w["stream identifier"].update_failed (
-                woodchuck.DownloadStatus.TransientNetwork,
+                woodchuck.TransferStatus.TransientNetwork,
                 transferred_up=1038, transferred_down=0)
 
             del w["stream identifier"]
@@ -577,7 +577,7 @@ class _Stream(_BaseObject, DictMixin):
                                      transferred_down=transferred_down)
 
     def object_register(self, object_identifier,
-                        human_readable_name, download_frequency=None,
+                        human_readable_name, transfer_frequency=None,
                         expected_size=None, versions=None):
         """Register an object.
 
@@ -588,8 +588,8 @@ class _Stream(_BaseObject, DictMixin):
             shown to the user, which is unambiguous in the context of
             the stream.
 
-        :param download_frequency: How often the object should be
-            downloaded.  If 0 or None, this is a one-shot download.
+        :param transfer_frequency: How often the object should be
+            transferred.  If 0 or None, this is a one-shot transfer.
             Default: None.
 
         :expected_size: The expected amount of disk space required
@@ -599,17 +599,17 @@ class _Stream(_BaseObject, DictMixin):
 
         :versions: An array of [`URL`, `expected_size`,
             `expected_transfer_up`, `expected_transfer_down`,
-            `utility`, use_simple_downloader`] specifying alternate
+            `utility`, use_simple_transferer`] specifying alternate
             versions of the object.  `expected_size` is the expected
             amount of disk space required when this transfer
             completes.  `expected_transfer_up` is the expected upload
             size, in bytes.  `expected_transfer_down` is the expected
-            download size, in bytes.  `utility` is the utility of this
+            transfer size, in bytes.  `utility` is the utility of this
             version relative to other versions.  The utility is
             assumed to be a linear function, i.e.,a version with 10
             has twice as much value as another version with 5.
-            `use_simple_downloader` is a boolean indicating whether
-            Woodchuck should use its simple downloader to fetch the
+            `use_simple_transferer` is a boolean indicating whether
+            Woodchuck should use its simple transferer to fetch the
             object.
 
         :returns: Returns a :class:`_Object` instance.
@@ -621,13 +621,13 @@ class _Stream(_BaseObject, DictMixin):
         properties={'cookie':object_identifier}
         if human_readable_name is not None:
             properties['human_readable_name'] = human_readable_name
-        if download_frequency is not None:
-            properties['download_frequency'] = download_frequency
+        if transfer_frequency is not None:
+            properties['transfer_frequency'] = transfer_frequency
 
         if versions is None and expected_size is not None:
             versions = (
                 # URL, expected_size, expected_transfer_up,
-                # expected_transfer_down, utility, use_simple_downloader
+                # expected_transfer_down, utility, use_simple_transferer
                 ("", expected_size, 0, 0, 0, False),
                 )
 
@@ -677,13 +677,13 @@ class _Stream(_BaseObject, DictMixin):
         for o in self.llobject.list_objects ():
             yield Object (self, o)
 
-    def object_downloaded(self, object_identifier, *args, **kwargs):
-        """Tell Woodchuck that an object was successfully downloaded.
+    def object_transferred(self, object_identifier, *args, **kwargs):
+        """Tell Woodchuck that an object was successfully transferred.
 
-        This function is a wrapper for :func:`_Object.downloaded`.  It
+        This function is a wrapper for :func:`_Object.transferred`.  It
         takes one additional argument, the object's identifier.  Like
-        :func:`_Object.downloaded`, this function marks the object as
-        downloaded.  Unlike :func:`_Object.downloaded`, if the object
+        :func:`_Object.transferred`, this function marks the object as
+        transferred.  Unlike :func:`_Object.transferred`, if the object
         is not yet registered, this function first registers it
         setting `human_readable_name` set to `object_identifier`.
 
@@ -695,7 +695,7 @@ class _Stream(_BaseObject, DictMixin):
             w = pywoodchuck.PyWoodchuck("Podcasts", "org.podcasts")
             w.stream_register("http://podcast.site/podcasts/SomePodcast.rss",
                               "Some Podcast")
-            w["http://podcast.site/podcasts/SomePodcast.rss"].object_downloaded(
+            w["http://podcast.site/podcasts/SomePodcast.rss"].object_transferred(
                 "http://podcast.site/podcasts/SomePodcast/Episode-15.ogg",
                 indicator=(woodchuck.Indicator.ApplicationVisual
                            |woodchuck.Indicator.DesktopSmallVisual
@@ -714,18 +714,18 @@ class _Stream(_BaseObject, DictMixin):
             self.object_register (object_identifier, object_identifier, 0)
             object = self._objects[object_identifier]
 
-        object.downloaded (*args, **kwargs)
+        object.transferred (*args, **kwargs)
 
-    def object_download_failed(self, object_identifier, *args, **kwargs):
+    def object_transfer_failed(self, object_identifier, *args, **kwargs):
         """
-        Indicate that the program failed to download the object.
+        Indicate that the program failed to transfer the object.
 
         This function is a wrapper for
-        :func:`_Object.download_failed`.  It takes one additional
+        :func:`_Object.transfer_failed`.  It takes one additional
         argument, the object's identifier.  Like
-        :func:`_Object.download_failed`, this function marks the
-        object as having failed to be downloaded.  Unlike
-        :func:`_Object.download_failed`, if the object is not yet
+        :func:`_Object.transfer_failed`, this function marks the
+        object as having failed to be transferred.  Unlike
+        :func:`_Object.transfer_failed`, if the object is not yet
         registered, this function first registers it setting
         `human_readable_name` set to `object_identifier`.
         """
@@ -736,7 +736,7 @@ class _Stream(_BaseObject, DictMixin):
             self.object_register (object_identifier, object_identifier, 0)
             object = self._objects[object_identifier]
 
-        return self[object_identifier].download_failed (*args, **kwargs)
+        return self[object_identifier].transfer_failed (*args, **kwargs)
 
     def object_files_deleted(self, object_identifier, *args, **kwargs):
         """
@@ -809,23 +809,23 @@ class PyWoodchuck(DictMixin):
                 return
             self.pywoodchuck.manager.feedback_subscribe (False)
 
-        def object_downloaded_cb (self, manager_UUID, manager_cookie,
-                                  stream_UUID, stream_cookie,
-                                  object_UUID, object_cookie,
-                                  status, instance, version, filename, size,
-                                  trigger_target, trigger_fired):
-            """org.woodchuck.upcalls.ObjectDownloaded"""
+        def object_transferred_cb (self, manager_UUID, manager_cookie,
+                                   stream_UUID, stream_cookie,
+                                   object_UUID, object_cookie,
+                                   status, instance, version, filename, size,
+                                   trigger_target, trigger_fired):
+            """org.woodchuck.upcalls.ObjectTransferred"""
             try:
                 stream = self.pywoodchuck._stream_lookup (
                     stream_cookie, stream_UUID)
                 object = stream._object_lookup (object_cookie, object_UUID)
             except woodchuck.NoSuchObject, exception:
                 print "Woodchuck invoked " \
-                    "org.woodchuck.upcall.ObjectDownloaded", \
+                    "org.woodchuck.upcall.ObjectTransferred", \
                     "for non-existant object: ", str (exception)
                 return False
 
-            self.pywoodchuck.object_downloaded_cb (
+            self.pywoodchuck.object_transferred_cb (
                 stream, object, status, instance, version, filename, size,
                 trigger_target, trigger_fired)
 
@@ -837,34 +837,34 @@ class PyWoodchuck(DictMixin):
                     (stream_cookie, stream_UUID)
             except woodchuck.NoSuchObject, exception:
                 print "Woodchuck invoked " \
-                    "org.woodchuck.upcall.ObjectDownloaded", \
+                    "org.woodchuck.upcall.ObjectTransferred", \
                     "for non-existant object: ", str (exception)
                 return False
 
             self.pywoodchuck.stream_update_cb (stream)
 
-        def object_download_cb (self, manager_UUID, manager_cookie,
+        def object_transfer_cb (self, manager_UUID, manager_cookie,
                                 stream_UUID, stream_cookie,
                                 object_UUID, object_cookie,
                                 version, filename, quality):
-            """org.woodchuck.upcalls.ObjectDownload"""
+            """org.woodchuck.upcalls.ObjectTransfer"""
             try:
                 stream = self.pywoodchuck._stream_lookup (
                     stream_cookie, stream_UUID)
                 object = stream._object_lookup (object_cookie, object_UUID)
             except woodchuck.NoSuchObject, exception:
                 print "Woodchuck invoked " \
-                    "org.woodchuck.upcall.ObjectDownload", \
+                    "org.woodchuck.upcall.ObjectTransfer", \
                     "for non-existant object: ", str (exception)
                 return False
 
-            self.pywoodchuck.object_download_cb (stream, object,
+            self.pywoodchuck.object_transfer_cb (stream, object,
                                                  version, filename, quality)
 
         def object_delete_files_cb (self, manager_UUID, manager_cookie,
                                     stream_UUID, stream_cookie,
                                     object_UUID, object_cookie):
-            """org.woodchuck.upcalls.ObjectDownload"""
+            """org.woodchuck.upcalls.ObjectTransfer"""
             try:
                 stream = self.pywoodchuck._stream_lookup (
                     stream_cookie, stream_UUID)
@@ -904,16 +904,16 @@ class PyWoodchuck(DictMixin):
             w = pywoodchuck.PyWoodchuck("RSS Reader", "org.rssreader")
 
         Example: if you are interested in the :func:`stream_update_cb`
-        and :func:`object_download_cb` upcalls::
+        and :func:`object_transfer_cb` upcalls::
 
             import pywoodchuck
 
             class mywoodchuck (pywoodchuck.PyWoodchuck):
                 def stream_update_cb(self, stream):
                     print "stream update called on %s" % (stream.identifier,)
-                def object_download_cb(self, stream, object,
+                def object_transfer_cb(self, stream, object,
                                        version, filename, quality):
-                    print "object download called on %s in stream %s" \\
+                    print "object transfer called on %s in stream %s" \\
                         % (object.identifier, stream.identifier);
 
             w = mywoodchuck("RSS Reader", "org.rssreader")
@@ -958,12 +958,12 @@ class PyWoodchuck(DictMixin):
         self._streams = {}
 
         if request_feedback:
-            if ((self.__class__.object_downloaded_cb
-                 == PyWoodchuck.object_downloaded_cb)
+            if ((self.__class__.object_transferred_cb
+                 == PyWoodchuck.object_transferred_cb)
                 and (self.__class__.stream_update_cb
                      == PyWoodchuck.stream_update_cb)
-                and (self.__class__.object_download_cb
-                     == PyWoodchuck.object_download_cb)
+                and (self.__class__.object_transfer_cb
+                     == PyWoodchuck.object_transfer_cb)
                 and (self.__class__.object_delete_files_cb
                      == PyWoodchuck.object_delete_files_cb)):
                 # None of the call backs were overriden.  There is no
@@ -1218,48 +1218,48 @@ class PyWoodchuck(DictMixin):
         """
         return self[stream_identifier].objects_list ()
 
-    def object_downloaded(self, stream_identifier, object_identifier,
-                          *args, **kwargs):
+    def object_transferred(self, stream_identifier, object_identifier,
+                           *args, **kwargs):
         """
-        Tell Woodchuck that an object was successfully downloaded.
+        Tell Woodchuck that an object was successfully transferred.
 
         .. Note::
 
             This function is an alias for
-            :func:`_Stream.object_downloaded`::
+            :func:`_Stream.object_transferred`::
 
-                pywoodchuck[stream_identifier].object_downloaded (...)
+                pywoodchuck[stream_identifier].object_transferred (...)
 
         :param stream_identifier: The stream's identifier.
 
         :param object_identifier: The object's identifier.
 
         The remaining parameters are passed through to
-        :func:`_Stream.object_downloaded`.
+        :func:`_Stream.object_transferred`.
         """
-        return self[stream_identifier].object_downloaded (
+        return self[stream_identifier].object_transferred (
             object_identifier, *args, **kwargs)
 
-    def object_download_failed(self, stream_identifier, object_identifier,
+    def object_transfer_failed(self, stream_identifier, object_identifier,
                                *args, **kwargs):
         """
-        Indicate that the program failed to download the object.
+        Indicate that the program failed to transfer the object.
 
         .. Note::
 
             This function is an alias for
-            :func:`_Stream.object_download_failed`::
+            :func:`_Stream.object_transfer_failed`::
 
-                pywoodchuck[stream_identifier].object_download_failed (...)
+                pywoodchuck[stream_identifier].object_transfer_failed (...)
 
         :param stream_identifier: The stream's identifier.
 
         :param object_identifier: The object's identifier.
 
         The remaining parameters are passed through to
-        :func:`_Stream.object_download_failed`.
+        :func:`_Stream.object_transfer_failed`.
         """
-        return self[stream_identifier].object_download_failed (
+        return self[stream_identifier].object_transfer_failed (
             object_identifier, *args, **kwargs)
 
     def object_used(self, stream_identifier, object_identifier,
@@ -1415,19 +1415,19 @@ class PyWoodchuck(DictMixin):
                 __setattr__(property, value))
 
 
-    def object_downloaded_cb(self, stream, object,
+    def object_transferred_cb(self, stream, object,
                              status, instance, version,
                              filename, size, trigger_target, trigger_fired):
         """Virtual method that should be implemented by the child
-        class if it is interested in receiving object downloaded
-        notifications (:func:`org.woodchuck.upcall.ObjectDownloaded`).
+        class if it is interested in receiving object transferred
+        notifications (:func:`org.woodchuck.upcall.ObjectTransferred`).
 
-        This upcall is invoked when Woodchuck downloads an object on
+        This upcall is invoked when Woodchuck transfers an object on
         behalf of a manager.  This is only done for objects using the
-        simple downloader.
+        simple transferer.
 
-        .. note: Woodchuck only downloads objects if it is explicitly
-            told to by way of the `use_simple_downloader` property.
+        .. note: Woodchuck only transfers objects if it is explicitly
+            told to by way of the `use_simple_transferer` property.
             See the `versions` parameter to :func:`object_register`
             for more details.
 
@@ -1438,27 +1438,27 @@ class PyWoodchuck(DictMixin):
 
         :param object: The object, an instance of :class:`_Object`.
 
-        :param status: Whether the download was successfully.  The
-            value is taken from :class:`woodchuck.DownloadStatus`.
+        :param status: Whether the transfer was successfully.  The
+            value is taken from :class:`woodchuck.TransferStatus`.
 
-        :param instance: The number of download attempts (not
+        :param instance: The number of transfer attempts (not
             including this one).
 
-        :param version: The version that was downloaded.  An array of:
+        :param version: The version that was transferred.  An array of:
             the index in the version array, the URL, the expected
             size, the expected bytes uploaded, expected bytes
-            downloaded, the utility and the value of use simple
-            downloader.
+            transferred, the utility and the value of use simple
+            transferer.
 
         :param filename: The name of the file containing the data.
 
         :param size: The size of the file, in bytes.
 
         :param trigger_target: The time the application requested the
-            object be downloaded.
+            object be transferred.
 
         :param trigger_fired: The time at which the file was actually
-            downloaded.
+            transferred.
 
         Example: for an example of how to implement an upcall, see the
         opening example to :class:`PyWoodchuck`.
@@ -1488,20 +1488,20 @@ class PyWoodchuck(DictMixin):
         """
         pass
     
-    def object_download_cb(self, stream, object,
+    def object_transfer_cb(self, stream, object,
                            version, filename, quality):
         """
         Virtual method that should be implemented by the child class
-        if it is interested in receiving object download notifications
-        (:func:`org.woodchuck.upcall.ObjectDownload`).
+        if it is interested in receiving object transfer notifications
+        (:func:`org.woodchuck.upcall.ObjectTransfer`).
 
-        This upcall is invoked when an object should be downloaded.
-        The application should download the object and call either
-        :func:`object_downloaded` or :func:`object_download_failed`,
+        This upcall is invoked when an object should be transferred.
+        The application should transfer the object and call either
+        :func:`object_transferred` or :func:`object_transfer_failed`,
         as appropriate.
 
         .. note: If all objects are marked as using the simple
-            downloader (see the `versions` parameter to
+            transferer (see the `versions` parameter to
             :func:`object_register` for more details), there is no
             need to implement this upcall.
 
@@ -1509,16 +1509,16 @@ class PyWoodchuck(DictMixin):
 
         :param object: The object, an instance of :class:`_Object`.
 
-        :param version: The version to download.  An array of: the
+        :param version: The version to transfer.  An array of: the
             index in the version array, the URL, the expected size,
-            the expected bytes uploaded, expected bytes downloaded,
-            the utility and the value of use simple downloader.
+            the expected bytes uploaded, expected bytes transferred,
+            the utility and the value of use simple transferer.
 
         :param filename: The name of the filename property.
 
         :param quality: The degree to which quality should be
             sacrified to reduce the number of bytes transferred.  The
-            target quality of the download.  From 1 (most compressed)
+            target quality of the transfer.  From 1 (most compressed)
             to 5 (highest available fidelity).
 
         Example: for an example of how to implement an upcall, see the
@@ -1532,7 +1532,7 @@ class PyWoodchuck(DictMixin):
         (:func:`org.woodchuck.upcall.ObjectDeleteFiles`).
 
         This upcall is invoked when an object's files should be
-        downloaded.  The application should respond with
+        transferred.  The application should respond with
         :func:`object_files_deleted`.
 
         .. note: If no objects are marked having the deletion policy
@@ -1557,9 +1557,9 @@ if __name__ == "__main__":
     class WoodyChucky (PyWoodchuck):
         def stream_update_cb(self, stream):
             print "stream update called on %s" % (stream.identifier,)
-        def object_download_cb(self, stream, obj,
+        def object_transfer_cb(self, stream, obj,
                                version, filename, quality):
-            print "object download called on %s in stream %s" \
+            print "object transfer called on %s in stream %s" \
                 % (obj.identifier, stream.identifier);
 
     wc = WoodyChucky ("PyWoodchuck Test.", "org.woodchuck.pywoodchuck.test")
@@ -1605,22 +1605,22 @@ if __name__ == "__main__":
         loop.run ()
         print "Mainloop returned."
 
-        wc.stream_updated('id:a', download_duration=1,
+        wc.stream_updated('id:a', transfer_duration=1,
                           new_objects=3, objects_inline=3)
-        wc.stream_updated('id:b', download_duration=1,
+        wc.stream_updated('id:b', transfer_duration=1,
                           new_objects=3, objects_inline=3)
 
         for i in (1, 2, 3):
             wc.object_register('id:a', 'id:a.' + str(i), 'A.' + str(i),
-                               download_frequency=3,
+                               transfer_frequency=3,
                                versions=(("", 100, 100, 2, 1, False),
                                          ("", 20, 20, 2, 0, False)))
             assert wc.object_property_get('id:a', 'id:a.' + str(i),
-                                          'download_frequency') == 3
+                                          'transfer_frequency') == 3
             wc.object_property_set('id:a', 'id:a.' + str(i),
-                                   'download_frequency', 2)
+                                   'transfer_frequency', 2)
             assert wc.object_property_get('id:a', 'id:a.' + str(i),
-                                          'download_frequency') == 2
+                                          'transfer_frequency') == 2
 
             print "Waiting for 5 seconds for object feedback."
             loop = glib.MainLoop ()
@@ -1629,14 +1629,14 @@ if __name__ == "__main__":
             print "Mainloop returned."
 
             if i == 3:
-                wc.object_download_failed ('id:a', 'id:a.' + str(i),
-                                           woodchuck.DownloadStatus.FailureGone)
+                wc.object_transfer_failed ('id:a', 'id:a.' + str(i),
+                                           woodchuck.TransferStatus.FailureGone)
             else:
-                wc.object_downloaded('id:a', 'id:a.' + str(i),
-                                     object_size=(100 * i))
+                wc.object_transferred('id:a', 'id:a.' + str(i),
+                                      object_size=(100 * i))
 
-            wc.object_downloaded('id:b', 'id:b.' + str(i),
-                                 object_size=(1000 * i))
+            wc.object_transferred('id:b', 'id:b.' + str(i),
+                                  object_size=(1000 * i))
 
             wc.object_used ('id:b', 'id:b.' + str(i), use_mask=0x1)
 
@@ -1649,9 +1649,9 @@ if __name__ == "__main__":
             assert len (wc['id:a']) == 3 - i
 
         wc.stream_update_failed ('id:a',
-                                 woodchuck.DownloadStatus.TransientNetwork)
+                                 woodchuck.TransferStatus.TransientNetwork)
         wc.stream_update_failed ('id:b',
-                                 woodchuck.DownloadStatus.FailureGone,
+                                 woodchuck.TransferStatus.FailureGone,
                                  890, 456)
 
     finally:

@@ -43,7 +43,7 @@ extern enum woodchuck_error woodchuck_list_managers
 extern enum woodchuck_error woodchuck_lookup_manager_by_cookie
   (const char *cookie, gboolean recursive, GPtrArray **list, GError **error);
 
-struct woodchuck_download_desirability_version
+struct woodchuck_transfer_desirability_version
 {
   int64_t expected_size;
   uint64_t expected_transfer_up;
@@ -51,9 +51,9 @@ struct woodchuck_download_desirability_version
   uint32_t utility;
 };
 
-extern enum woodchuck_error woodchuck_download_desirability_version
+extern enum woodchuck_error woodchuck_transfer_desirability
   (uint32_t request_type,
-   struct woodchuck_download_desirability_version *versions, int version_count,
+   struct woodchuck_transfer_desirability_version *versions, int version_count,
    uint32_t *desirability, uint32_t *version, GError **error);
 
 /* org.woochuck.manager callbacks.  */
@@ -123,7 +123,7 @@ extern enum woodchuck_error woodchuck_stream_lookup_object_by_cookie
 extern enum woodchuck_error woodchuck_stream_update_status
   (const char *object, uint32_t status, uint32_t indicator,
    uint64_t transferred_up, uint64_t transferred_down,
-   uint64_t download_time, uint32_t download_duration, 
+   uint64_t transfer_time, uint32_t transfer_duration, 
    uint32_t new_objects, uint32_t updated_objects,
    uint32_t objects_inline, GError **error);
 
@@ -132,21 +132,21 @@ extern enum woodchuck_error woodchuck_stream_update_status
 extern enum woodchuck_error woodchuck_object_unregister
   (const char *object, GError **error);
 
-extern enum woodchuck_error woodchuck_object_download
+extern enum woodchuck_error woodchuck_object_transfer
   (const char *object, uint32_t request_type, GError **error);
 
-struct woodchuck_object_download_status_files
+struct woodchuck_object_transfer_status_files
 {
   const char *filename;
   gboolean dedicated;
   uint32_t deletion_policy;
 };
 
-extern enum woodchuck_error woodchuck_object_download_status
+extern enum woodchuck_error woodchuck_object_transfer_status
   (const char *object, uint32_t status, uint32_t indicator,
    uint64_t transferred_up, uint64_t transferred_down,
-   uint64_t download_time, uint32_t download_duration, uint64_t object_size,
-   struct woodchuck_object_download_status_files *files, int files_count,
+   uint64_t transfer_time, uint32_t transfer_duration, uint64_t object_size,
+   struct woodchuck_object_transfer_status_files *files, int files_count,
    GError **error);
 
 extern enum woodchuck_error woodchuck_object_use

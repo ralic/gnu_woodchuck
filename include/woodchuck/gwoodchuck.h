@@ -51,28 +51,28 @@ struct gwoodchuck_vtable
 	 gwoodchuck_stream_update_failed should be called, as appropriate.
 	 Also, any new objects should be registered using
 	 gwoodchuck_object_register.  If any objects were delivered
-	 inline, then gwoodchuck_object_downloaded should also be called
+	 inline, then gwoodchuck_object_transferred should also be called
 	 on them.
 
-	 Return 0 if the download will proceed.  Otherwise, return the
-	 number of seconds to wait before the download should be
+	 Return 0 if the transfer will proceed.  Otherwise, return the
+	 number of seconds to wait before the transfer should be
 	 retried.  */
       uint32_t (*stream_update) (const char *stream_identifier,
 				 gpointer user_data);
 
-      /* Download the object identifier by STREAM_IDENTIFIER and
+      /* Transfer the object identifier by STREAM_IDENTIFIER and
 	 OBJECT_IDENTIFIER.  TARGET_QUALITY is a value from 1 to 5.  5
-	 means to download the best version, 1 means to download the
+	 means to transfer the best version, 1 means to transfer the
 	 version with the lowest-acceptable quality.
 
-	 On completion, gwoodchuck_object_downloaded or
-	 gwoodchuck_object_download_failed should be called, as
+	 On completion, gwoodchuck_object_transferred or
+	 gwoodchuck_object_transfer_failed should be called, as
 	 appropriate.
 
-	 Return 0 if the download will proceed.  Otherwise, return the
-	 number of seconds to wait before the download should be
+	 Return 0 if the transfer will proceed.  Otherwise, return the
+	 number of seconds to wait before the transfer should be
 	 retried.  */
-      uint32_t (*object_download) (const char *stream_identifier,
+      uint32_t (*object_transfer) (const char *stream_identifier,
 				   const char *object_identifier,
 				   uint32_t target_quality,
 				   gpointer user_data);
@@ -232,9 +232,9 @@ extern gboolean gwoodchuck_stream_unregister (GWoodchuck *wc,
 
    EXPECTED_TRANSFER_DOWN is the expected download size.
 
-   DOWNLOAD_FREQUENCY is how often the object should be updated (i.e.,
+   TRANSFER_FREQUENCY is how often the object should be updated (i.e.,
    the desired freshness), in seconds.  If the object is immutable,
-   this should be set to 0, meaning that the object will be downloaded
+   this should be set to 0, meaning that the object will be transferred
    at most once.  */
 extern gboolean gwoodchuck_object_register (GWoodchuck *wc,
 					    const char *stream_identifier,
@@ -243,7 +243,7 @@ extern gboolean gwoodchuck_object_register (GWoodchuck *wc,
 					    int64_t expected_size,
 					    uint64_t expected_transfer_up,
 					    uint64_t expected_transfer_down,
-					    uint32_t download_frequency,
+					    uint32_t transfer_frequency,
 					    GError **error);
 
 /* Unregister the object.  (This does not actually remove any files,
@@ -253,38 +253,38 @@ extern gboolean gwoodchuck_object_unregister (GWoodchuck *wc,
 					      const char *object_identifier,
 					      GError **error);
 
-/* Mark the object as having been downloaded.  If the object is not
+/* Mark the object as having been transferred.  If the object is not
    know, it is registered (using OBJECT_IDENTIFIER as the human
-   readable name and assuming an immutable, i.e., one-show download,
+   readable name and assuming an immutable, i.e., one-shot transfer,
    object).  */
-extern gboolean gwoodchuck_object_downloaded
+extern gboolean gwoodchuck_object_transferred
   (GWoodchuck *wc, const char *stream_identifier, const char *object_identifier,
    uint32_t indicator_mask, uint64_t object_size,
-   uint32_t download_duration, const char *filename,
+   uint32_t transfer_duration, const char *filename,
    uint32_t deletion_policy, GError **error);
 
-struct gwoodchuck_object_downloaded_file
+struct gwoodchuck_object_transferred_file
 {
   const char *filename;
   gboolean dedicated;
   enum woodchuck_deletion_policy deletion_policy;
 };
 
-/* Mark the object as having been downloaded, full version.  */
-extern gboolean gwoodchuck_object_downloaded_full
+/* Mark the object as having been transferred, full version.  */
+extern gboolean gwoodchuck_object_transferred_full
   (GWoodchuck *wc, const char *stream_identifier, const char *object_identifier,
    uint32_t indicator_mask, uint64_t transferred_up, uint64_t transferred_down,
-   uint64_t download_time, uint32_t download_duration, uint64_t object_size,
-   struct gwoodchuck_object_downloaded_file *files, int files_count,
+   uint64_t transfer_time, uint32_t transfer_duration, uint64_t object_size,
+   struct gwoodchuck_object_transferred_file *files, int files_count,
    GError **error);
 
-extern gboolean gwoodchuck_object_download_failed
+extern gboolean gwoodchuck_object_transfer_failed
   (GWoodchuck *wc, const char *stream_identifier, const char *object_identifier,
    uint32_t reason, uint32_t transferred, GError **error);
 
-/* Return the desirability of downloading the object identified by
+/* Return the desirability of transferring the object identified by
    OBJECT_IDENTIFIER right now.  */
-extern gboolean gwoodchuck_object_download_desirability
+extern gboolean gwoodchuck_object_transfer_desirability
 (GWoodchuck *wc, const char *stream_identifier, const char *object_identifier,
  int *desirability, GError **error);
 

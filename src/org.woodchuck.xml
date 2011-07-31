@@ -60,8 +60,8 @@
       <arg name="Managers" type="a(sss)" direction="out"/>
     </method>
 
-    <!-- Evaluate the desirability of executing a download right now.  -->
-    <method name="DownloadDesirability">
+    <!-- Evaluate the desirability of executing a transfer right now.  -->
+    <method name="TransferDesirability">
       <!-- The type of request:
 
 	   * 1: User initiated
@@ -83,7 +83,7 @@
 	  * 9: Now is ideal.
 	-->
       <arg name="Desirability" type="u" direction="out"/>
-      <!-- The version to download as an index into the passed
+      <!-- The version to transfer as an index into the passed
            Versions array.  -1 means do not download anything.  -->
       <arg name="Version" type="u" direction="out"/>
     </method>

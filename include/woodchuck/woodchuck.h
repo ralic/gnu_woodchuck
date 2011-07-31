@@ -90,21 +90,21 @@ woodchuck_error_to_error (enum woodchuck_error error)
     }
 }
 
-enum woodchuck_download_status
+enum woodchuck_transfer_status
   {
-    WOODCHUCK_DOWNLOAD_SUCCESS = 0,
+    WOODCHUCK_TRANSFER_SUCCESS = 0,
     /* An unspecified transient error occured.  */
-    WOODCHUCK_DOWNLOAD_FAILURE_TRANSIENT = 0x100,
+    WOODCHUCK_TRANSFER_FAILURE_TRANSIENT = 0x100,
     /* A network error occured and the server could not be
        reached.  */
-    WOODCHUCK_DOWNLOAD_TRANSIENT_NETWORK = 0x101,
+    WOODCHUCK_TRANSFER_TRANSIENT_NETWORK = 0x101,
     /* The transfer was interrupted.  */
-    WOODCHUCK_DOWNLOAD_TRANSIENT_INTERRUPTED = 0x102,
+    WOODCHUCK_TRANSFER_TRANSIENT_INTERRUPTED = 0x102,
 
     /* An unspecified hard failure occured.  */
-    WOODCHUCK_DOWNLOAD_FAILURE = 0x200,
+    WOODCHUCK_TRANSFER_FAILURE = 0x200,
     /* The file disappeared.  */
-    WOODCHUCK_DOWNLOAD_FAILURE_GONE = 0x201,
+    WOODCHUCK_TRANSFER_FAILURE_GONE = 0x201,
   };
 
 enum woodchuck_indicator
