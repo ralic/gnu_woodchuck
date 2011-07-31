@@ -21,6 +21,7 @@ import dbus
 import dbus.service
 import time
 import threading
+from functools import wraps
 
 """A low-level wrapper of the org.woodchuck DBus interfaces."""
 
@@ -258,6 +259,7 @@ def _keys_convert(d, conversion):
 # executed in the same thread.
 _main_thread = None
 def _check_main_thread(f):
+    @wraps(f)
     def wrapper(*args, **kwargs):
         global _main_thread
         if _main_thread is None:
