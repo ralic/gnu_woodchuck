@@ -33,7 +33,7 @@ extern int base_len;
 /* The directory (under the user's home directory) in which we store
    the log file.  */
 #ifndef DOT_DIR
-# define DOT_DIR ".woodchuck"
+# define DOT_DIR .woodchuck
 #endif
 /* The directory's absolute path.  */
 extern char *dot_dir;

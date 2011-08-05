@@ -169,7 +169,7 @@ smart_storage_logger_SOURCES = $(dbus_interfaces_h) $(monitors) \
 	util.h \
 	$(debug_log_to_db_src)
 smart_storage_logger_CPPFLAGS = $(AM_CPPFLAGS) \
-	-DLOG_TO_DB -DDOT_DIR=.smart-storage-logger
+	-DLOG_TO_DB -DDOT_DIR=.smart-storage
 smart_storage_logger_LDADD = $(BASE_LIBS)
 
 smart_storage_logger_recover_SOURCES = \
@@ -178,7 +178,7 @@ smart_storage_logger_recover_SOURCES = \
 	$(debug_log_to_db_src) \
 	util.h
 smart_storage_logger_recover_CPPFLAGS = $(AM_CPPFLAGS) \
-	-DLOG_TO_DB -DDOT_DIR=.smart-storage-logger
+	-DLOG_TO_DB -DDOT_DIR=.smart-storage
 # Needs sqlite, glib and pthreads.
 smart_storage_logger_recover_LDADD = $(BASE_LIBS)
 
@@ -191,7 +191,7 @@ process_tracer_CPPFLAGS = $(AM_CPPFLAGS) -DPROCESS_TRACER_STANDALONE
 process_tracer_LDADD = $(BASE_LIBS)
 
 ssl_tail_SOURCES = ssl-tail.c files.h files.c debug.h util.h
-ssl_tail_CPPFLAGS = $(AM_CPPFLAGS)
+ssl_tail_CPPFLAGS = $(AM_CPPFLAGS) -DDOT_DIR=.smart-storage
 # Needs sqlite.
 ssl_tail_LDADD = $(BASE_LIBS)
 
