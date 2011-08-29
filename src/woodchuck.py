@@ -23,6 +23,10 @@ import time
 import threading
 from functools import wraps
 
+#: Constant that can be passed to :func:`PyWoodchuck.stream_register`
+#: indicating that the stream will never be updated.
+never_updated=2 ** 32 - 1
+
 """A low-level wrapper of the org.woodchuck DBus interfaces."""
 
 class RequestType:

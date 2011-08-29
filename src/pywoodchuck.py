@@ -21,10 +21,6 @@ import woodchuck
 from UserDict import DictMixin
 from weakref import WeakValueDictionary
 
-#: Constant that can be passed to :func:`PyWoodchuck.stream_register`
-#: indicating that the stream will never be updated.
-never_updated=2 ** 32 - 1
-
 def _singleton(cls, identifier, *init_args):
     """
     Ensure that there is only a single instance of a given object type

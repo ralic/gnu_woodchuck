@@ -327,12 +327,6 @@ PyWoodchuck
 .. autoclass:: _Object
     :members: unregister, transferred, transfer_failed, used, files_deleted
 
-Constants
-^^^^^^^^^
-
-.. autodata:: pywoodchuck.never_updated
-
-
 woodchuck
 ---------
 
@@ -388,6 +382,8 @@ Upcall
 
 Constants
 ^^^^^^^^^
+
+.. autodata:: woodchuck.never_updated
 
 .. autoclass:: woodchuck.RequestType
    :members: UserInitiated, ApplicationInitiated
