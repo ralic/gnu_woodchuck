@@ -12,8 +12,9 @@ EXTRA_DIST = debian/rules debian/changelog debian/compat debian/control \
 	debian/pywoodchuck.install \
 	debian/smart-storage-logger.install \
 	debian/woodchuck-doc.install \
+	debian/vcssync.install \
 	\
 	maemo/README maemo/htaccess maemo/smart-storage-logger.install \
 	maemo/woodchuck.install
 
-SUBDIRS = src data include doc
+SUBDIRS = src clients data include doc

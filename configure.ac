@@ -78,8 +78,18 @@ AC_SUBST(BASE_LIBS)
 GLIB_GENMARSHAL=`$PKG_CONFIG glib-2.0 --variable=glib_genmarshal`
 AC_SUBST(GLIB_GENMARSHAL)
 
+
+AS_AC_EXPAND(DATADIR, $datadir)
+DBUS_SERVICES_DIR="$DATADIR/dbus-1/services"
+AC_SUBST(DBUS_SERVICES_DIR)
+AC_DEFINE_UNQUOTED(DBUS_SERVICES_DIR,
+	"$DBUS_SERVICES_DIR",
+	[Where services dir for DBUS is])
+
+
 AC_CONFIG_FILES([Makefile
 		src/Makefile
+		clients/Makefile
 		include/Makefile
 		data/Makefile
 		doc/Makefile])

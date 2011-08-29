@@ -105,3 +105,16 @@ Description: Python bindings for Woodchuck
  This package contains Python modules for accessing a Woodchuck
  server.
 
+Package: vcssync
+Section: net
+Architecture: all
+Priority: optional
+Depends: python, python-dbus
+Recommends: woodchuck, pywoodchuck
+Description: Version control system synchronizer
+ Synchronizes repositories, either fetching or pushing changes.
+ .
+ This package is Woodchuck enabled.  If Woodchuck is installed and running,
+ VCS Sync registers the configured synchronization actions with it thereby
+ causing Woodchuck to automatically start VCS Sync to execute
+ synchronizations when good opportunities arise.

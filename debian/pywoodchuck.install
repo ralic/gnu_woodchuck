@@ -1,1 +1,2 @@
-debian/tmp/usr/lib/python*
+debian/tmp/usr/lib/python*/dist-packages/woodchuck.*
+debian/tmp/usr/lib/python*/dist-packages/pywoodchuck.*
