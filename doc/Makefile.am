@@ -56,7 +56,7 @@ master_doc = $(call sphinx_conf,master_doc).rst
 
 .PHONY: $(foreach target,$(SPHINX_TARGETS),$(target)-builder)
 $(foreach target,$(SPHINX_TARGETS),$(target)-builder): $(master_doc)
-	if test x"$(SPHINX_BUILD)" == x:; \
+	if test x"$(SPHINX_BUILD)" = x:; \
 	then \
 	  echo "Warning: sphinx-builder was not found." \
 	    "Not building $(@:-builder=) documentation."; \
@@ -73,7 +73,7 @@ INDIRECT_FILES = $(pdf_file) $(ps_file) $(dvi_file)
 
 # Create a pdf, ps or dvi file from the generated latex source.
 pdf-builder ps-builder dvi-builder: latex-builder
-	if test x"$(SPHINX_BUILD)" == x:; \
+	if test x"$(SPHINX_BUILD)" = x:; \
 	then \
 	  echo "Warning: sphinx-builder was not found." \
 	    "Not building $(@:-builder=) documentation."; \
@@ -88,9 +88,10 @@ pdf-builder ps-builder dvi-builder: latex-builder
 $(foreach target,$(SPHINX_TARGETS),install-$(target)): install-%: %-builder
 	find $(call builders_loc,$(@:install-%=%)) -type f| while read -r file; \
 	do \
-	  if ! echo "$$file" | grep -q -e "$(@:install-%=%)/.buildinfo$$"; \
+	  if ! echo "$$file" | grep "$(@:install-%=%)/.buildinfo$$" >/dev/null; \
 	  then \
-	    $(INSTALL_DATA) -D $$file $(DESTDIR)/$(docdir)/$$file; \
+	    $(MKDIR_P) $(DESTDIR)$(docdir); \
+	    $(INSTALL_DATA) $$file $(DESTDIR)$(docdir)/$$file; \
 	  fi; \
 	done
 
