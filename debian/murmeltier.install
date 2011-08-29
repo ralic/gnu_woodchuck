@@ -1,1 +1,2 @@
 debian/tmp/usr/bin/murmeltier
+debian/tmp/usr/share/dbus-1/services/org.woodchuck.service

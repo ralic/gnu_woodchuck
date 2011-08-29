@@ -1,9 +1,29 @@
+EXTRA_DIST =
+BUILT_SOURCES =
+CLEANFILES =
+
+do_subst = sed -e 's,[@]bindir[@],$(bindir),g'
+
 bin_PROGRAMS = murmeltier smart-storage-logger smart-storage-logger-recover \
 	process-tracer ssl-tail gwoodchuck
 bin_SCRIPTS = smart-storage-logger-consent
+CLEANFILES += $(bin_SCRIPTS)
 
 lib_LTLIBRARIES = libgwoodchuck-0.0.la
 python_PYTHON = woodchuck.py pywoodchuck.py
+
+# DBus service files
+servicedir = $(DBUS_SERVICES_DIR)
+service_in_files = org.woodchuck.service.in
+service_DATA = $(service_in_files:.service.in=.service)
+
+EXTRA_DIST += $(service_in_files)
+CLEANFILES += $(service_DATA)
+
+# Rule to make the service file with bindir expanded
+$(service_DATA): $(service_in_files) Makefile
+	$(do_subst) < "$<" > "$@"
+
 
 # Turn a python program into a program.
 %: %.py
@@ -12,9 +32,6 @@ python_PYTHON = woodchuck.py pywoodchuck.py
 AM_CFLAGS = -Wall -g -O2 -std=gnu99 $(BASE_CFLAGS)
 AM_CPPFLAGS = -D_GNU_SOURCE -D_FILE_OFFSET_BITS=64 \
 	-DPKGDATADIR=\"$(pkgdatadir)\" -I$(top_srcdir)/include
-
-EXTRA_DIST =
-BUILT_SOURCES =
 
 # DBus interfaces.
 dbus_interfaces_xml = \
