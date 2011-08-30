@@ -1,10 +1,15 @@
 #! /bin/sh
 
-stop smart-storage-logger
-if test x"$1" != "xupgrade"
+# Maemo specific.
+if test -e /etc/dpkg/origins/maemo
 then
-    echo Removing /home/user/.smart-storage/consent
-    rm -f /home/user/.smart-storage/consent
+    stop smart-storage-logger
+
+    if test x"$1" != "xupgrade"
+    then
+        echo Removing /home/user/.smart-storage/consent
+        rm -f /home/user/.smart-storage/consent
+    fi
 fi
 
 #DEBHELPER#

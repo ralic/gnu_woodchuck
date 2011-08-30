@@ -1,5 +1,9 @@
 #! /bin/sh
 
-stop murmeltier
+# Maemo specific.
+if test -e /etc/dpkg/origins/maemo
+then
+    stop murmeltier
+fi
 
 #DEBHELPER#

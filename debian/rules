@@ -4,14 +4,19 @@ include /usr/share/cdbs/1/rules/debhelper.mk
 include /usr/share/cdbs/1/class/autotools.mk
 
 binary-post-install/smart-storage-logger::
-	# Maemo's version of dh_installinit is too old to automate this for us.
-	mkdir -p debian/smart-storage-logger/etc/event.d
-	cp debian/smart-storage-logger-maemo.upstart \
-		debian/smart-storage-logger/etc/event.d/smart-storage-logger
+	# Maemo 5 doesn't appear to include dpkg-vendor, but does have
+	# /etc/dpkg/origins/maemo.  Also, Maemo's version of
+	# dh_installinit is too old to automate this for us.
+	if test -e /etc/dpkg/origins/maemo; then \
+	  mkdir -p debian/smart-storage-logger/etc/event.d; \
+	  cp debian/smart-storage-logger-maemo.upstart \
+		debian/smart-storage-logger/etc/event.d/smart-storage-logger; \
+	fi
 
 binary-post-install/murmeltier::
-	# Maemo's version of dh_installinit is too old to automate this for us.
-	mkdir -p debian/murmeltier/etc/event.d
-	cp debian/murmeltier-maemo.upstart \
-		debian/murmeltier/etc/event.d/murmeltier
-
+	# See comment above.
+	if test -e /etc/dpkg/origins/maemo; then \
+	  mkdir -p debian/murmeltier/etc/event.d; \
+	  cp debian/murmeltier-maemo.upstart \
+		debian/murmeltier/etc/event.d/murmeltier; \
+	fi

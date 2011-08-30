@@ -17,6 +17,10 @@ then
     fi
 fi
 
-start smart-storage-logger
+# Maemo specific.
+if test -e /etc/dpkg/origins/maemo
+then
+    start smart-storage-logger
+fi
 
 #DEBHELPER#
