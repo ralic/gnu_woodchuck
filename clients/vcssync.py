@@ -240,6 +240,9 @@ def transfer(remote):
 
     directory = os.path.expanduser(remote.directory)
 
+    # This should ensured by the configuration loader.
+    assert remote.sync in ('push', 'pull')
+
     args = None
     if (# git: Look for a .git directory or the usual files in a bare
         # repository.
@@ -253,15 +256,21 @@ def transfer(remote):
             args.append('push')
         elif remote.sync == 'pull':
             args.append('fetch')
-        else:
-            print_and_log("Unsupported sync action: %s" % (str(remote)))
-            return
     
         if remote.remote is not None:
             args.append(remote.remote)
     
         if remote.refs is not None:
             args.append(remote.refs)
+    elif (# Mercurial: Look for a .hg directory
+        os.path.exists(os.path.join(directory, '.hg'))):
+        args = ['/usr/bin/env', 'hg', remote.sync]
+    
+        if remote.refs is not None:
+            args += ("-r", remote.refs)
+
+        if remote.remote is not None:
+            args.append(remote.remote)
     else:
         # Unknown repository.
         print_and_log("%s: %s does not contain a supported repository."
