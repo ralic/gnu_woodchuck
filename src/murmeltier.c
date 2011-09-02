@@ -346,6 +346,7 @@ do_schedule (gpointer user_data)
     const char *stream_cookie = argv[i] ?: ""; i ++;
     const char *manager_uuid = argv[i] ?: ""; i ++;
     const char *manager_cookie = argv[i] ?: ""; i ++;
+    const char *dbus_service_name = argv[i] ?: ""; i ++;
     uint32_t transfer_frequency = argv[i] ? atoi (argv[i]) : 0; i ++;
     uint64_t transfer_time = argv[i] ? atoll (argv[i]) : 0; i ++;
     uint32_t last_trys_status = argv[i] ? atoi (argv[i]) : 0; i ++;
@@ -419,67 +420,99 @@ do_schedule (gpointer user_data)
 	g_string_free (s, TRUE);
       }
 
-    while (list)
+    if (! (list || (dbus_service_name && *dbus_service_name)))
       {
-	struct subscription *s = list->data;
-	list = list->next;
+	debug (3, "No one ready to receive updates for "
+	       "object %s(%s) in stream %s(%s) in manager %s(%s)",
+	       object_uuid, object_cookie,
+	       stream_uuid, stream_cookie, manager_uuid, manager_cookie);
+	return 0;
+      }
 
-	GValueArray *versions = g_value_array_new (7);
+    void inform (DBusGProxy *proxy, const char *handle)
+    {
+      /* We need to build this for each subscriber as the dbus handler
+	 frees the arguments.  */
+      GValueArray *versions = g_value_array_new (7);
 
-	GValue index_value = { 0 };
-	g_value_init (&index_value, G_TYPE_UINT);
-	g_value_set_uint (&index_value, 0);
-	g_value_array_append (versions, &index_value);
+      GValue index_value = { 0 };
+      g_value_init (&index_value, G_TYPE_UINT);
+      g_value_set_uint (&index_value, 0);
+      g_value_array_append (versions, &index_value);
 
 #warning Get the real values from the object_versions table.
-	GValue url_value = { 0 };
-	g_value_init (&url_value, G_TYPE_STRING);
-	g_value_set_static_string (&url_value, "");
-	g_value_array_append (versions, &url_value);
+      GValue url_value = { 0 };
+      g_value_init (&url_value, G_TYPE_STRING);
+      g_value_set_static_string (&url_value, "");
+      g_value_array_append (versions, &url_value);
 
-	GValue expected_size_value = { 0 };
-	g_value_init (&expected_size_value, G_TYPE_INT64);
-	g_value_set_int64 (&expected_size_value, 0);
-	g_value_array_append (versions, &expected_size_value);
+      GValue expected_size_value = { 0 };
+      g_value_init (&expected_size_value, G_TYPE_INT64);
+      g_value_set_int64 (&expected_size_value, 0);
+      g_value_array_append (versions, &expected_size_value);
 
-	GValue expected_transfer_up_value = { 0 };
-	g_value_init (&expected_transfer_up_value, G_TYPE_UINT64);
-	g_value_set_uint64 (&expected_transfer_up_value, 0);
-	g_value_array_append (versions, &expected_transfer_up_value);
+      GValue expected_transfer_up_value = { 0 };
+      g_value_init (&expected_transfer_up_value, G_TYPE_UINT64);
+      g_value_set_uint64 (&expected_transfer_up_value, 0);
+      g_value_array_append (versions, &expected_transfer_up_value);
 
-	GValue expected_transfer_down_value = { 0 };
-	g_value_init (&expected_transfer_down_value, G_TYPE_UINT64);
-	g_value_set_uint64 (&expected_transfer_down_value, 0);
-	g_value_array_append (versions, &expected_transfer_down_value);
+      GValue expected_transfer_down_value = { 0 };
+      g_value_init (&expected_transfer_down_value, G_TYPE_UINT64);
+      g_value_set_uint64 (&expected_transfer_down_value, 0);
+      g_value_array_append (versions, &expected_transfer_down_value);
 
-	GValue utility_value = { 0 };
-	g_value_init (&utility_value, G_TYPE_UINT);
-	g_value_set_uint (&utility_value, 1);
-	g_value_array_append (versions, &utility_value);
+      GValue utility_value = { 0 };
+      g_value_init (&utility_value, G_TYPE_UINT);
+      g_value_set_uint (&utility_value, 1);
+      g_value_array_append (versions, &utility_value);
 
-	GValue use_simple_transferer_value = { 0 };
-	g_value_init (&use_simple_transferer_value, G_TYPE_BOOLEAN);
-	g_value_set_boolean (&use_simple_transferer_value, FALSE);
-	g_value_array_append (versions, &use_simple_transferer_value);
+      GValue use_simple_transferer_value = { 0 };
+      g_value_init (&use_simple_transferer_value, G_TYPE_BOOLEAN);
+      g_value_set_boolean (&use_simple_transferer_value, FALSE);
+      g_value_array_append (versions, &use_simple_transferer_value);
 
-	GError *error = NULL;
-	if (! (org_woodchuck_upcall_object_transfer
-	       (s->proxy, manager_uuid, manager_cookie,
-		stream_uuid, stream_cookie, object_uuid, object_cookie,
-		versions, "", 5, &error)))
+      GError *error = NULL;
+      if (! (org_woodchuck_upcall_object_transfer
+	     (proxy, manager_uuid, manager_cookie,
+	      stream_uuid, stream_cookie, object_uuid, object_cookie,
+	      versions, "", 5, &error)))
+	{
+	  debug (0, "Executing org_woodchuck_upcall_object_transfer "
+		 "(%s, %s, %s, %s, %s, %s, %s, [], '', 5) upcall failed: %s",
+		 handle, manager_uuid, manager_cookie,
+		 stream_uuid, stream_cookie,
+		 object_uuid, object_cookie,
+		 error ? error->message : "<Unknown>");
+
+	  if (error)
+	    g_error_free (error);
+	  error = NULL;
+	}
+    }
+
+    if (! list && dbus_service_name && *dbus_service_name)
+      {
+	DBusGProxy *proxy = dbus_g_proxy_new_for_name
+	  (mt->session_bus, dbus_service_name,
+	   "/org/woodchuck", "org.woodchuck.start");
+	if (proxy)
 	  {
-	    debug (0, "Executing org_woodchuck_upcall_object_transfer "
-		   "(%s, %s, %s, %s, %s, %s, %s, [], '', 5) upcall failed: %s",
-		   s->handle, manager_uuid, manager_cookie,
-		   stream_uuid, stream_cookie,
-		   object_uuid, object_cookie,
-		   error ? error->message : "<Unknown>");
-
-	    if (error)
-	      g_error_free (error);
-	    error = NULL;
+	    debug (3, "Starting %s", dbus_service_name);
+	    inform (proxy, "START");
+	    g_object_unref (proxy);
 	  }
+	else
+	  debug (0, "Failed to create a DBus proxy object for %s",
+		 dbus_service_name);
       }
+    else
+      while (list)
+	{
+	  struct subscription *s = list->data;
+	  list = list->next;
+
+	  inform (s->proxy, s->handle);
+	}
 
     return 0;
   }
@@ -488,7 +521,7 @@ do_schedule (gpointer user_data)
     (db,
      "select objects.uuid, objects.cookie,"
      "  streams.uuid, streams.cookie,"
-     "  streams.parent_uuid, managers.cookie,"
+     "  streams.parent_uuid, managers.cookie, managers.DBusServiceName,"
      "  objects.TransferFrequency, object_instance_status.transfer_time,"
      "  object_instance_status.status,"
      "  objects.TriggerTarget, objects.TriggerEarliest, objects.TriggerLatest,"
