@@ -1,0 +1,37 @@
+#! /bin/sh
+#
+# Woodchuck is free software; you can redistribute it and/or
+# modify it under the terms of the GNU General Public License as
+# published by the Free Software Foundation; either version 3, or (at
+# your option) any later version.
+#
+# Woodchuck is distributed in the hope that it will be useful,
+# but WITHOUT ANY WARRANTY; without even the implied warranty of
+# MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU
+# General Public License for more details.
+#
+# You should have received a copy of the GNU General Public License
+# along with this program; if not, write to the Free Software
+# Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111, USA.
+
+if test "x$HOME" = x
+then
+  echo "\$HOME variable unset."
+  exit 0
+fi
+
+# Don't start if the no-auto-start file is present.
+if test -e "$HOME/.murmeltier/no-auto-start"
+then
+  echo "Not auto-starting."
+  exit 0
+fi
+
+# Don't start if Murmeltier has never been run before.
+if ! test -d "$HOME/.murmeltier"
+then
+  echo "murmeltier has never been run before, not auto-starting."
+  exit 0
+fi
+
+@bindir@/murmeltier &

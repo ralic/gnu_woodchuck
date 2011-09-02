@@ -1,2 +1,3 @@
 debian/tmp/usr/bin/murmeltier
 debian/tmp/usr/share/dbus-1/services/org.woodchuck.service
+debian/tmp/etc/X11/Xsession.d/98murmeltier-xsession.sh

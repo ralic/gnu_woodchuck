@@ -24,6 +24,18 @@ CLEANFILES += $(service_DATA)
 $(service_DATA): $(service_in_files) Makefile
 	$(do_subst) < "$<" > "$@"
 
+# X11 Xsession.d files.
+xsessiondir = $(XSESSION_D_DIR)
+xsession_in_files = 98murmeltier-xsession.sh.in
+xsession_DATA = $(xsession_in_files:.in=)
+
+EXTRA_DIST += $(xsession_in_files)
+CLEANFILES += $(xsession_DATA)
+
+# Rule to make the service file with bindir expanded
+$(xsession_DATA): $(xsession_in_files) Makefile
+	$(do_subst) < "$<" > "$@"
+
 
 # Turn a python program into a program.
 %: %.py

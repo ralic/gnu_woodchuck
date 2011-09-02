@@ -101,6 +101,9 @@
 /* Version number of package */
 #undef VERSION
 
+/* X11's xsession.d directory. */
+#undef XSESSION_D_DIR
+
 /* Define to 1 if on MINIX. */
 #undef _MINIX
 

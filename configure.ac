@@ -86,6 +86,12 @@ AC_DEFINE_UNQUOTED(DBUS_SERVICES_DIR,
 	"$DBUS_SERVICES_DIR",
 	[Where services dir for DBUS is])
 
+AS_AC_EXPAND(SYSCONFDIR, $sysconfdir)
+XSESSION_D_DIR="$SYSCONFDIR/X11/Xsession.d"
+AC_SUBST(XSESSION_D_DIR)
+AC_DEFINE_UNQUOTED(XSESSION_D_DIR,
+	"$XSESSION_D_DIR",
+	[X11's xsession.d directory.])
 
 AC_CONFIG_FILES([Makefile
 		src/Makefile
