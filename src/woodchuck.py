@@ -394,7 +394,7 @@ class _Object(_BaseObject):
             _dbus_exception_to_woodchuck_exception (exception)
 
         if ret:
-            del _objects[self.properties['UUID']]
+            del _objects[self.UUID]
 
     @_check_main_thread
     def transfer(self, request_type):
@@ -660,7 +660,7 @@ class _Stream(_BaseObject):
             _dbus_exception_to_woodchuck_exception (exception)
 
         if ret:
-            del _streams[self.properties['UUID']]
+            del _streams[self.UUID]
 
     @_check_main_thread
     def object_register(self, only_if_cookie_unique=True, **properties):
@@ -700,7 +700,7 @@ class _Stream(_BaseObject):
         """
         try:
             return [Object(UUID=UUID, human_readable_name=human_readable_name,
-                           cookie=cookie, parent_UUID=self.properties['UUID'])
+                           cookie=cookie, parent_UUID=self.UUID)
                     for UUID, cookie, human_readable_name
                     in self.dbus.ListObjects ()]
         except dbus.exceptions.DBusException, exception:
@@ -719,7 +719,7 @@ class _Stream(_BaseObject):
         """
         try:
             return [Object(UUID=UUID, human_readable_name=human_readable_name,
-                           cookie=cookie, parent_UUID=self.properties['UUID'])
+                           cookie=cookie, parent_UUID=self.UUID)
                     for UUID, human_readable_name
                     in self.dbus.LookupObjectByCookie (cookie)]
         except dbus.exceptions.DBusException, exception:
@@ -906,7 +906,7 @@ class _Manager(_BaseObject):
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
         if ret:
-            del _managers[self.properties['UUID']]
+            del _managers[self.UUID]
 
     @_check_main_thread
     def manager_register(self, only_if_cookie_unique=True,
@@ -1050,7 +1050,7 @@ class _Manager(_BaseObject):
         """
         try:
             return [Stream(UUID=UUID, human_readable_name=human_readable_name,
-                           cookie=cookie, parent_UUID=self.properties['UUID'])
+                           cookie=cookie, parent_UUID=self.UUID)
                     for UUID, cookie, human_readable_name
                     in self.dbus.ListStreams ()]
         except dbus.exceptions.DBusException, exception:
@@ -1069,7 +1069,7 @@ class _Manager(_BaseObject):
         """
         try:
             return [Stream(UUID=UUID, human_readable_name=human_readable_name,
-                           cookie=cookie, parent_UUID=self.properties['UUID'])
+                           cookie=cookie, parent_UUID=self.UUID)
                     for UUID, human_readable_name
                     in self.dbus.LookupStreamByCookie (cookie)]
         except dbus.exceptions.DBusException, exception:
