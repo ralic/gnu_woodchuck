@@ -294,7 +294,7 @@ do_schedule (gpointer user_data)
       {
 	DBusGProxy *proxy = dbus_g_proxy_new_for_name
 	  (mt->session_bus, dbus_service_name,
-	   "/org/woodchuck", "org.woodchuck.start");
+	   "/org/woodchuck", "org.woodchuck.upcall");
 	if (proxy)
 	  {
 	    debug (3, "Starting %s", dbus_service_name);
@@ -494,7 +494,7 @@ do_schedule (gpointer user_data)
       {
 	DBusGProxy *proxy = dbus_g_proxy_new_for_name
 	  (mt->session_bus, dbus_service_name,
-	   "/org/woodchuck", "org.woodchuck.start");
+	   "/org/woodchuck", "org.woodchuck.upcall");
 	if (proxy)
 	  {
 	    debug (3, "Starting %s", dbus_service_name);
