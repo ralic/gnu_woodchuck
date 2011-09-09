@@ -1878,7 +1878,7 @@ woodchuck_object_transfer_status
      "   %"PRId32", %"PRId64", %"PRId64", %"PRId64", %"PRId32","
      "   %"PRId64", %"PRId32");\n"
      "%s"
-     "update objects set instance = %d where uuid = %s;"
+     "update objects set instance = %d, NeedUpdate = 0 where uuid = %s;"
      "end transaction;",
      NULL, NULL, &errmsg,
      object, instance, stream, status, transferred_up, transferred_down,
