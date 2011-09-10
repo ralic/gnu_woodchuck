@@ -319,6 +319,8 @@ static const char *arg0_blacklist[] =
     "/usr/bin/hildon-application-manager",
     "/usr/bin/osso-xterm",
     "/usr/bin/osso_calculator",
+    "/usr/lib/tracker/trackerd",
+    "/usr/lib/tracker/tracker-extract"
 #else
     /* Standard program in a GNOME session we can ignore (at least in
        Debian).  */
