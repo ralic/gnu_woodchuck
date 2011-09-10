@@ -22,6 +22,8 @@ import dbus.service
 import time
 import threading
 from functools import wraps
+import logging
+logger = logging.getLogger(__name__)
 
 #: Constant that can be passed to :func:`PyWoodchuck.stream_register`
 #: indicating that the stream will never be updated.
@@ -1346,8 +1348,8 @@ def _is_woodchuck(name):
                           "(should start with ':')") % (name,))
 
     if name != _woodchuck_owner:
-        print ("Message from %s, expected message from %s" \
-                   % (name, _woodchuck_owner))
+        logger.debug("Message from %s, expected message from %s"
+                     % (name, _woodchuck_owner))
 
     return name == _woodchuck_owner
 
