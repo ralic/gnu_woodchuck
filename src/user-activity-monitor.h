@@ -64,22 +64,37 @@ struct _WCUserActivityMonitorClass
 {
   GObjectClass parent;
 
-  /* "idle-active" signal: The user has either become idle or active.
-     Takes two parameters: the user's new state (either WC_USER_IDLE
-     or WC_USER_ACTIVE), an integer, and the time in milliseconds
-     spent in the previous state or, if unknown, -1, an int64_t.  */
+  /* "user-idle-active" signal: The user has either become idle or
+     active.  Takes two parameters: the user's new state (either
+     WC_USER_IDLE or WC_USER_ACTIVE), an integer, and the amount of
+     time (in milliseconds) spent in the previous state or, if
+     unknown, -1, an int64_t.
+
+       void user_idle_active (WCUserActivityMonitor *m,
+                              gboolean idle, int64_t time_in_previous_state,
+                              gpointer user_data)
+  */
   guint idle_active_signal_id;
 };
 
 extern GType wc_user_activity_monitor_get_type (void);
 
-/* Instantiate a idle monitor.  After instantiating, immediately
-   connect to the object's "idle" and "disconnected" signals: existing
-   connections will be created at the next "idle" point.  */
+/* Return a reference to the idle monitor singleton, instantiating it
+   if necessary.  */
 extern WCUserActivityMonitor *wc_user_activity_monitor_new (void);
 
-/* Returns how long the system has been idle (positive) or active
-   (negative), in seconds.  */
-extern int64_t wc_user_activity_monitor_idle_time (WCUserActivityMonitor *m);
+/* Return the user's activity status (idle, active or unknown).  */
+extern enum wc_user_activity_status wc_user_activity_monitor_status
+  (WCUserActivityMonitor *m);
+
+/* Return the time at which the user became idle or active, in
+   milliseconds.  */
+extern int64_t wc_user_activity_monitor_status_time_abs
+  (WCUserActivityMonitor *m);
+
+/* Return how long the user has been idle or active, in
+   milliseconds.  */
+extern int64_t wc_user_activity_monitor_status_time
+  (WCUserActivityMonitor *m);
 
 #endif

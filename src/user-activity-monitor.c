@@ -70,8 +70,9 @@ struct _WCUserActivityMonitor
   DBusGProxy *consolekit_proxy;
 #endif
 
-  /* Whether the device is idle and at what time the device entered
-     that state (as returned by now()).  */
+  /* Whether the user is idle, active or whether this information is
+     unknown and at what time the device entered that state (as
+     returned by now()).  */
   enum wc_user_activity_status idle;
   int64_t time;
 };
@@ -120,12 +121,12 @@ idle_changed (DBusGProxy *proxy, gboolean idle, gpointer user_data)
 
   uint64_t n = now ();
 
-  int64_t old_time;
+  int64_t time_in_previous_state;
   if (n <= m->time)
     /* Time warp?  */
-    old_time = -1;
+    time_in_previous_state = -1;
   else
-    old_time = n - m->time;
+    time_in_previous_state = n - m->time;
 
   m->time = n;
   m->idle = idle ? WC_USER_IDLE : WC_USER_ACTIVE;
@@ -134,7 +135,7 @@ idle_changed (DBusGProxy *proxy, gboolean idle, gpointer user_data)
 		 WC_USER_ACTIVITY_MONITOR_GET_CLASS (m)
 		   ->idle_active_signal_id,
 		 0,
-		 m->idle, old_time);
+		 m->idle, time_in_previous_state);
 }
 
 static void
@@ -240,16 +241,18 @@ wc_user_activity_monitor_status (WCUserActivityMonitor *m)
 }
 
 int64_t
-wc_user_activity_monitor_idle_time (WCUserActivityMonitor *m)
+wc_user_activity_monitor_status_time_abs (WCUserActivityMonitor *m)
 {
   uint64_t n = now ();
 
   if (n <= m->time)
     /* Time warp?  */
-    {
-      m->time = n;
-      return -1;
-    }
-  else
-    return m->time;
+    m->time = n;
+  return m->time;
+}
+
+int64_t
+wc_user_activity_monitor_status_time (WCUserActivityMonitor *m)
+{
+  return now () - wc_user_activity_monitor_status_time_abs (m);
 }

@@ -762,7 +762,7 @@ upload (void)
 /* The time at which we got an acceptable default route.  */
 static uint64_t connected;
 /* The time the user went inactive (0 if the user is active).  */
-static uint64_t inactive;
+static int64_t inactive;
 
 static guint upload_schedule_source_id;
 
@@ -905,9 +905,8 @@ logger_uploader_init (void)
     (nm, NULL, nc_network_monitor_default_connection (nm), NULL);
 
   WCUserActivityMonitor *m = wc_user_activity_monitor_new ();
-  int64_t i = wc_user_activity_monitor_idle_time (m);
-  if (i > 0)
-    inactive = i;
+  if (wc_user_activity_monitor_status (m) != WC_USER_ACTIVE)
+    inactive = wc_user_activity_monitor_status_time_abs (m);
   g_signal_connect (G_OBJECT (m), "user-idle-active",
 		    G_CALLBACK (idle_active), NULL);
 
