@@ -270,8 +270,9 @@ def _check_main_thread(f):
             _main_thread = threading.currentThread()
         else:
             assert _main_thread == threading.currentThread(), \
-                "woodchuck (due to its use of DBus) is not thread-safe. " \
-                + "Fix your code."
+                (("woodchuck (due to its use of DBus) is not thread-safe. "
+                  + "Fix your code (main thread: %s; this thread: %s).")
+                 % (str (_main_thread), str (threading.currentThread())))
         return f(*args, **kwargs)
     return wrapper
 
