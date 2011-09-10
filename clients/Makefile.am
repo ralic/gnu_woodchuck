@@ -1,7 +1,7 @@
 EXTRA_DIST =
 CLEANFILES =
 
-bin_SCRIPTS = vcssync
+bin_SCRIPTS = vcssync woodchuck-cli
 CLEANFILES += $(bin_SCRIPTS)
 
 do_subst = sed -e 's,[@]bindir[@],$(bindir),g' \
@@ -11,9 +11,14 @@ do_subst = sed -e 's,[@]bindir[@],$(bindir),g' \
 vcssync: vcssync.sh Makefile
 	$(do_subst) < "$<" > "$@"
 	chmod +x "$@"
-EXTRA_DIST += vcssync.sh
 
-python_PYTHON = vcssync.py
+woodchuck-cli: woodchuck-cli.sh Makefile
+	$(do_subst) < "$<" > "$@"
+	chmod +x "$@"
+
+EXTRA_DIST += vcssync.sh woodchuck-cli.sh
+
+python_PYTHON = vcssync.py woodchuck-cli.py
 
 # DBus service files
 servicedir = $(DBUS_SERVICES_DIR)
