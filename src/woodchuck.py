@@ -165,8 +165,8 @@ def _dbus_exception_to_woodchuck_exception(exception):
         raise InvalidArgsError (exception.get_dbus_message ())
     elif dbus_name.startswith ("org.woodchuck."):
         raise UnknownError (dbus_name + exception.get_dbus_message ())
-    elif (dbus_name
-          == "org.freedesktop.DBus.Error.ServiceUnknown"):
+    elif (dbus_name == "org.freedesktop.DBus.Error.ServiceUnknown"
+          or dbus_name == "org.freedesktop.DBus.Error.NoReply"):
         raise WoodchuckUnavailableError (exception.get_dbus_message ())
     else:
         raise exception
