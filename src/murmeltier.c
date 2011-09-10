@@ -17,6 +17,7 @@
 
 #include "config.h"
 #include "network-monitor.h"
+#include "user-activity-monitor.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -74,6 +75,8 @@ struct _Murmeltier
   DBusGProxy *dbus_proxy;
 
   NCNetworkMonitor *nm;
+  WCUserActivityMonitor *uam;
+  guint user_really_idling_timeout_id;
 
   DBusGConnection *session_bus;
 
@@ -163,6 +166,8 @@ static guint schedule_id;
 
 static uint64_t last_schedule;
 
+#define IDLE_TIME_BEFORE_SCHEDULE (5 * 60)
+
 static gboolean
 do_schedule (gpointer user_data)
 {
@@ -170,6 +175,36 @@ do_schedule (gpointer user_data)
   if (schedule_id)
     g_source_remove (schedule_id);
   schedule_id = 0;
+
+  switch (wc_user_activity_monitor_status (mt->uam))
+    {
+    case WC_USER_ACTIVE:
+      debug (3, "Not scheduling: User is active.");
+      goto out;
+
+    case WC_USER_IDLE:
+      {
+	int64_t idle_time = wc_user_activity_monitor_status_time (mt->uam);
+	debug (3, "User idle for "TIME_FMT, TIME_PRINTF (idle_time));
+	if (idle_time != -1 && idle_time < IDLE_TIME_BEFORE_SCHEDULE * 1000)
+	  {
+	    debug (3, "Not scheduling: User not idle long enough ("TIME_FMT").",
+		   TIME_PRINTF(IDLE_TIME_BEFORE_SCHEDULE * 1000));
+	    goto out;
+	  }
+
+	/* The user has been idle long enough.  Schedule.  */
+	break;
+      }
+
+    default:
+      /* Active/idle status is Unknown.  Ignore this criterium.  */
+      break;
+    }
+
+  if (mt->user_really_idling_timeout_id)
+    g_source_remove (mt->user_really_idling_timeout_id);
+  mt->user_really_idling_timeout_id = 0;
 
   NCNetworkConnection *dc = nc_network_monitor_default_connection (mt->nm);
   if (! dc)
@@ -632,6 +667,39 @@ default_connection_changed (NCNetworkMonitor *nm,
 {
   schedule ();
 }
+
+static void
+user_idle_active (WCUserActivityMonitor *m,
+		  int activity_status,
+		  int activity_status_previous,
+		  int64_t time_in_previous_state,
+		  gpointer user_data)
+{
+  debug (4, "user became %s (was %s for "TIME_FMT")",
+	 wc_user_activity_status_string (activity_status),
+	 wc_user_activity_status_string (activity_status_previous),
+	 TIME_PRINTF(time_in_previous_state));
+
+  if (activity_status != WC_USER_ACTIVE)
+    /* User is idle or the state is unknown.  Schedule a
+       scheduling.  */
+    {
+      /* When the user becomes active, any pending callback is
+	 cancelled.  */
+      assert (! mt->user_really_idling_timeout_id);
+      mt->user_really_idling_timeout_id
+	= g_timeout_add_seconds (IDLE_TIME_BEFORE_SCHEDULE, do_schedule, NULL);
+    }
+  else
+    /* The user is now active.  */
+    {
+      if (mt->user_really_idling_timeout_id)
+	{
+          g_source_remove (mt->user_really_idling_timeout_id);
+	  mt->user_really_idling_timeout_id = 0;
+	}
+    }
+}
 
 G_DEFINE_TYPE (Murmeltier, murmeltier, G_TYPE_OBJECT);
 
@@ -694,6 +762,11 @@ murmeltier_init (Murmeltier *mt)
 		    G_CALLBACK (disconnected), mt);
   g_signal_connect (G_OBJECT (mt->nm), "default-connection-changed",
 		    G_CALLBACK (default_connection_changed), mt);
+
+  mt->uam = wc_user_activity_monitor_new ();
+
+  g_signal_connect (G_OBJECT (mt->uam), "user-idle-active",
+		    G_CALLBACK (user_idle_active), mt);
 }
 
 static enum woodchuck_error

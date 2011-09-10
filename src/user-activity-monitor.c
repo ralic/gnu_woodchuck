@@ -99,8 +99,9 @@ wc_user_activity_monitor_class_init (WCUserActivityMonitorClass *klass)
 		    G_TYPE_FROM_CLASS (klass),
 		    G_SIGNAL_RUN_FIRST,
 		    0, NULL, NULL,
-		    g_cclosure_user_marshal_VOID__BOOLEAN_INT64,
-		    G_TYPE_NONE, 2, G_TYPE_BOOLEAN, G_TYPE_INT64);
+		    g_cclosure_user_marshal_VOID__INT_INT_INT64,
+		    G_TYPE_NONE,
+		    3, G_TYPE_INT, G_TYPE_INT, G_TYPE_INT64);
 }
 
 static void
@@ -129,13 +130,14 @@ idle_changed (DBusGProxy *proxy, gboolean idle, gpointer user_data)
     time_in_previous_state = n - m->time;
 
   m->time = n;
+  enum wc_user_activity_status old_idle = m->idle;
   m->idle = idle ? WC_USER_IDLE : WC_USER_ACTIVE;
 
   g_signal_emit (m,
 		 WC_USER_ACTIVITY_MONITOR_GET_CLASS (m)
 		   ->idle_active_signal_id,
 		 0,
-		 m->idle, time_in_previous_state);
+		 (int) m->idle, (int) old_idle, time_in_previous_state);
 }
 
 static void

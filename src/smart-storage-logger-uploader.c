@@ -852,11 +852,13 @@ default_connection_changed (NCNetworkMonitor *nm,
 }
 
 static void
-idle_active (WCUserActivityMonitor *m, gboolean idle, int64_t t,
-	     gpointer user_data)
+idle_active (WCUserActivityMonitor *m,
+	     int activity_status,
+	     int activity_status_previous,
+	     int64_t time_in_previous_state, gpointer user_data)
 {
   inactive = 0;
-  if (idle == WC_USER_IDLE)
+  if (activity_status == WC_USER_IDLE)
     {
       inactive = now ();
       upload_schedule (NULL);

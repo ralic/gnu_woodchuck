@@ -71,7 +71,9 @@ struct _WCUserActivityMonitorClass
      unknown, -1, an int64_t.
 
        void user_idle_active (WCUserActivityMonitor *m,
-                              gboolean idle, int64_t time_in_previous_state,
+                              int user_activity_status,
+                              int user_activity_status_previous,
+			      int64_t time_in_previous_state,
                               gpointer user_data)
   */
   guint idle_active_signal_id;
