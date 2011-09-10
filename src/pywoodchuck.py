@@ -775,12 +775,12 @@ class PyWoodchuck(DictMixin):
         In order to process upcalls, **your application must use a
         main loop**.  Moreover, DBus must know about the main loop.
         If you are using glib, **before accessing the session bus**,
-        run:
+        run::
 
           from dbus.mainloop.glib import DBusGMainLoop
           DBusGMainLoop(set_as_default=True)
 
-        or, if you are using Qt, run:
+        or, if you are using Qt, run::
       
           from dbus.mainloop.qt import DBusQtMainLoop
           DBusQtMainLoop(set_as_default=True)
@@ -1020,6 +1020,9 @@ class PyWoodchuck(DictMixin):
         If the Woodchuck daemon is not available, all other methods
         will raise a :exc:`woodchuck.WoodchuckUnavailableError`.
 
+        Note:: Unlike nearly all other functions in pywoodchuck, this
+            function is thread safe.
+
         Example::
 
             import pywoodchuck
@@ -1056,9 +1059,10 @@ class PyWoodchuck(DictMixin):
             :func:`PyWoodchuck.stream_update_cb` will be called.)
             Woodchuck interprets 0 as meaning there are no freshness
             requirements and it is completely free to choose when to
-            update the stream.  A value of :data:`never_updated` is
-            interpretted as meaning that the stream is never updated
-            and thus calling.
+            update the stream.  A value of
+            :data:`woodchuck.never_updated` is interpretted as meaning
+            that the stream is never updated and
+            :func:`PyWoodchuck.stream_update_cb` will never be called.
 
         :returns: Returns a :class:`_Stream` instance.
 
