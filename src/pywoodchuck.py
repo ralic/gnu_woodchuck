@@ -432,8 +432,7 @@ class _Stream(_BaseObject, DictMixin):
         self[object_identifier].unregister ()
 
     def keys(self):
-        for o in self.llobject.list_objects ():
-            yield o.cookie
+        return [o.cookie for o in self.llobject.list_objects ()]
 
     def __len__(self):
         return len (self.llobject.list_objects ())
@@ -670,8 +669,7 @@ class _Stream(_BaseObject, DictMixin):
 
             del w["stream identifier"]
         """
-        for o in self.llobject.list_objects ():
-            yield Object (self, o)
+        return [Object (self, o) for o in self.llobject.list_objects()]
 
     def object_transferred(self, object_identifier, *args, **kwargs):
         """Tell Woodchuck that an object was successfully transferred.
@@ -1010,8 +1008,7 @@ class PyWoodchuck(DictMixin):
         self[stream_identifier].unregister ()
 
     def keys(self):
-        for s in self.manager.list_streams ():
-            yield s.cookie
+        return [s.cookie for s in self.manager.list_streams ()]
 
     def __len__(self):
         return len (self.manager.list_streams ())
@@ -1119,8 +1116,7 @@ class PyWoodchuck(DictMixin):
                     print "%s: %s" % (s.human_readable_name, s.identifier)
                     del w[s.identifier]
         """
-        for s in self.values ():
-            yield s
+        return self.values()
 
     def stream_unregister(self, stream_identifier):
         """
