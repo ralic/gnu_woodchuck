@@ -257,7 +257,7 @@ do_schedule (gpointer user_data)
 	   "(transfer_time: "TIME_FMT"; freshness: "TIME_FMT")",
 	   manager_cookie, stream_cookie,
 	   TIME_PRINTF (1000 * timeleft),
-	   TIME_PRINTF (transfer_time * 1000 - n),
+	   TIME_PRINTF (transfer_time == 0 ? 0 : transfer_time * 1000 - n),
 	   TIME_PRINTF (freshness * 1000));
 
     GSList *list = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
@@ -394,7 +394,8 @@ do_schedule (gpointer user_data)
     debug (4, "Considering object %s(%s): transfer_time: "TIME_FMT";"
 	   " last_trys_status: %"PRId32"; transfer_frequency: %"PRId32";"
 	   " need update: %s",
-	   object_uuid, object_cookie, TIME_PRINTF (transfer_time),
+	   object_uuid, object_cookie,
+	   TIME_PRINTF (transfer_time == 0 ? 0 : transfer_time * 1000 - n),
 	   last_trys_status, transfer_frequency,
 	   need_update ? "true" : "false");
 
@@ -598,6 +599,8 @@ schedule (void)
   /* Minimum interval: 2 minutes.  But at least 10 sec to aggregate
      multiple events.  */
   int delay = MAX (10, 120LL - last_schedule_delta);
+  debug (3, "Running scheduler in %d seconds (last schedule delta: %"PRId64")",
+	 delay, last_schedule_delta);
 
   schedule_id = g_timeout_add_seconds (delay, do_schedule, NULL);
 }
