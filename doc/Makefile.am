@@ -90,8 +90,7 @@ $(foreach target,$(SPHINX_TARGETS),install-$(target)): install-%: %-builder
 	do \
 	  if ! echo "$$file" | grep "$(@:install-%=%)/.buildinfo$$" >/dev/null; \
 	  then \
-	    $(MKDIR_P) $(DESTDIR)$(docdir); \
-	    $(INSTALL_DATA) $$file $(DESTDIR)$(docdir)/$$file; \
+	    $(INSTALL_DATA) -D $$file $(DESTDIR)$(docdir)/$$file; \
 	  fi; \
 	done
 
