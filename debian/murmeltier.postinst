@@ -3,6 +3,11 @@
 # Maemo specific.
 if test -e /etc/dpkg/origins/maemo
 then
+    if killall murmeltier
+    then
+	sleep 3
+	killall -9 murmeltier || true
+    fi
     start murmeltier
 fi
 
