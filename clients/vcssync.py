@@ -585,7 +585,7 @@ def register(remote):
     except woodchuck.ObjectExistsError:
         pass
 
-    freshness = remote.freshness * 24 * 60 * 60
+    freshness = remote.freshness * 60 * 60
     try:
         wc[id].object_register(human_readable_name=id,
                                object_identifier=id,
