@@ -1,5 +1,5 @@
 debian/tmp/usr/bin/murmeltier
 debian/tmp/usr/share/dbus-1/services/org.woodchuck.service
 debian/tmp/etc/X11/Xsession.d/98murmeltier-xsession.sh
-debian/tmp/usr/lib/python*/dist-packages/woodchuck-cli.*
+debian/tmp/usr/lib/python*/*-packages/woodchuck-cli.*
 debian/tmp/usr/bin/woodchuck-cli
