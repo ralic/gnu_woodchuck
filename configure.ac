@@ -93,6 +93,12 @@ AC_DEFINE_UNQUOTED(XSESSION_D_DIR,
 	"$XSESSION_D_DIR",
 	[X11's xsession.d directory.])
 
+SUDOERS_D_DIR="$SYSCONFDIR/sudoers.d"
+AC_SUBST(SUDOERS_D_DIR)
+AC_DEFINE_UNQUOTED(SUDOERS_D_DIR,
+	"$SUDOERS_D_DIR",
+	[sudo's sudoers.d directory.])
+
 AC_CONFIG_FILES([Makefile
 		src/Makefile
 		clients/Makefile

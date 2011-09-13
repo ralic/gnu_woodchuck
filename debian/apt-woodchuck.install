@@ -1,0 +1,4 @@
+debian/tmp/usr/lib/python*/*-packages/apt-woodchuck.*
+debian/tmp/usr/bin/apt-woodchuck
+debian/tmp/usr/share/dbus-1/services/org.woodchuck.apt-woodchuck.service
+debian/tmp/etc/sudoers.d/apt-woodchuck.sudoers

@@ -1,0 +1,9 @@
+[install]
+catalogues = hssl
+package = apt-woodchuck
+
+[hssl]
+name = hssl.cs.jhu.edu
+uri = http://hssl.cs.jhu.edu/~neal/woodchuck
+components = maemo
+
