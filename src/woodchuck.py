@@ -176,14 +176,36 @@ def _dbus_exception_to_woodchuck_exception(exception):
 # The default amount of time to cache values.
 _ttl = 1
 
+def _str_to_dbus_str(s, strict=False):
+    """
+    Given a string, do our best to turn it into a unicode compatible
+    object.
+    """
+    if issubclass(s.__class__, unicode):
+        # It's already unicode, no problem.
+        return s
+
+    # It's not unicode.  Convert it to a unicode string.
+    try:
+        return unicode(s)
+    except UnicodeEncodeError:
+        logger.exception("Failed to convert '%s' to unicode" % s)
+        if strict:
+            raise
+        else:
+            return unicode(s, errors='replace')
+
+def _str_to_dbus_str_strict(s):
+    return _str_to_dbus_str(s, strict=True)
+
 _manager_properties_to_camel_case = \
-    dict ({"UUID": ("UUID", dbus.UTF8String, "", float("inf")),
-           "parent_UUID": ("ParentUUID", dbus.UTF8String, "", float("inf")),
-           "human_readable_name": ("HumanReadableName", dbus.UTF8String, "",
-                                   _ttl),
-           "cookie": ("Cookie", dbus.UTF8String, "", _ttl),
-           "dbus_service_name": ("DBusServiceName", dbus.UTF8String, "", _ttl),
-           "dbus_object": ("DBusObject", dbus.UTF8String, "", _ttl),
+    dict ({"UUID": ("UUID", _str_to_dbus_str, "", float("inf")),
+           "parent_UUID": ("ParentUUID", _str_to_dbus_str, "", float("inf")),
+           "human_readable_name":
+               ("HumanReadableName", _str_to_dbus_str, "", _ttl),
+           "cookie": ("Cookie", _str_to_dbus_str_strict, "", _ttl),
+           "dbus_service_name": ("DBusServiceName", _str_to_dbus_str, "", _ttl),
+           "dbus_object": ("DBusObject", _str_to_dbus_str, "", _ttl),
            "priority": ("Priority", dbus.UInt32, 0, _ttl),
            "registration_time": ("RegistrationTime", dbus.UInt64, 0,
                                  float("inf")),
@@ -195,11 +217,11 @@ _manager_properties_from_camel_case = \
 manager_properties=_manager_properties_to_camel_case.keys ()
 
 _stream_properties_to_camel_case = \
-    dict ({"UUID": ("UUID", dbus.UTF8String, "", float("inf")),
-           "parent_UUID": ("ParentUUID", dbus.UTF8String, "", float("inf")),
-           "human_readable_name": ("HumanReadableName", dbus.UTF8String, "",
-                                   _ttl),
-           "cookie": ("Cookie", dbus.UTF8String, "", _ttl),
+    dict ({"UUID": ("UUID", _str_to_dbus_str, "", float("inf")),
+           "parent_UUID": ("ParentUUID", _str_to_dbus_str, "", float("inf")),
+           "human_readable_name":
+               ("HumanReadableName", _str_to_dbus_str, "", _ttl),
+           "cookie": ("Cookie", _str_to_dbus_str_strict, "", _ttl),
            "priority": ("Priority", dbus.UInt32, 0, _ttl),
            "freshness": ("Freshness", dbus.UInt32, 0, _ttl),
            "object_mostly_inline": ("ObjectsMostlyInline", dbus.Boolean,
@@ -214,15 +236,15 @@ _stream_properties_from_camel_case = \
 stream_properties=_stream_properties_to_camel_case.keys ()
 
 _object_properties_to_camel_case = \
-    dict ({"UUID": ("UUID", dbus.UTF8String, "", float("inf")),
-           "parent_UUID": ("ParentUUID", dbus.UTF8String, "", float("inf")),
+    dict ({"UUID": ("UUID", _str_to_dbus_str, "", float("inf")),
+           "parent_UUID": ("ParentUUID", _str_to_dbus_str, "", float("inf")),
            "instance": ("Instance", dbus.UInt32, 0, _ttl),
-           "human_readable_name": ("HumanReadableName", dbus.UTF8String, "",
-                                   _ttl),
-           "cookie": ("Cookie", dbus.UTF8String, "", _ttl),
+           "human_readable_name":
+               ("HumanReadableName", _str_to_dbus_str, "", _ttl),
+           "cookie": ("Cookie", _str_to_dbus_str_strict, "", _ttl),
            "versions": ("Versions", lambda v: dbus.Array (v, "(sxttub)"), [],
                         _ttl),
-           "filename": ("Filename", dbus.UTF8String, "", _ttl),
+           "filename": ("Filename", _str_to_dbus_str, "", _ttl),
            "wakeup": ("Wakeup", dbus.Boolean, True, _ttl),
            "trigger_target": ("TriggerTarget", dbus.UInt64, 0, _ttl),
            "trigger_earliest": ("TriggerEarliest", dbus.UInt64, 0, _ttl),
