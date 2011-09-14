@@ -78,9 +78,12 @@ def objects_bt():
         amount of indentation.
         """
         sys.stdout.write("  " * indent)
-        sys.stdout.write(
-            "%d: %s\n"
-            % (index, object_to_str(object, print_type=print_type)))
+        # We use print rather than sys.stdout.write because print
+        # knows how to encode strings for the terminal.
+        # sys.stdout.write can break on unicode strings like this:
+        #
+        # UnicodeEncodeError: 'ascii' codec can't encode character u'\xfc' in position 9: ordinal not in range(128)
+        print("%d: %s" % (index, object_to_str(object, print_type=print_type)))
 
     for i in xrange(object_stack_index):
         dump(object_stack[i][object_stack_parent[i]],
