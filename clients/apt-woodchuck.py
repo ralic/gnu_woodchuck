@@ -22,6 +22,7 @@ from __future__ import with_statement
 
 import sys
 import os
+import errno
 import glob
 import time
 import traceback
@@ -89,6 +90,30 @@ def my_excepthook(exctype, value, tb):
         % (''.join(traceback.format_exception(exctype, value, tb)),))
     original_excepthook(exctype, value, tb)
 sys.excepthook = my_excepthook
+
+def redirect(thing):
+    filename = os.path.join(os.environ['HOME'], '.apt-woodchuck.' + thing)
+    try:
+        with open(filename, "r") as fhandle:
+            contents = fhandle.read()
+    except IOError, e:
+        if e.errno in (errno.ENOENT,):
+            fhandle = None
+            contents = ""
+        else:
+            logging.error("Reading %s: %s" % (filename, str(e)))
+            raise
+
+    logging.error("std%s of last run: %s" % (thing, contents))
+
+    if fhandle is not None:
+        os.remove(filename)
+
+    print "Redirecting std%s to %s" % (thing, filename)
+    return open(filename, "w", 0)
+
+sys.stderr = redirect('err')
+sys.stdout = redirect('out')
 
 def maemo():
     """Return whether we are running on Maemo."""
