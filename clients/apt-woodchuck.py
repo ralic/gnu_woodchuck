@@ -123,7 +123,7 @@ class Job(threading.Thread):
     # A lock to protect the above two variables.
     lock = threading.Lock()
 
-    def __init__(self, key, func, func_args, **kwargs):
+    def __init__(self, key, func, func_args=None, **kwargs):
         """Create and queue a job.  kwargs can include the special
         arguments on_start and on_finish, which are methods (which are
         passed no arguments) that will be invoked before the job is
@@ -144,7 +144,7 @@ class Job(threading.Thread):
             self.on_finish = None
             
         self.func = func
-        self.args = func_args
+        self.args = func_args if func_args is not None else []
         self.kwargs = kwargs
 
         with self.lock:
