@@ -65,7 +65,7 @@ logging_level = logging.DEBUG
 #logging_level = logging.INFO
 logging.basicConfig(
     level=logging_level,
-    format=('%(asctime)s (pid: ' + str(os.getpid()) + ') '
+    format=('%(asctime)s (pid: ' + str(os.getpid()) + '; %(threadName)s) '
             + '%(levelname)-8s %(message)s'),
     filename=logfile,
     filemode='a')
