@@ -173,7 +173,10 @@ class Job(threading.Thread):
         self.kwargs = kwargs
 
         with self.lock:
-            for j in self.jobs:
+            jobs = self.jobs
+            if self.__class__.running is not None:
+                jobs.append(self.__class__.running)
+            for j in jobs:
                 if j.key == key:
                     logger.debug("Job %s already queued, ignoring." % key)
                     break
