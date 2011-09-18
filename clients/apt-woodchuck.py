@@ -194,7 +194,7 @@ class Job(threading.Thread):
                 return
 
             cls.running = job
-        job.run()
+        job.start()
 
 APT_CACHE_DIRECTORY = "/var/cache/apt/archives"
 
