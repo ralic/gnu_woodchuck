@@ -173,7 +173,7 @@ class Job(threading.Thread):
         self.kwargs = kwargs
 
         with self.lock:
-            jobs = self.jobs
+            jobs = self.jobs[:]
             if self.__class__.running is not None:
                 jobs.append(self.__class__.running)
             for j in jobs:
