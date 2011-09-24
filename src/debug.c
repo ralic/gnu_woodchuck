@@ -111,7 +111,12 @@ debug_init_ (void)
 			 UTC.  */
 		      "  timestamp, tz,"
 		      "  level, function, file, line, return_address,"
-		      "  message);",
+		      "  message);"
+		      /* Keep about 100k records.  At 100 bytes each,
+			 this is about 10MB.  */
+		      "delete from log"
+		      "  where ROWID < (select max(ROWID) from log) - 100000;"
+		      "vacuum;",
 		      NULL, NULL, &errmsg);
   if (errmsg)
     {
