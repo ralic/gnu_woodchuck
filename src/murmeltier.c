@@ -162,6 +162,304 @@ properties_init (void)
   /* XXX: Correctly initialize object_properties[Versions].  */
 }
 
+/* To avoid blocking the main loop, we send upcalls one at a time in
+   an idle callback.  The state for each upcall is saved in this
+   upcall data structure.  */
+struct upcall
+{
+  int type;
+
+  char *manager_uuid;
+  char *manager_cookie;
+  char *dbus_service_name;
+
+  union
+  {
+#define UPCALL_STREAM_UPDATE 1
+    struct
+    {
+      char *stream_uuid;
+      char *stream_cookie;
+    } stream_update;
+#define UPCALL_OBJECT_TRANSFER 2
+    struct
+    {
+      char *stream_uuid;
+      char *stream_cookie;
+      char *object_uuid;
+      char *object_cookie;
+      GValueArray *versions;
+      char *filename;
+      int quality;
+    } object_transfer;
+  };
+};
+
+static struct upcall *
+upcall_stream_update (const char *dbus_service_name,
+		      const char *manager_uuid,
+		      const char *manager_cookie,
+		      const char *stream_uuid,
+		      const char *stream_cookie)
+{
+  int dbus_service_name_len
+    = dbus_service_name ? strlen (dbus_service_name) + 1 : 0;
+  int manager_uuid_len = strlen (manager_uuid) + 1;
+  int manager_cookie_len = strlen (manager_cookie) + 1;
+  int stream_uuid_len = strlen (stream_uuid) + 1;
+  int stream_cookie_len = strlen (stream_cookie) + 1;
+
+  struct upcall *i = g_malloc
+    (sizeof (*i) + dbus_service_name_len + manager_uuid_len
+     + manager_cookie_len + stream_uuid_len + stream_cookie_len);
+
+  i->type = UPCALL_STREAM_UPDATE;
+
+  void *p = (void *) &i[1];
+
+  if (dbus_service_name)
+    {
+      i->dbus_service_name = p;
+      p = mempcpy (p, dbus_service_name, dbus_service_name_len);
+    }
+  else
+    i->dbus_service_name = NULL;
+
+  i->manager_uuid = p;
+  p = mempcpy (p, manager_uuid, manager_uuid_len);
+
+  i->manager_cookie = p;
+  p = mempcpy (p, manager_cookie, manager_cookie_len);
+
+  i->stream_update.stream_uuid = p;
+  p = mempcpy (p, stream_uuid, stream_uuid_len);
+
+  i->stream_update.stream_cookie = p;
+  p = mempcpy (p, stream_cookie, stream_cookie_len);
+
+  return i;
+}
+
+static struct upcall *
+upcall_transfer_object (const char *dbus_service_name,
+			const char *manager_uuid,
+			const char *manager_cookie,
+			const char *stream_uuid,
+			const char *stream_cookie,
+			const char *object_uuid,
+			const char *object_cookie,
+			GValueArray *versions,
+			const char *filename,
+			int quality)
+{
+  int dbus_service_name_len
+    = dbus_service_name ? strlen (dbus_service_name) + 1 : 0;
+  int manager_uuid_len = strlen (manager_uuid) + 1;
+  int manager_cookie_len = strlen (manager_cookie) + 1;
+  int stream_uuid_len = strlen (stream_uuid) + 1;
+  int stream_cookie_len = strlen (stream_cookie) + 1;
+  int object_uuid_len = strlen (object_uuid) + 1;
+  int object_cookie_len = strlen (object_cookie) + 1;
+  int filename_len = strlen (filename) + 1;
+
+  struct upcall *i = g_malloc
+    (sizeof (*i) + dbus_service_name_len + manager_uuid_len
+     + manager_cookie_len + stream_uuid_len + stream_cookie_len
+     + object_uuid_len + object_cookie_len + filename_len);
+
+  i->type = UPCALL_OBJECT_TRANSFER;
+
+  void *p = (void *) &i[1];
+
+  if (dbus_service_name)
+    {
+      i->dbus_service_name = p;
+      p = mempcpy (p, dbus_service_name, dbus_service_name_len);
+    }
+  else
+    i->dbus_service_name = NULL;
+
+  i->manager_uuid = p;
+  p = mempcpy (p, manager_uuid, manager_uuid_len);
+
+  i->manager_cookie = p;
+  p = mempcpy (p, manager_cookie, manager_cookie_len);
+
+  i->object_transfer.stream_uuid = p;
+  p = mempcpy (p, stream_uuid, stream_uuid_len);
+
+  i->object_transfer.stream_cookie = p;
+  p = mempcpy (p, stream_cookie, stream_cookie_len);
+
+  i->object_transfer.object_uuid = p;
+  p = mempcpy (p, object_uuid, object_uuid_len);
+
+  i->object_transfer.object_cookie = p;
+  p = mempcpy (p, object_cookie, object_cookie_len);
+
+  i->object_transfer.filename = p;
+  p = mempcpy (p, filename, filename_len);
+
+  i->object_transfer.versions = versions;
+  i->object_transfer.quality = quality;
+
+  return i;
+}
+
+
+static void
+upcall_execute (struct upcall *i)
+{
+  assertx (i->type == UPCALL_STREAM_UPDATE
+	   || i->type == UPCALL_OBJECT_TRANSFER,
+	   "type: %d", i->type);
+
+  void do_upcall (DBusGProxy *proxy, const char *handle)
+  {
+    GError *error = NULL;
+
+    if (i->type == UPCALL_STREAM_UPDATE)
+      {
+	debug (4, "Executing org_woodchuck_upcall_stream_update "
+	       "(%s, %s, %s, %s, %s)",
+	       handle,
+	       i->manager_uuid,
+	       i->manager_cookie,
+	       i->stream_update.stream_uuid,
+	       i->stream_update.stream_cookie);
+
+	if (! (org_woodchuck_upcall_stream_update
+	       (proxy,
+		i->manager_uuid,
+		i->manager_cookie,
+		i->stream_update.stream_uuid,
+		i->stream_update.stream_cookie,
+		&error)))
+	  {
+	    debug (0, "Executing org_woodchuck_upcall_stream_update "
+		   "(%s, %s, %s, %s, %s) upcall failed: %s",
+		   handle,
+		   i->manager_uuid,
+		   i->manager_cookie,
+		   i->stream_update.stream_uuid,
+		   i->stream_update.stream_cookie,
+		   error ? error->message : "<Unknown>");
+
+	    if (error)
+	      g_error_free (error);
+	    error = NULL;
+	  }
+      }
+    else if (i->type == UPCALL_OBJECT_TRANSFER)
+      {
+	debug (4, "Executing org_woodchuck_upcall_object_transfer "
+	       "(%s, %s, %s, %s, %s, %s, %s, [versions], %s, %d)",
+	       handle,
+	       i->manager_uuid,
+	       i->manager_cookie,
+	       i->object_transfer.stream_uuid,
+	       i->object_transfer.stream_cookie,
+	       i->object_transfer.object_uuid,
+	       i->object_transfer.object_cookie,
+	       i->object_transfer.filename,
+	       i->object_transfer.quality);
+
+	GValueArray *versions
+	  = g_value_array_copy (i->object_transfer.versions);
+
+	if (! (org_woodchuck_upcall_object_transfer
+	       (proxy,
+		i->manager_uuid,
+		i->manager_cookie,
+		i->object_transfer.stream_uuid,
+		i->object_transfer.stream_cookie,
+		i->object_transfer.object_uuid,
+		i->object_transfer.object_cookie,
+		versions,
+		i->object_transfer.filename,
+		i->object_transfer.quality,
+		&error)))
+	  {
+	    debug (0, "Executing org_woodchuck_upcall_object_transfer "
+		   "(%s, %s, %s, %s, %s, %s, %s, [versions], %s, %d) "
+		   "upcall failed: %s",
+		   handle,
+		   i->manager_uuid,
+		   i->manager_cookie,
+		   i->object_transfer.stream_uuid,
+		   i->object_transfer.stream_cookie,
+		   i->object_transfer.object_uuid,
+		   i->object_transfer.object_cookie,
+		   i->object_transfer.filename,
+		   i->object_transfer.quality,
+		   error ? error->message : "<Unknown>");
+
+	    if (error)
+	      g_error_free (error);
+	    error = NULL;
+	  }
+      }
+  }
+
+  GSList *list = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
+				      i->manager_uuid);
+
+  if (! list && i->dbus_service_name && *i->dbus_service_name)
+    {
+      DBusGProxy *proxy = dbus_g_proxy_new_for_name
+	(mt->session_bus, i->dbus_service_name,
+	 "/org/woodchuck", "org.woodchuck.upcall");
+      if (proxy)
+	{
+	  debug (3, "Starting %s", i->dbus_service_name);
+	  do_upcall (proxy, "START");
+	  g_object_unref (proxy);
+	}
+      else
+	debug (0, "Failed to create a DBus proxy object for %s",
+	       i->dbus_service_name);
+    }
+  else
+    while (list)
+      {
+	struct subscription *s = list->data;
+	list = list->next;
+
+	do_upcall (s->proxy, s->handle);
+      }
+
+  if (i->type == UPCALL_OBJECT_TRANSFER)
+    g_value_array_free (i->object_transfer.versions);
+  g_free (i);
+}
+
+static GSList *upcall_list;
+
+static gboolean
+upcall_execute_callback (gpointer user_data)
+{
+  if (! upcall_list)
+    {
+      debug (3, "upcall list exhausted.");
+      return FALSE;
+    }
+
+  struct upcall *i = upcall_list->data;
+  upcall_list = g_slist_delete_link (upcall_list, upcall_list);
+
+  upcall_execute (i);
+
+  if (upcall_list)
+    /* Call again.  */
+    return TRUE;
+  else
+    /* Nothing left to do.  */
+    {
+      debug (3, "upcall list exhausted.");
+      return FALSE;
+    }
+}
+
 static guint schedule_id;
 
 static uint64_t last_schedule;
@@ -224,6 +522,13 @@ do_schedule (gpointer user_data)
 	     "that are neither ethernet nor Wifi (%s).",
 	     m);
       g_free (m);
+      goto out;
+    }
+
+  if (upcall_list)
+    {
+      debug (3, "Not scheduling: %d pending upcalls.",
+	     g_slist_length (upcall_list));
       goto out;
     }
 
@@ -306,48 +611,11 @@ do_schedule (gpointer user_data)
 	     TIME_PRINTF (1000 * (uint64_t) freshness),
 	     TIME_PRINTF (1000 * (uint64_t) (freshness / 4)));
 
-    void inform (DBusGProxy *proxy, const char *handle)
-    {
-      GError *error = NULL;
-      if (! (org_woodchuck_upcall_stream_update
-	     (proxy, manager_uuid, manager_cookie,
-	      stream_uuid, stream_cookie, &error)))
-	{
-	  debug (0, "Executing org_woodchuck_upcall_stream_update "
-		 "(%s, %s, %s, %s, %s) upcall failed: %s",
-		 handle, manager_uuid, manager_cookie,
-		 stream_uuid, stream_cookie,
-		 error ? error->message : "<Unknown>");
+    struct upcall *upcall = upcall_stream_update
+      (dbus_service_name, manager_uuid, manager_cookie,
+       stream_uuid, stream_cookie);
 
-	  if (error)
-	    g_error_free (error);
-	  error = NULL;
-	}
-    }
-
-    if (! list && dbus_service_name && *dbus_service_name)
-      {
-	DBusGProxy *proxy = dbus_g_proxy_new_for_name
-	  (mt->session_bus, dbus_service_name,
-	   "/org/woodchuck", "org.woodchuck.upcall");
-	if (proxy)
-	  {
-	    debug (3, "Starting %s", dbus_service_name);
-	    inform (proxy, "START");
-	    g_object_unref (proxy);
-	  }
-	else
-	  debug (0, "Failed to create a DBus proxy object for %s",
-		 dbus_service_name);
-      }
-    else
-      while (list)
-	{
-	  struct subscription *s = list->data;
-	  list = list->next;
-
-	  inform (s->proxy, s->handle);
-	}
+    upcall_list = g_slist_prepend (upcall_list, upcall);
 
     return 0;
   }
@@ -465,90 +733,52 @@ do_schedule (gpointer user_data)
 	return 0;
       }
 
-    void inform (DBusGProxy *proxy, const char *handle)
-    {
-      /* We need to build this for each subscriber as the dbus handler
-	 frees the arguments.  */
-      GValueArray *versions = g_value_array_new (7);
+    /* We need to build this for each subscriber as the dbus handler
+       frees the arguments.  */
+    GValueArray *versions = g_value_array_new (7);
 
-      GValue index_value = { 0 };
-      g_value_init (&index_value, G_TYPE_UINT);
-      g_value_set_uint (&index_value, 0);
-      g_value_array_append (versions, &index_value);
+    GValue index_value = { 0 };
+    g_value_init (&index_value, G_TYPE_UINT);
+    g_value_set_uint (&index_value, 0);
+    g_value_array_append (versions, &index_value);
 
 #warning Get the real values from the object_versions table.
-      GValue url_value = { 0 };
-      g_value_init (&url_value, G_TYPE_STRING);
-      g_value_set_static_string (&url_value, "");
-      g_value_array_append (versions, &url_value);
+    GValue url_value = { 0 };
+    g_value_init (&url_value, G_TYPE_STRING);
+    g_value_set_static_string (&url_value, "");
+    g_value_array_append (versions, &url_value);
 
-      GValue expected_size_value = { 0 };
-      g_value_init (&expected_size_value, G_TYPE_INT64);
-      g_value_set_int64 (&expected_size_value, 0);
-      g_value_array_append (versions, &expected_size_value);
+    GValue expected_size_value = { 0 };
+    g_value_init (&expected_size_value, G_TYPE_INT64);
+    g_value_set_int64 (&expected_size_value, 0);
+    g_value_array_append (versions, &expected_size_value);
 
-      GValue expected_transfer_up_value = { 0 };
-      g_value_init (&expected_transfer_up_value, G_TYPE_UINT64);
-      g_value_set_uint64 (&expected_transfer_up_value, 0);
-      g_value_array_append (versions, &expected_transfer_up_value);
+    GValue expected_transfer_up_value = { 0 };
+    g_value_init (&expected_transfer_up_value, G_TYPE_UINT64);
+    g_value_set_uint64 (&expected_transfer_up_value, 0);
+    g_value_array_append (versions, &expected_transfer_up_value);
 
-      GValue expected_transfer_down_value = { 0 };
-      g_value_init (&expected_transfer_down_value, G_TYPE_UINT64);
-      g_value_set_uint64 (&expected_transfer_down_value, 0);
-      g_value_array_append (versions, &expected_transfer_down_value);
+    GValue expected_transfer_down_value = { 0 };
+    g_value_init (&expected_transfer_down_value, G_TYPE_UINT64);
+    g_value_set_uint64 (&expected_transfer_down_value, 0);
+    g_value_array_append (versions, &expected_transfer_down_value);
 
-      GValue utility_value = { 0 };
-      g_value_init (&utility_value, G_TYPE_UINT);
-      g_value_set_uint (&utility_value, 1);
-      g_value_array_append (versions, &utility_value);
+    GValue utility_value = { 0 };
+    g_value_init (&utility_value, G_TYPE_UINT);
+    g_value_set_uint (&utility_value, 1);
+    g_value_array_append (versions, &utility_value);
 
-      GValue use_simple_transferer_value = { 0 };
-      g_value_init (&use_simple_transferer_value, G_TYPE_BOOLEAN);
-      g_value_set_boolean (&use_simple_transferer_value, FALSE);
-      g_value_array_append (versions, &use_simple_transferer_value);
+    GValue use_simple_transferer_value = { 0 };
+    g_value_init (&use_simple_transferer_value, G_TYPE_BOOLEAN);
+    g_value_set_boolean (&use_simple_transferer_value, FALSE);
+    g_value_array_append (versions, &use_simple_transferer_value);
 
-      GError *error = NULL;
-      if (! (org_woodchuck_upcall_object_transfer
-	     (proxy, manager_uuid, manager_cookie,
-	      stream_uuid, stream_cookie, object_uuid, object_cookie,
-	      versions, "", 5, &error)))
-	{
-	  debug (0, "Executing org_woodchuck_upcall_object_transfer "
-		 "(%s, %s, %s, %s, %s, %s, %s, [], '', 5) upcall failed: %s",
-		 handle, manager_uuid, manager_cookie,
-		 stream_uuid, stream_cookie,
-		 object_uuid, object_cookie,
-		 error ? error->message : "<Unknown>");
+    struct upcall *upcall = upcall_transfer_object
+      (dbus_service_name, manager_uuid, manager_cookie,
+       stream_uuid, stream_cookie, object_uuid, object_cookie,
+       versions, "", 5);
 
-	  if (error)
-	    g_error_free (error);
-	  error = NULL;
-	}
-    }
-
-    if (! list && dbus_service_name && *dbus_service_name)
-      {
-	DBusGProxy *proxy = dbus_g_proxy_new_for_name
-	  (mt->session_bus, dbus_service_name,
-	   "/org/woodchuck", "org.woodchuck.upcall");
-	if (proxy)
-	  {
-	    debug (3, "Starting %s", dbus_service_name);
-	    inform (proxy, "START");
-	    g_object_unref (proxy);
-	  }
-	else
-	  debug (0, "Failed to create a DBus proxy object for %s",
-		 dbus_service_name);
-      }
-    else
-      while (list)
-	{
-	  struct subscription *s = list->data;
-	  list = list->next;
-
-	  inform (s->proxy, s->handle);
-	}
+    upcall_list = g_slist_prepend (upcall_list, upcall);
 
     return 0;
   }
@@ -578,6 +808,16 @@ do_schedule (gpointer user_data)
       debug (0, "%s", errmsg);
       sqlite3_free (errmsg);
       errmsg = NULL;
+    }
+
+  uint64_t t = now () - n;
+  debug (3, "Scheduling took "TIME_FMT, TIME_PRINTF(t));
+
+  if (upcall_list)
+    {
+      debug (3, "Have %d upcalls to send", g_slist_length (upcall_list));
+      upcall_list = g_slist_reverse (upcall_list);
+      g_idle_add (upcall_execute_callback, NULL);
     }
 
  out:
