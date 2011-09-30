@@ -361,6 +361,39 @@ addrinfo_req (gpointer user_data)
 }
 
 static void
+icd2_state_sig_2_cb (DBusGProxy *proxy,
+		     char *network_type,
+		     uint32_t nstate,
+		     gpointer user_data)
+{
+  NCNetworkMonitor *m = NC_NETWORK_MONITOR (user_data);
+
+  debug (4, "Network %s: %s",
+	 network_type, device_state_to_str (nstate));
+
+  if (nstate == ICD_STATE_SEARCH_START)
+    {
+      debug (4, "Noticed scan.  Am %sscanning.  Last scan completed: "TIME_FMT,
+	     m->am_scanning ? "" : "not ",
+	     TIME_PRINTF (now () - m->scan_completed));
+      if (! m->am_scanning)
+	/* We are not scanning, but ICD2 emitted some scan results.
+	   If we request a scan, we'll get the results as well.
+
+	   We need to be careful!  Most likely, someone else initiated
+	   a scan.  Nevertheless, it could have been us: after a scan
+	   completes, we cancel our interest, but, before ICD2 notices
+	   that we cancelled, it could already have started a new
+	   scan.  We need to ignore these results.  We only register
+	   interest if the last scan that we requested completed more
+	   than a minute ago.  */
+	if (now () - m->scan_completed > 60 * 1000)
+	  /* The last completed scan was more than a minute ago.  */
+	  nm_scan (m);
+    }
+}
+
+static void
 icd2_state_sig_cb (DBusGProxy *proxy,
 		   char *service_type,
 		   uint32_t service_attributes,
@@ -414,6 +447,8 @@ icd2_state_sig_cb (DBusGProxy *proxy,
 
   if (schedule_addrinfo && ! m->addrinfo_req_source)
     m->addrinfo_req_source = g_idle_add (addrinfo_req, m);
+
+  icd2_state_sig_2_cb (proxy, network_type, nstate, user_data);
 }
 
 static void cell_info_changed (NCNetworkMonitor *m, struct nm_cell *proposed);
@@ -744,6 +779,8 @@ icd2_scan_sig_cb (DBusGProxy *proxy,
 	      GString *s = NULL;
 	      do_debug (3)
 		s = g_string_new ("Network scan completed:");
+
+	      m->scan_completed = now ();
 
 	      GError *error = NULL;
 	      if (! com_nokia_icd2_scan_cancel_req (m->icd2_proxy, &error))
@@ -1132,6 +1169,12 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
      ICD_DBUS_API_PATH,
      ICD_DBUS_API_INTERFACE);
 
+  m->icd2_proxy2 = dbus_g_proxy_new_for_name
+    (m->system_bus,
+     ICD_DBUS_API_INTERFACE,
+     ICD_DBUS_API_PATH,
+     ICD_DBUS_API_INTERFACE);
+
   m->phone_net_proxy = dbus_g_proxy_new_for_name
     (m->system_bus,
      "com.nokia.phone.net",
@@ -1168,7 +1211,11 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
 			       G_CALLBACK (addrinfo_sig_cb),
 			       m, NULL);
 
-  /* state_sig.  */
+  /* state_sig.  There are three different signatures for this
+     function.  Before emitting a dbus signal, dbus-glib checks the
+     signature and silently discards the message if it doesn't match
+     the registered signature.  The signature is fixed per proxy
+     instance.  Thus, we need one proxy per signature.  */
   dbus_g_object_register_marshaller
     (g_cclosure_user_marshal_VOID__STRING_UINT_STRING_STRING_UINT_BOXED_STRING_UINT,
      G_TYPE_NONE,
@@ -1184,6 +1231,18 @@ nc_network_monitor_backend_init (NCNetworkMonitor *m)
 			   G_TYPE_INVALID);
   dbus_g_proxy_connect_signal (m->icd2_proxy, ICD_DBUS_API_STATE_SIG,
 			       G_CALLBACK (icd2_state_sig_cb),
+			       m, NULL);
+
+  /* The two argument variant.  */
+  dbus_g_object_register_marshaller
+    (g_cclosure_user_marshal_VOID__STRING_UINT,
+     G_TYPE_NONE, G_TYPE_STRING, G_TYPE_UINT, G_TYPE_INVALID);
+
+  dbus_g_proxy_add_signal (m->icd2_proxy2, ICD_DBUS_API_STATE_SIG,
+			   G_TYPE_STRING, G_TYPE_UINT,
+			   G_TYPE_INVALID);
+  dbus_g_proxy_connect_signal (m->icd2_proxy2, ICD_DBUS_API_STATE_SIG,
+			       G_CALLBACK (icd2_state_sig_2_cb),
 			       m, NULL);
 
   /* com.nokia.csd.GPRS.Detached */

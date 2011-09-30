@@ -248,6 +248,7 @@ struct _NCNetworkMonitor
      Object: ICD_DBUS_API_PATH
      Interface: ICD_DBUS_API_INTERFACE  */
   DBusGProxy *icd2_proxy;
+  DBusGProxy *icd2_proxy2;
   /* Proxy object for the phone net service.
      Object: /com/nokia/phone/net
      Interface: "Phone.Net"  */
@@ -297,6 +298,7 @@ struct _NCNetworkMonitor
      are struct nm_aps.  */
   GHashTable *network_type_to_scan_results_hash;
   int am_scanning;
+  uint64_t scan_completed;
 #endif
 
 #if HAVE_ICD2
