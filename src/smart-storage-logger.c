@@ -183,7 +183,7 @@ nm_scan_queue (bool high_priority)
 {
   uint64_t n = now ();
   if (n - last_scan[0]
-      >= high_priority ? SCAN_INTERVAL_MIN : SCAN_INTERVAL_MIN_LOW_PRIORITY)
+      >= (high_priority ? SCAN_INTERVAL_MIN : SCAN_INTERVAL_MIN_LOW_PRIORITY))
     {
       uint64_t average = 0;
       int i;
