@@ -659,12 +659,12 @@ do_schedule (gpointer user_data)
     bool need_update = argv[i] ? atoi (argv[i]) : false; i ++;
     int instance = argv[i] ? atoi (argv[i]) : 0; i ++;
 
-    debug (4, "Considering object %s(%s): transfer_time: "TIME_FMT";"
-	   " last_trys_status: %"PRId32"; transfer_frequency: %"PRId32";"
+    debug (3, "Considering object %s(%s): transfer_time: "TIME_FMT";"
+	   " last_trys_status: %"PRId32"; transfer_frequency: "TIME_FMT";"
 	   " need update: %s",
 	   object_uuid, object_cookie,
 	   TIME_PRINTF (transfer_time == 0 ? 0 : transfer_time * 1000 - n),
-	   last_trys_status, transfer_frequency,
+	   last_trys_status, TIME_PRINTF(transfer_frequency * 1000ULL),
 	   need_update ? "true" : "false");
 
     if (transfer_time && last_trys_status == 0 && transfer_frequency == 0
@@ -672,7 +672,7 @@ do_schedule (gpointer user_data)
       /* The object has been successfully transferred and it is a
 	 one-shot object.  Ignore.  */
       {
-	debug (4, "%s(%s) already transferred.",
+	debug (3, "%s(%s) already transferred.",
 	       object_uuid, object_cookie);
 	return 0;
       }
@@ -683,7 +683,7 @@ do_schedule (gpointer user_data)
 	&& ! need_update)
       /* The content is fresh enough.  */
       {
-	debug (4, "%s(%s) Content fresh enough.",
+	debug (3, "%s(%s) Content fresh enough.",
 	       object_uuid, object_cookie);
 	return 0;
       }
@@ -691,7 +691,7 @@ do_schedule (gpointer user_data)
     GSList *list = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
 					manager_uuid);
 
-    do_debug (4)
+    do_debug (3)
       {
 	GString *s = g_string_new ("");
 	g_string_append_printf
