@@ -1519,6 +1519,43 @@ main (int argc, char *argv[])
   bm_init ();
   sm_init ();
 
+  /* Upload the murmeltier databases.  */
+  char *home;
+#if HAVE_MAEMO
+  home = "/home/user";
+#else
+  home = getenv ("HOME");
+#endif
+  if (home)
+    {
+      char *filename = NULL;
+      asprintf (&filename, "%s/.murmeltier/config.db", home);
+      if (filename)
+	{
+	  const char *tables[] = {
+	    "managers",
+	    "object_instance_files",
+	    "object_instance_status",
+	    "object_use",
+	    "object_versions",
+	    "objects",
+	    "stream_updates",
+	    "streams",
+	  };
+
+	  int i;
+	  for (i = 0; i < sizeof (tables) / sizeof (tables[0]); i ++)
+	    /* Don't delete the synchronized logs.  */
+	    logger_uploader_table_register (filename, tables[i], false);
+	}
+      free (filename);
+
+      asprintf (&filename, "%s/.murmeltier/logs/debug-output.db", home);
+      if (filename)
+	logger_uploader_table_register (filename, "log", false);
+      free (filename);
+    }
+
   logger_uploader_init ();
 
   loop = g_main_loop_new (NULL, FALSE);
