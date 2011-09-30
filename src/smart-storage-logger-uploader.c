@@ -616,10 +616,10 @@ upload (void)
 
   uint64_t start = now ();
 
-  obstack_printf (&s->gather, "begin transaction;");
+  obstack_printf (&s->gather, "begin transaction;\n");
 
   s->upload_filename = files_logfile ("upload.db");
-  obstack_printf (&s->flush, "attach '%s' as uploader; begin transaction;",
+  obstack_printf (&s->flush, "attach '%s' as uploader;\nbegin transaction;\n",
 		  s->upload_filename);
 
   /* Get the UUID and thereby ensure that the UUID table is
@@ -640,6 +640,7 @@ upload (void)
 	  goto skip_db;
 	}
       close (fd);
+
       char *errmsg = NULL;
       err = sqlite3_exec_printf (s->db,
 				 "attach %Q as %s;"
@@ -678,14 +679,15 @@ upload (void)
 	      continue;
 	    }
 
-	  debug (3, "%s.%s: %"PRId64" records need synchronization",
-		 d->filename, t->table, t->stake - t->through);
-
 	  char *name = sanitize_strings (dbname, t->table);
+
+	  debug (3, "%s.%s -> %s: %"PRId64" records need synchronization",
+		 d->filename, t->table, name, t->stake - t->through);
+
 	  obstack_printf (&s->gather,
 			  "create table %s as"
 			  " select ROWID, * from %s.%s"
-			  "  where %"PRId64" < ROWID and ROWID <= %"PRId64";",
+			  "  where %"PRId64" < ROWID and ROWID <= %"PRId64";\n",
 			  name, dbname, t->table, t->through, t->stake);
 
 	  if (t->delete)
@@ -693,14 +695,14 @@ upload (void)
 	       actually delete the very last record just in case we
 	       didn't set AUTOINCREMENT on the primary index.  */
 	    obstack_printf (&s->flush,
-			    "delete from %s.%s where ROWID < %"PRId64";",
+			    "delete from %s.%s where ROWID < %"PRId64";\n",
 			    dbname, t->table, t->stake);
 
 	  /* Update through to avoid synchronizing the same data
 	     multiple times.  */
 	  obstack_printf (&s->flush,
 			  "update uploader.status set through = %"PRId64
-			  " where db = '%s' and tbl = '%s';",
+			  " where db = '%s' and tbl = '%s';\n",
 			  t->stake, d->filename, t->table);
 
 	  free (name);
@@ -710,7 +712,7 @@ upload (void)
       free (dbname);
     }
 
-  obstack_printf (&s->gather, "end transaction;");
+  obstack_printf (&s->gather, "end transaction;\n");
   uint64_t mid = now ();
   /* NUL terminate the SQL string.  */
   obstack_1grow (&s->gather, 0);
