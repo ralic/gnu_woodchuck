@@ -182,6 +182,13 @@ static void
 nm_scan_queue (bool high_priority)
 {
   uint64_t n = now ();
+
+  debug (4, "(%s): last scan "TIME_FMT" >=? threshold "TIME_FMT,
+	 high_priority ? "high" : "low",
+	 TIME_PRINTF (n - last_scan[0]),
+	 TIME_PRINTF (high_priority
+		      ? SCAN_INTERVAL_MIN : SCAN_INTERVAL_MIN_LOW_PRIORITY));
+
   if (n - last_scan[0]
       >= (high_priority ? SCAN_INTERVAL_MIN : SCAN_INTERVAL_MIN_LOW_PRIORITY))
     {
@@ -191,7 +198,10 @@ nm_scan_queue (bool high_priority)
 	average += n - last_scan[i];
       average /= i;
 
-      if (average <= SCAN_INTERVAL_AVERAGE)
+      debug (4, "Network scan average: "TIME_FMT" (threshold: "TIME_FMT")",
+	     TIME_PRINTF (average), TIME_PRINTF (SCAN_INTERVAL_AVERAGE));
+
+      if (average > SCAN_INTERVAL_AVERAGE)
 	{
 	  for (i = 1; i < sizeof (last_scan) / sizeof (last_scan[0]); i ++)
 	    last_scan[i] = last_scan[i - 1];
