@@ -248,6 +248,10 @@ struct load
 
 /* Thread and process management.  */
 
+#define PCB_FMT "%d %s;%s;%s"
+#define PCB_PRINTF(pcb) \
+  (pcb)->group_leader.tid, (pcb)->exe, (pcb)->arg0, (pcb)->arg1
+
 #define TCB_FMT "%d(%d) %s;%s;%s"
 #define TCB_PRINTF(tcb) \
   (tcb)->tid, (tcb)->pcb->group_leader.tid, \
@@ -699,7 +703,9 @@ pcb_free (struct pcb *pcb)
 	  /* We are our parent's last descendant and it is a zombie.
 	     Free it.  */
 	  {
-	    assert (pcb->parent->top_level);
+	    /* XXX: Don't assert that the parent is a top-level.  See
+	       the assertion correction below..  */
+	    // assert (pcb->parent->top_level);
 	    p = pcb->parent;
 	  }
       }
@@ -740,14 +746,38 @@ pcb_free (struct pcb *pcb)
       /* We are not a top-level.  We can exit now.  Our parent
 	 inherits our children.  */
 
-      assert (pcb->parent);
+      if (! pcb->parent)
+	/* We are not a top level process and we don't have a parent.
+	   Something went wrong!  Print some debugging information
+	   out.
+
+	   XXX: If you fix this, reenable the assertion towards the
+	   start of this function.  */
+	debug (0, "Assertion failure: pcb->top_level is false and "
+	       "pcb->parent is NULL for "PCB_FMT,
+	       PCB_PRINTF(pcb));
+
       GSList *l;
       for (l = pcb->children; l; l = l->next)
 	{
 	  struct pcb *child = l->data;
+
+	  if (! pcb->parent)
+	    debug (0, "child: "PCB_FMT, PCB_PRINTF(child));
+
 	  assert (child->parent == pcb);
 
-	  child->parent = pcb->parent;
+	  if (pcb->parent)
+	    child->parent = pcb->parent;
+	}
+
+      if (! pcb->parent)
+	/* XXX: Avoid crashing...  Try to recover by pretending that
+	   we are a top-level.  */
+	{
+	  pcb->top_level = true;
+	  pcb->zombie = true;
+	  return;
 	}
 
       pcb->parent->children
