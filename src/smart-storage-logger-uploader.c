@@ -642,13 +642,17 @@ upload (void)
       close (fd);
       char *errmsg = NULL;
       err = sqlite3_exec_printf (s->db,
-				 "attach %Q as %s;",
+				 "attach %Q as %s;"
+				 /* Make sure that we can read the
+				    database.  */
+				 "select count(*) from sqlite_master;",
 				 NULL, NULL, &errmsg, d->filename, dbname);
       if (errmsg)
 	{
-	  debug (0, "%d: %s", err, errmsg);
+	  debug (0, "Attching database %s: %d: %s", dbname, err, errmsg);
 	  sqlite3_free (errmsg);
 	  errmsg = NULL;
+	  goto skip_db;
 	}
 
       struct table *t;
@@ -667,9 +671,11 @@ upload (void)
 				     callback, NULL, &errmsg, dbname, t->table);
 	  if (errmsg)
 	    {
-	      debug (0, "%d: %s", err, errmsg);
+	      debug (0, "Accessing %s.%s: %d: %s",
+		     dbname, t->table, err, errmsg);
 	      sqlite3_free (errmsg);
 	      errmsg = NULL;
+	      continue;
 	    }
 
 	  debug (3, "%s.%s: %"PRId64" records need synchronization",
