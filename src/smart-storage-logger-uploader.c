@@ -25,6 +25,8 @@
 #include <error.h>
 #include <unistd.h>
 #include <stdio.h>
+#include <fcntl.h>
+#include <unistd.h>
 #include <sqlite3.h>
 #include <errno.h>
 #include <glib.h>
@@ -629,6 +631,15 @@ upload (void)
     {
       char *dbname = sanitize_strings (strrchr (d->filename, '/') + 1, NULL);
 
+      /* Make sure that we can read the database.  If not, skip
+	 it.  */
+      int fd = open (d->filename, O_RDONLY);
+      if (fd < 0)
+	{
+	  debug (0, "Can't read %s: %m", d->filename);
+	  goto skip_db;
+	}
+      close (fd);
       char *errmsg = NULL;
       err = sqlite3_exec_printf (s->db,
 				 "attach %Q as %s;",
@@ -689,6 +700,7 @@ upload (void)
 	  free (name);
 	}
 
+    skip_db:
       free (dbname);
     }
 
