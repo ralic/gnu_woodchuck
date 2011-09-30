@@ -629,7 +629,14 @@ upload (void)
   struct db *d;
   for (d = dbs; d; d = d->next)
     {
-      char *dbname = sanitize_strings (strrchr (d->filename, '/') + 1, NULL);
+      char *dbname;
+      if (strstr(d->filename, ".smart-storage"))
+	/* For compatibility, we just use the filename for databases
+	   managed by smart-storage-logger.  */
+	dbname = sanitize_strings (strrchr (d->filename, '/') + 1, NULL);
+      else
+	/* Otherwise, we use full path name.  */
+	dbname = sanitize_strings (d->filename, NULL);
 
       /* Make sure that we can read the database.  If not, skip
 	 it.  */
