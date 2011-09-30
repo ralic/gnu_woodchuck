@@ -683,86 +683,68 @@ icd2_scan_sig_cb (DBusGProxy *proxy,
 	 network_id, network_priority,
 	 signal_strength, signal_strength_db, station_id);
 
+  if (! m->am_scanning)
+    {
+      debug (4, "Not scanning.  Ignoring.");
+      return;
+    }
+
   if (! m->network_type_to_scan_results_hash)
     m->network_type_to_scan_results_hash
       = g_hash_table_new (g_str_hash, g_str_equal);
 
-  GSList *results = g_hash_table_lookup (m->network_type_to_scan_results_hash,
-					 network_type);
-  int orig_len = 0;
-  if (results)
-    /* Skip the key.  */
-    {
-      assert (strcmp (results->data, network_type) == 0);
-      results = results->next;
-      assert (results);
-      orig_len = g_slist_length (results);
-    }
-  
-  void results_set (const char *network_type, GSList *results)
+  struct network_type_data
   {
-    /* Only the first element of the list (the key) is guaranteed to
-       be valid; it's next pointer may now be invalid.  */
-    GSList *orig = g_hash_table_lookup (m->network_type_to_scan_results_hash,
-					network_type);
-    debug (5, "Updating %s: %d -> %d results (%p; %p)",
-	   network_type, orig_len,
-	   results ? g_slist_length (results) : 0,
-	   orig, results);
+    bool scan_finished;
+    char network_type[];
+  };
+  struct network_type_data *network_type_data = NULL;
 
-    if (orig && results)
-      orig->next = results;
-    else if (orig)
-      /* Results is now empty.  */
-      {
-	g_hash_table_remove (m->network_type_to_scan_results_hash,
-			     network_type);
-	gpointer t = g_hash_table_lookup (m->network_type_to_scan_results_hash,
-					  network_type);
-	if (t)
-	  debug (0, "orig: %p; after remove: %p", orig, t);
-	assert (! t);
+  GSList *results_head
+    = g_hash_table_lookup (m->network_type_to_scan_results_hash, network_type);
+  if (! results_head)
+    /* This is the first time we are seeing this network type.
+       Allocate the key data structure and insert it into the
+       hash.  */
+    {
+      network_type_data = g_malloc (sizeof (*network_type_data)
+				    + strlen (network_type) + 1);
 
-	g_free (orig->data);
-	g_slist_free_1 (orig);
-      }
-    else if (results)
-      /* Now have something.  */
-      {
-	char *key = g_strdup (network_type);
-	results = g_slist_prepend (results, key);
-	g_hash_table_insert (m->network_type_to_scan_results_hash,
-			     key, results);
-      }
-  }
-  
+      network_type_data->scan_finished = false;
+      strcpy (network_type_data->network_type, network_type);
+
+      results_head = g_slist_prepend (NULL, network_type_data);
+      g_hash_table_insert (m->network_type_to_scan_results_hash,
+			   network_type_data->network_type, results_head);
+    }
+  else
+    /* The key is the first element.  */
+    network_type_data = results_head->data;
+
+  assert (strcmp (network_type_data->network_type, network_type) == 0);
+  GSList *results = results_head->next;
+
   if (status == ICD_SCAN_COMPLETE)
     /* Scan complete.  Send the results to the user.  */
     {
-      debug (4, "Scan for %s completed.", network_type);
-      g_signal_emit (m,
-		     NC_NETWORK_MONITOR_GET_CLASS
-		     (m)->scan_results_signal_id, 0, results);
+      debug (4, "Scanning %s completed (am_scanning: %d).",
+	     network_type, m->am_scanning);
 
-      debug (5, "Freeing %d results for %s",
-	     g_slist_length (results), network_type);
-
-      GSList *n = results;
-      while (n)
+      if (! network_type_data->scan_finished)
+	/* We are seeing the finished scan message for this network
+	   type for the first time.  */
 	{
-	  results = n;
-	  n = results->next;
-	  g_free (results->data);
-	  g_slist_free_1 (results);
-	}
+	  network_type_data->scan_finished = true;
 
-      results_set (network_type, NULL);
-
-      if (m->am_scanning)
-	{
 	  m->am_scanning --;
 	  if (m->am_scanning == 0)
+	    /* We've completed the network scan.  Send the
+	       notifications and clean up.  */
 	    {
+	      GString *s = NULL;
+	      do_debug (3)
+		s = g_string_new ("Network scan completed:");
+
 	      GError *error = NULL;
 	      if (! com_nokia_icd2_scan_cancel_req (m->icd2_proxy, &error))
 		{
@@ -770,36 +752,134 @@ icd2_scan_sig_cb (DBusGProxy *proxy,
 			 error->message);
 		  g_error_free (error);
 		}
+
+	      void iter (gpointer key_, gpointer value_, gpointer user_data)
+	      {
+		const char *key = key_;
+		GSList *results_head = value_;
+
+		assert (results_head);
+		struct network_type_data *network_type_data
+		  = results_head->data;
+		assert (network_type_data->scan_finished);
+		assert (network_type_data->network_type == key);
+
+		GSList *results = results_head->next;
+
+		if (s)
+		  g_string_append_printf (s, " %s: %d aps;",
+					  key, g_slist_length (results));
+
+		g_signal_emit (m,
+			       NC_NETWORK_MONITOR_GET_CLASS
+			       (m)->scan_results_signal_id, 0, results);
+
+		GSList *l = results_head;
+		GSList *n = l;
+		while (n)
+		  {
+		    l = n;
+		    n = n->next;
+
+		    g_free (l->data);
+		    g_slist_free_1 (l);
+		  }
+	      }
+	      g_hash_table_foreach (m->network_type_to_scan_results_hash,
+				    iter, NULL);
+
+	      /* Destroy the hash table.  We've now sent all the
+		 notifications.  */
+	      g_hash_table_unref (m->network_type_to_scan_results_hash);
+	      m->network_type_to_scan_results_hash = NULL;
+
+	      if (s)
+		{
+		  debug (3, "%s", s->str);
+		  g_string_free (s, true);
+		}
+	    }
+	}
+      else
+	{
+	  do_debug (4)
+	    {
+	      void iter (gpointer key_, gpointer value_, gpointer user_data)
+	      {
+		const char *key = key_;
+		GSList *results_head = value_;
+
+		assert (results_head);
+		struct network_type_data *network_type_data
+		  = results_head->data;
+		assert (network_type_data->network_type == key);
+
+		GSList *results = results_head->next;
+
+		debug (4, "%s %sfinished (%d APs)",
+		       key, network_type_data->scan_finished ? "" : "not ",
+		       g_slist_length (results));
+	      }
+	      g_hash_table_foreach (m->network_type_to_scan_results_hash,
+				    iter, NULL);
 	    }
 	}
 
       return;
     }
 
-  struct nm_ap *ap = g_malloc (sizeof *ap + strlen (network_id) + 1
-			       + strlen (network_name) + 1
-			       + strlen (station_id) + 1
-			       + strlen (network_type) + 1);
+  if (status == ICD_SCAN_NEW
+      || status == ICD_SCAN_UPDATE
+      || status == ICD_SCAN_NOTIFY)
+    {
+      struct nm_ap *ap = g_malloc (sizeof *ap + strlen (network_id) + 1
+				   + strlen (network_name) + 1
+				   + strlen (station_id) + 1
+				   + strlen (network_type) + 1);
 
-  char *p = (char *) &ap[1];
-  ap->network_id = p;
-  p = mempcpy (p, network_id, strlen (network_id) + 1);
+      char *p = (char *) &ap[1];
+      ap->network_id = p;
+      p = mempcpy (p, network_id, strlen (network_id) + 1);
 
-  ap->user_id = p;
-  p = mempcpy (p, network_name, strlen (network_name) + 1);
+      ap->user_id = p;
+      p = mempcpy (p, network_name, strlen (network_name) + 1);
 
-  ap->station_id = p;
-  p = mempcpy (p, station_id, strlen (station_id) + 1);
+      ap->station_id = p;
+      p = mempcpy (p, station_id, strlen (station_id) + 1);
 
-  ap->network_type = p;
-  p = mempcpy (p, network_type, strlen (network_type) + 1);
+      ap->network_type = p;
+      p = mempcpy (p, network_type, strlen (network_type) + 1);
 
-  ap->network_flags = network_attributes;
-  ap->signal_strength_db = signal_strength_db;
-  ap->signal_strength_normalized = signal_strength;
+      ap->network_flags = network_attributes;
+      ap->signal_strength_db = signal_strength_db;
+      ap->signal_strength_normalized = signal_strength;
 
-  results = g_slist_prepend (results, ap);
-  results_set (network_type, results);
+      GSList *e;
+      for (e = results; e; e = e->next)
+	{
+	  struct nm_ap *other = e->data;
+	  if (strcmp (ap->network_id, other->network_id) == 0
+	      && strcmp (ap->user_id, other->user_id) == 0
+	      && strcmp (ap->station_id, other->station_id) == 0
+	      && strcmp (ap->network_type, other->network_type) == 0)
+	    /* Already in list.  */
+	    {
+	      debug (3, "Ignoring duplicate ap %s.", ap->network_id);
+
+	      /* Update "volatile" parameters.  */
+	      other->network_flags = ap->network_flags;
+	      other->signal_strength_db = ap->signal_strength_db;
+	      other->signal_strength_normalized
+		= ap->signal_strength_normalized;
+	      
+	      g_free (ap);
+	      return;
+	    }
+	}
+
+      results = g_slist_prepend (results, ap);
+      results_head->next = results;
+    }
 }
 
 void
@@ -825,6 +905,8 @@ nm_scan (NCNetworkMonitor *m)
       g_free (networks_to_scan);
 
       m->am_scanning = i;
+
+      debug (3, "Starting network scan (%d network types).", i);
     }
 }
 
