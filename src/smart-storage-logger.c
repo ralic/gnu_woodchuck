@@ -918,20 +918,26 @@ void nm_quit (void)
 
 /* User activity monitor.  */
 static void
-uam_idle_active (WCUserActivityMonitor *m, gboolean idle, int64_t t,
+uam_idle_active (WCUserActivityMonitor *m,
+		 int user_activity_status,
+		 int user_activity_status_previous,
+		 int64_t time_in_previous_state,
 		 gpointer user_data)
 {
-  debug (5, DEBUG_BOLD ("The user is %s.  Previous state: "TIME_FMT),
-	 idle == WC_USER_IDLE ? "idle" : "active", TIME_PRINTF (t));
+  debug (4, DEBUG_BOLD ("The user is now %s.  Time spent %s: "TIME_FMT),
+	 wc_user_activity_status_string (user_activity_status),
+	 wc_user_activity_status_string (user_activity_status_previous),
+	 TIME_PRINTF (time_in_previous_state));
 
-  sqlq_append_printf (sqlq, false,
-		      "insert into user_activity"
-		      " ("SQL_TIME_COLS", previous_state, duration, new_state)"
-		      " values ("TM_FMT", '%s', %"PRId64", '%s');",
-		      TM_PRINTF (now_tm ()),
-		      idle == WC_USER_IDLE ? "active" : "idle",
-		      t,
-		      idle == WC_USER_IDLE ? "idle" : "active");
+  sqlq_append_printf
+    (sqlq, false,
+     "insert into user_activity"
+     " ("SQL_TIME_COLS", previous_state, duration, new_state)"
+     " values ("TM_FMT", '%s', %"PRId64", '%s');",
+     TM_PRINTF (now_tm ()),
+     wc_user_activity_status_string (user_activity_status),
+     time_in_previous_state,
+     wc_user_activity_status_string (user_activity_status_previous));
 
   nm_scan_queue (true);
 }
