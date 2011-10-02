@@ -939,7 +939,7 @@ uam_idle_active (WCUserActivityMonitor *m,
      time_in_previous_state,
      wc_user_activity_status_string (user_activity_status_previous));
 
-  nm_scan_queue (true);
+  nm_scan_queue (user_activity_status == WC_USER_ACTIVE);
 }
 
 static void
