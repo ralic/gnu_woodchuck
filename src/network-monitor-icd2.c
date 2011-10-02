@@ -461,13 +461,13 @@ gprs_detached (DBusGProxy *proxy, gpointer user_data)
   NCNetworkConnection *tether = connection_name_to_connection (m, "modem");
   if (tether)
     {
-      debug (1, DEBUG_BOLD ("GPRS DETACHED: %s"),
+      debug (4, "GPRS DETACHED: %s",
 	     connection_state_to_str (tether->state));
 
       connection_state_set (tether, CONNECTION_STATE_DISCONNECTED, false);
     }
   else
-    debug (1, DEBUG_BOLD ("GPRS DETACHED: no tether connection"));
+    debug (4, "GPRS DETACHED: no tether connection");
 
   struct nm_cell proposed = m->cell_info;
   proposed.gprs_availability = -1;
@@ -901,7 +901,7 @@ icd2_scan_sig_cb (DBusGProxy *proxy,
 	      && strcmp (ap->network_type, other->network_type) == 0)
 	    /* Already in list.  */
 	    {
-	      debug (3, "Ignoring duplicate ap %s.", ap->network_id);
+	      debug (4, "Ignoring duplicate ap %s.", ap->network_id);
 
 	      /* Update "volatile" parameters.  */
 	      other->network_flags = ap->network_flags;
