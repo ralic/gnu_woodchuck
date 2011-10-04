@@ -34,14 +34,22 @@ PKG_CHECK_EXISTS(maemo-version,
 		          /[0-9]+([.][0-9]+)?([.][0-9]+)?/
                             { printf ("%d%02d", $1, $2); }
                          ')
-                AC_DEFINE_UNQUOTED([HAVE_MAEMO_VERSION], $HAVE_MAEMO_VERSION,
-                          [Version of Maemo (format: XXYY, XX: Major, Y: Minor).])
 	],
 	[
-		AC_MSG_RESULT([no, configuring for a GTK-based environment])
+                # If maemo-version is not installed, but icd2 is,
+                # we're on Harmattan, which we call maemo version 6.
+                if pkg-config --modversion icd2 >/dev/null
+                then
+		    AC_MSG_RESULT([yes, found Harmattan])
+                    HAVE_MAEMO_VERSION=600
+                else
+		    AC_MSG_RESULT([no, configuring for a GTK-based environment])
+                fi
 	])
 if test x$HAVE_MAEMO_VERSION != x
 then
+  AC_DEFINE_UNQUOTED([HAVE_MAEMO_VERSION], $HAVE_MAEMO_VERSION,
+	[Version of Maemo (format: XXYY, XX: Major, Y: Minor).])
   AC_DEFINE_UNQUOTED(HAVE_MAEMO, 1, [Whether we are building for Maemo.])
 fi
 AM_CONDITIONAL([MAEMO], [test 0$HAVE_MAEMO_VERSION -gt 0])
