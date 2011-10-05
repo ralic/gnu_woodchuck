@@ -620,7 +620,7 @@ do_schedule (gpointer user_data)
     return 0;
   }
   char *errmsg = NULL;
-  int err = sqlite3_exec
+  sqlite3_exec
     (db,
      "select streams.uuid, streams.cookie,"
      "  streams.parent_uuid, managers.cookie, managers.DBusServiceName,"
@@ -783,7 +783,7 @@ do_schedule (gpointer user_data)
     return 0;
   }
   errmsg = NULL;
-  err = sqlite3_exec
+  sqlite3_exec
     (db,
      "select objects.uuid, objects.cookie,"
      "  streams.uuid, streams.cookie,"
@@ -1176,7 +1176,7 @@ object_register (const char *parent, const char *parent_table,
       }
 
       char *errmsg = NULL;
-      int err = sqlite3_exec_printf
+      sqlite3_exec_printf
 	(db,
 	 "select uuid from %s where cookie = '%s' and parent_uuid='%s';",
 	 unique_callback, NULL, &errmsg, object_table, cookie, parent);
@@ -1204,7 +1204,7 @@ object_register (const char *parent, const char *parent_table,
     }
 
   char *errmsg = NULL;
-  int err = sqlite3_exec (db, "begin transaction", NULL, NULL, &errmsg);
+  sqlite3_exec (db, "begin transaction", NULL, NULL, &errmsg);
   if (errmsg)
     {
       g_set_error (error, G_MURMELTIER_ERROR, 0,
@@ -1226,8 +1226,8 @@ object_register (const char *parent, const char *parent_table,
     return 0;
   }
 
- retry:
-  err = sqlite3_exec_printf
+ retry:;
+  int err = sqlite3_exec_printf
     (db,
      "insert or abort into %s"
      " (uuid, parent_uuid%s) values (lower(hex(randomblob(16))), %Q%s);"
@@ -1334,7 +1334,7 @@ object_register (const char *parent, const char *parent_table,
  out:
   if (abort_transaction)
     {
-      err = sqlite3_exec (db, "rollback transaction", NULL, NULL, &errmsg);
+      sqlite3_exec (db, "rollback transaction", NULL, NULL, &errmsg);
       if (errmsg)
 	{
 	  if (! ret)
@@ -1541,7 +1541,7 @@ object_unregister (const char *uuid,
 
 
       int total_changes = sqlite3_total_changes (db);
-      err = sqlite3_exec (db, sql->str, NULL, NULL, &errmsg);
+      sqlite3_exec (db, sql->str, NULL, NULL, &errmsg);
       g_string_free (sql, TRUE);
       if (errmsg)
 	{
@@ -1689,10 +1689,9 @@ woodchuck_manager_list_managers
   debug (0, "manager: %s, recursive: %d", manager, recursive);
 
   char *errmsg = NULL;
-  int err;
   if (recursive && ! manager)
     /* List everything.  */
-    err = sqlite3_exec
+    sqlite3_exec
       (db,
        "select uuid, Cookie, HumanReadableName, parent_uuid from managers;",
        list_callback, *managers, &errmsg);
@@ -1702,7 +1701,7 @@ woodchuck_manager_list_managers
       int i = 0;
       for (;;)
 	{
-	  err = sqlite3_exec_printf
+	  sqlite3_exec_printf
 	    (db,
 	     "select uuid, Cookie, HumanReadableName, parent_uuid"
 	     " from managers where parent_uuid = %Q;",
@@ -1722,7 +1721,7 @@ woodchuck_manager_list_managers
     }
   else
     /* List only those that are an immediate descendent of MANAGER.  */
-    err = sqlite3_exec_printf
+    sqlite3_exec_printf
       (db,
        "select uuid, Cookie, HumanReadableName, parent_uuid"
        " from managers where parent_uuid = %Q;",
@@ -1771,8 +1770,7 @@ woodchuck_manager_list_streams
   *list = g_ptr_array_new ();
 
   char *errmsg = NULL;
-  int err;
-  err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db,
      "select uuid, Cookie, HumanReadablename from streams"
      " where parent_uuid=%Q;",
@@ -1961,8 +1959,7 @@ woodchuck_stream_list_objects (const char *stream,
   *list = g_ptr_array_new ();
 
   char *errmsg = NULL;
-  int err;
-  err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db,
      "select uuid, Cookie, HumanReadableName from objects"
      " where parent_uuid=%Q;",
@@ -2020,12 +2017,12 @@ woodchuck_stream_update_status
   enum woodchuck_error ret = 0;
 
   char *errmsg = NULL;
-  int err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db, "select instance, parent_uuid from streams where uuid = %s;",
      callback, NULL, &errmsg, stream);
   if (errmsg)
     {
-      debug (0, "%d: %s", err, errmsg);
+      debug (0, "%s", errmsg);
       g_set_error (error, G_MURMELTIER_ERROR, 0,
 		   "Internal error at %s:%d: %s",
 		   __FILE__, __LINE__, errmsg);
@@ -2043,7 +2040,7 @@ woodchuck_stream_update_status
       goto out;
     }
 
-  err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db,
      "begin transaction;\n"
      "insert into stream_updates"
@@ -2140,7 +2137,7 @@ woodchuck_object_transfer_status
   enum woodchuck_error ret = 0;
 
   char *errmsg = NULL;
-  int err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db, "select instance, parent_uuid from objects where uuid = %s;",
      callback, NULL, &errmsg, object);
   if (errmsg)
@@ -2182,7 +2179,7 @@ woodchuck_object_transfer_status
 	}
     }
 
-  err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db,
      "begin transaction;\n"
      "insert into object_instance_status"
@@ -2243,7 +2240,7 @@ woodchuck_object_use (const char *object_raw, uint64_t start, uint64_t duration,
   enum woodchuck_error ret = 0;
 
   char *errmsg = NULL;
-  int err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db, "select instance, parent_uuid from objects where uuid = %s;",
      callback, NULL, &errmsg, object);
   if (errmsg)
@@ -2264,7 +2261,7 @@ woodchuck_object_use (const char *object_raw, uint64_t start, uint64_t duration,
       goto out;
     }
 
-  err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db,
      "insert into object_use"
      " (uuid, instance, parent_uuid, reported, start, duration, use_mask)"
@@ -2312,7 +2309,7 @@ woodchuck_object_files_deleted (const char *object_raw,
   enum woodchuck_error ret = 0;
 
   char *errmsg = NULL;
-  int err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db, "select instance, parent_uuid from objects where uuid = %s;",
      callback, NULL, &errmsg, object);
   if (errmsg)
@@ -2355,7 +2352,7 @@ woodchuck_object_files_deleted (const char *object_raw,
       goto out;
     }
 
-  err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db,
      "update object_instance_status set %s"
      " where uuid = %s"
@@ -2536,7 +2533,7 @@ property_set (const char *object,
     }
 
   char *errmsg = NULL;
-  int err = sqlite3_exec_printf
+  sqlite3_exec_printf
     (db, "update %s set %s = %s where uuid = '%s'",
      NULL, NULL, &errmsg,
      table, property_name, escaped_value, object);
@@ -2656,7 +2653,7 @@ main (int argc, char *argv[])
 	   filename, sqlite3_errmsg (db));
 
   char *errmsg = NULL;
-  err = sqlite3_exec
+  sqlite3_exec
     (db,
      "create table if not exists managers"
      " (uuid PRIMARY KEY, parent_uuid NOT NULL, HumanReadableName,"
