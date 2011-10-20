@@ -1326,7 +1326,9 @@ process_message (DBusConnection *connection, DBusMessage *message,
 
   if (error)
     {
-      assert (ret != 0);
+      assertx (ret != 0,
+	       "Error set, but ret is 0!  (%s.%s on %s: Returning %s: %s)",
+	       interface_str, method, path, error_name, error->message);
 
       dbus_message_unref (reply);
 
