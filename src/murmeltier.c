@@ -27,6 +27,7 @@
 #include <dbus/dbus-glib.h>
 #include <dbus/dbus-glib-bindings.h>
 #include <sqlite3.h>
+#include <pthread.h>
 
 #include "murmeltier-dbus-server.h"
 
@@ -96,7 +97,9 @@ struct _Murmeltier
 
 /* There is a single instance.  */
 static Murmeltier *mt;
-static sqlite3 *db = NULL;
+
+static char *db_filename;
+static sqlite3 *db;
 
 extern GType murmeltier_get_type (void);
 
@@ -466,75 +469,28 @@ static uint64_t last_schedule;
 
 #define IDLE_TIME_BEFORE_SCHEDULE (5 * 60)
 
-static gboolean
-do_schedule (gpointer user_data)
+static bool scheduler_running;
+
+static void *
+do_schedule_worker (void *arg)
 {
 #warning Support notifications for nested managers.
-  if (schedule_id)
-    g_source_remove (schedule_id);
-  schedule_id = 0;
-
-  switch (wc_user_activity_monitor_status (mt->uam))
-    {
-    case WC_USER_ACTIVE:
-      debug (3, "Not scheduling: User is active.");
-      goto out;
-
-    case WC_USER_IDLE:
-      {
-	int64_t idle_time = wc_user_activity_monitor_status_time (mt->uam);
-	debug (3, "User idle for "TIME_FMT, TIME_PRINTF (idle_time));
-	if (idle_time != -1 && idle_time < IDLE_TIME_BEFORE_SCHEDULE * 1000)
-	  {
-	    debug (3, "Not scheduling: User not idle long enough ("TIME_FMT").",
-		   TIME_PRINTF(IDLE_TIME_BEFORE_SCHEDULE * 1000));
-	    goto out;
-	  }
-
-	/* The user has been idle long enough.  Schedule.  */
-	break;
-      }
-
-    default:
-      /* Active/idle status is Unknown.  Ignore this criterium.  */
-      break;
-    }
-
-  if (mt->user_really_idling_timeout_id)
-    g_source_remove (mt->user_really_idling_timeout_id);
-  mt->user_really_idling_timeout_id = 0;
-
-  NCNetworkConnection *dc = nc_network_monitor_default_connection (mt->nm);
-  if (! dc)
-    /* No connection.  */
-    {
-      debug (3, "Not scheduling: No default connection.");
-      goto out;
-    }
-
-  if ((nc_network_connection_mediums (dc)
-       & ~(NC_CONNECTION_MEDIUM_ETHERNET|NC_CONNECTION_MEDIUM_WIFI)) != 0)
-    /* Only use ethernet and wifi based connections.  */
-    {
-      char *m = 
-	nc_connection_medium_to_string (nc_network_connection_mediums (dc));
-      debug (3, "Not scheduling: Default connection includes components "
-	     "that are neither ethernet nor Wifi (%s).",
-	     m);
-      g_free (m);
-      goto out;
-    }
-
-  if (upcall_list)
-    {
-      debug (3, "Not scheduling: %d pending upcalls.",
-	     g_slist_length (upcall_list));
-      goto out;
-    }
-
   /* The following is a very simple scheduler.  We look for streams
      and objects that have not been updated recently and update
      them.  */
+
+  /* Every thread must have its own sqlite3 instance.  */
+  sqlite3 *db = NULL;
+  int err = sqlite3_open (db_filename, &db);
+  if (err)
+    {
+      error (1, 0, "sqlite3_open (%s): %s",
+	     db_filename, sqlite3_errmsg (db));
+      goto out;
+    }
+
+  /* Wait a while before timing out.  */
+  sqlite3_busy_timeout (db, 5 * 60 * 1000);
 
   uint64_t n = now ();
 
@@ -823,6 +779,96 @@ do_schedule (gpointer user_data)
  out:
   last_schedule = now ();
 
+  scheduler_running = false;
+
+  sqlite3_close (db);
+
+  return NULL;
+}
+
+static pthread_t do_schedule_worker_tid;
+
+static gboolean
+do_schedule (gpointer user_data)
+{
+  if (schedule_id)
+    g_source_remove (schedule_id);
+  schedule_id = 0;
+
+  switch (wc_user_activity_monitor_status (mt->uam))
+    {
+    case WC_USER_ACTIVE:
+      debug (3, "Not scheduling: User is active.");
+      goto out;
+
+    case WC_USER_IDLE:
+      {
+	int64_t idle_time = wc_user_activity_monitor_status_time (mt->uam);
+	debug (3, "User idle for "TIME_FMT, TIME_PRINTF (idle_time));
+	if (idle_time != -1
+	    /* Subtract a couple of seconds to avoid not scheduling
+	       just because the timeout fired a second early (which is
+	       typical) */
+	    && idle_time < (IDLE_TIME_BEFORE_SCHEDULE - 2) * 1000)
+	  {
+	    debug (3, "Not scheduling: User not idle long enough ("TIME_FMT").",
+		   TIME_PRINTF(IDLE_TIME_BEFORE_SCHEDULE * 1000));
+	    goto out;
+	  }
+
+	/* The user has been idle long enough.  Schedule.  */
+	break;
+      }
+
+    default:
+      /* Active/idle status is Unknown.  Ignore this criterium.  */
+      break;
+    }
+
+  if (mt->user_really_idling_timeout_id)
+    g_source_remove (mt->user_really_idling_timeout_id);
+  mt->user_really_idling_timeout_id = 0;
+
+  NCNetworkConnection *dc = nc_network_monitor_default_connection (mt->nm);
+  if (! dc)
+    /* No connection.  */
+    {
+      debug (3, "Not scheduling: No default connection.");
+      goto out;
+    }
+
+  if ((nc_network_connection_mediums (dc)
+       & ~(NC_CONNECTION_MEDIUM_ETHERNET|NC_CONNECTION_MEDIUM_WIFI)) != 0)
+    /* Only use ethernet and wifi based connections.  */
+    {
+      char *m = 
+	nc_connection_medium_to_string (nc_network_connection_mediums (dc));
+      debug (3, "Not scheduling: Default connection includes components "
+	     "that are neither ethernet nor Wifi (%s).",
+	     m);
+      g_free (m);
+      goto out;
+    }
+
+  if (upcall_list)
+    {
+      debug (3, "Not scheduling: %d pending upcalls.",
+	     g_slist_length (upcall_list));
+      goto out;
+    }
+
+  if (scheduler_running)
+    {
+      debug (3, "Scheduler running: not starting scheduler.");
+      goto out;
+    }
+
+  scheduler_running = true;
+
+  pthread_create (&do_schedule_worker_tid, NULL, do_schedule_worker, NULL);
+  pthread_detach (do_schedule_worker_tid);
+
+ out:
   /* Don't call again.  */
   return FALSE;
 }
@@ -2751,7 +2797,8 @@ woodchuck_object_property_set (const char *object, const char *interface_name,
 int
 main (int argc, char *argv[])
 {
-  g_type_init();
+  g_thread_init (NULL);
+  g_type_init ();
 
   int err = dotdir_init ("murmeltier");
   if (err)
@@ -2761,11 +2808,14 @@ main (int argc, char *argv[])
     }
 
   /* Open the DB.  */
-  char *filename = dotdir_filename (NULL, "config.db");
-  err = sqlite3_open (filename, &db);
+  db_filename = dotdir_filename (NULL, "config.db");
+  err = sqlite3_open (db_filename, &db);
   if (err)
     error (1, 0, "sqlite3_open (%s): %s",
-	   filename, sqlite3_errmsg (db));
+	   db_filename, sqlite3_errmsg (db));
+
+  /* Wait a while before timing out.  */
+  sqlite3_busy_timeout (db, 5 * 60 * 1000);
 
   char *errmsg = NULL;
   sqlite3_exec
