@@ -22,6 +22,7 @@ import dbus.service
 import time
 import threading
 from functools import wraps
+import sys
 import logging
 logger = logging.getLogger(__name__)
 
@@ -1431,7 +1432,26 @@ class Upcalls(dbus.service.Object):
         """
         bus = dbus.SessionBus()
 
-        dbus.service.Object.__init__(self, bus, path)
+        try:
+            dbus.service.Object.__init__(self, bus, path)
+        except RuntimeError, e:
+            s = """
+A RunTime error occured while trying to connect to DBus.  Did you
+forget to include
+
+    from dbus.mainloop.glib import DBusGMainLoop
+    DBusGMainLoop(set_as_default=True)
+
+or
+
+    from dbus.mainloop.qt import DBusQtMainLoop
+    DBusQtMainLoop(set_as_default=True)
+
+before calling any DBus functions (or anything that uses DBus, such as
+Woodchuck)?"""
+            logger.error(s)
+            print >> sys.stderr, s
+            raise
 
         if not _watching_woodchuck_owner:
             bus.watch_name_owner ("org.woodchuck", _woodchuck_owner_update)
