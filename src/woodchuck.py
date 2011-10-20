@@ -292,8 +292,8 @@ def _keys_convert(d, conversion):
     this function returns the dictionary {'A':1, 'B':0}."""
     return dict ([[conversion[k][0],
                    conversion[k][1] (v if v is not None
-                                     else conversion[k][1][2])]
-                  for k, v in d.items ()])
+                                     else conversion[k][2])]
+                  for k, v in d.items()])
 
 # The dbus library is not thread safe.  Ensure that all calls are
 # executed in the same thread.
