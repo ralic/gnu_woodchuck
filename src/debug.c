@@ -156,8 +156,7 @@ debug_init_ (void)
 		      /* Keep about 100k records.  At 100 bytes each,
 			 this is about 10MB.  */
 		      "delete from log"
-		      "  where ROWID < (select max(ROWID) from log) - 100000;"
-		      "vacuum;",
+		      "  where ROWID < (select max(ROWID) from log) - 100000;",
 		      NULL, NULL, &errmsg);
   if (errmsg)
     {
