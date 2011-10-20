@@ -151,7 +151,7 @@ EXTRA_DIST += network-monitor-icd2.c network-monitor-nm.c
 debug_src = debug.h debug.c
 # If you define LOG_TO_DB, you also need the following files and
 # you'll need to link to sqlite.
-debug_log_to_db_src = $(debug_src) util.h files.h
+debug_log_to_db_src = $(debug_src) util.h files.h sqlq.h sqlq.c
 
 # The monitors and their dependencies (except for debug; choose either
 # debug_src or debug_log_to_db_src).
@@ -194,7 +194,6 @@ smart_storage_logger_SOURCES = $(dbus_interfaces_h) $(monitors) \
 	smart-storage-logger-uploader.h smart-storage-logger-uploader.c \
 	pidfile.h pidfile.c \
 	md5.h md5.c \
-	sqlq.h sqlq.c \
 	util.h \
 	$(debug_log_to_db_src)
 smart_storage_logger_CPPFLAGS = $(AM_CPPFLAGS) \

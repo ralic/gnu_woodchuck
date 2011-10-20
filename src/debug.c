@@ -11,8 +11,13 @@
 #include "util.h"
 #include "files.h"
 #include <sqlite3.h>
+#include <sqlq.h>
+#include <pthread.h>
+
 static __thread sqlite3 *debug_output_file;
 static char *debug_output_filename;
+static __thread struct sqlq *debug_output_buffer;
+
 #endif
 
 #if !defined(DEBUG_ELIDE)
@@ -22,7 +27,8 @@ __thread int output_debug = 3;
 
 void
 debug_ (const char *file, const char *function, int line,
-	void *return_address, int level, const char *fmt, ...)
+	void *return_address, int level,
+	bool async, const char *fmt, ...)
 {
   debug_init_ ();
 
@@ -50,21 +56,56 @@ debug_ (const char *file, const char *function, int line,
 	- (utc.tm_hour * 60 + utc.tm_min);
     }
 
-  char *errmsg = NULL;
-  sqlite3_exec_printf
-    (debug_output_file,
-     "insert into log "
+  char *sql = sqlite3_mprintf
+    ("insert into log "
      "  (timestamp, tz, level, file, function, line, return_address, message)"
      " values (%"PRId64", %d, %d, %Q, %Q, %d, '0x%"PRIxPTR"', %Q);",
-     NULL, NULL, &errmsg,
      n, tz, level, file, function, line, return_address, msg);
 
-  if (errmsg)
+  /* Only initialize the buffer once we see an async message.  */
+  if (! debug_output_buffer && async)
     {
-      fprintf (stderr, "%s\n", errmsg);
-      sqlite3_free (errmsg);
-      errmsg = NULL;
+      debug_output_buffer = sqlq_new (debug_output_file, 8 * 4096, 30);
+
+      /* Flush and destroy the buffer when the thread exists.  */
+      void destructor (void *value)
+      {
+	sqlq_flush (debug_output_buffer);
+	sqlq_free (debug_output_buffer);
+	debug_output_buffer = NULL;
+      }
+
+      static pthread_key_t key;
+
+      void set_destructor (void)
+      {
+	pthread_key_create (&key, destructor);
+      }
+      static pthread_once_t set_destructor_once = PTHREAD_ONCE_INIT;
+      pthread_once (&set_destructor_once, set_destructor);
+
+      pthread_setspecific (key, debug_output_buffer);
     }
+
+  /* If we have a debug buffer, we use it unconditionally to ensure
+     messages are ordered chronologically.  If we don't have a debug
+     buffer, then we haven't seen an async message yet (or we failed
+     to allocate the buffer).  */
+  if (debug_output_buffer)
+    sqlq_append (debug_output_buffer, async ? false : true, sql);
+  else
+    {
+      char *errmsg = NULL;
+      sqlite3_exec (debug_output_file, sql, NULL, NULL, &errmsg);
+      if (errmsg)
+	{
+	  fprintf (stderr, "%s\n", errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+	}
+    }
+
+  sqlite3_free (sql);
 #else
   time_t __t = time (NULL);
   struct tm __tm;

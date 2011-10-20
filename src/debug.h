@@ -5,6 +5,7 @@
 #include <execinfo.h>
 #include <stdlib.h>
 #include <time.h>
+#include <stdbool.h>
 
 /* The file to send output to (only used if logging to a file, see
    e.g. LOG_TO_DB).  */
@@ -53,11 +54,12 @@ extern __thread int output_debug;
 
 extern void debug_(const char *file, const char *function, int line,
 		   void *return_address,
-		   int level, const char *fmt, ...)
-  __attribute__ ((format (printf, 6, 7)));
+		   int level, bool async,
+		   const char *fmt, ...)
+  __attribute__ ((format (printf, 7, 8)));
 
 /* Print a debug message if DEBUG_COND is true.  */
-#define debug(level, fmt, ...)						\
+#define debug_full(level, async, fmt, ...)				\
   do									\
     {									\
       do_debug (level)							\
@@ -66,10 +68,26 @@ extern void debug_(const char *file, const char *function, int line,
 	  debug_ (__d_fn ? __d_fn + 1 : __FILE__,			\
 		  __func__, __LINE__,					\
 		  __builtin_return_address (0),				\
-		  level, fmt, ##__VA_ARGS__);				\
+		  level, async, fmt, ##__VA_ARGS__);			\
 	}								\
     }									\
   while (0)
+
+#define debug_sync(level, fmt, ...)		\
+  debug_full(level, false, fmt, ##__VA_ARGS__)
+
+#define debug_async(level, fmt, ...)		\
+  debug_full(level, true, fmt, ##__VA_ARGS__)
+
+/* When using debug, if the debug level is 0 or less than 2 below the
+   maximum, we write synchronously.  */
+#define DEBUG_ASYNC_THRESHOLD_DELTA 2
+#define debug(level, fmt, ...)						\
+  debug_full(level,							\
+	     ((level) == 0						\
+	      || DEBUG_COND ((level) + DEBUG_ASYNC_THRESHOLD_DELTA))	\
+	     ? false : true,						\
+	     fmt, ##__VA_ARGS__)
 
 /* Returns the absolute filename of the file used for debugging
    output, or NULL if not sending output to a file.  */
