@@ -2380,6 +2380,92 @@ woodchuck_object_files_deleted (const char *object_raw,
 }
 
 static enum woodchuck_error
+property_get_sql (const char *sql,
+		  const char *interface_name, const char *property_name,
+		  GType property_type, const char *default_value,
+		  GValue *value, GError **error)
+{
+  bool did_set = false;
+
+  void set(const char *value_str)
+  {
+    debug (4, "Property %s.%s = %s",
+	   interface_name, property_name, value_str);
+
+    did_set = true;
+
+    char *tailptr = NULL;
+    switch (property_type)
+      {
+      default:
+	debug (0, "Property %s.%s has unhandled type (%d)!",
+	       interface_name, property_name, (int) property_type);
+      case G_TYPE_STRING:
+	g_value_init (value, G_TYPE_STRING);
+	if (! value_str)
+	  g_value_set_static_string (value, "");
+	else
+	  g_value_set_string (value, value_str);
+	break;
+      case G_TYPE_BOOLEAN:
+	g_value_init (value, G_TYPE_BOOLEAN);
+	g_value_set_boolean (value,
+			     value_str ? strtol (value_str, &tailptr, 10) : 0);
+	break;
+      case G_TYPE_INT:
+	g_value_init (value, G_TYPE_INT);
+	g_value_set_int (value,
+			 value_str ? strtol (value_str, &tailptr, 10) : 0);
+	break;
+      case G_TYPE_UINT:
+	g_value_init (value, G_TYPE_UINT);
+	g_value_set_uint (value,
+			  value_str ? strtoul (value_str, &tailptr, 10) : 0);
+	break;
+      case G_TYPE_INT64:
+	g_value_init (value, G_TYPE_INT64);
+	g_value_set_int64 (value,
+			   value_str ? strtoll (value_str, &tailptr, 10) : 0);
+	break;
+      case G_TYPE_UINT64:
+	g_value_init (value, G_TYPE_UINT64);
+	g_value_set_uint64 (value,
+			    value_str ? strtoull (value_str, &tailptr, 10) : 0);
+	break;
+      }
+  }
+
+  int callback (void *cookie, int argc, char **argv, char **names)
+  {
+    debug (4, "Properties.Get ('%s', '%s') -> %s",
+	   interface_name, property_name, argv[0]);
+
+    set (argv[0]);
+
+    return 0;
+  }
+
+  char *errmsg = NULL;
+  sqlite3_exec (db, sql, callback, NULL, &errmsg);
+  if (errmsg)
+    {
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Internal error at %s:%d executing '%s': %s",
+		   __FILE__, __LINE__, sql, errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
+
+      return WOODCHUCK_ERROR_INTERNAL_ERROR;
+    }
+
+  if (! did_set)
+    /* Is this always the right default?  */
+    set (default_value);
+
+  return 0;
+}
+
+static enum woodchuck_error
 property_get (const char *object,
 	      const char *table, struct property *properties,
 	      const char *expected_interface_name,
@@ -2401,68 +2487,10 @@ property_get (const char *object,
       return DBUS_GERROR_INVALID_ARGS;
     }
 
-  int callback (void *cookie, int argc, char **argv, char **names)
-  {
-    debug (4, "Properties.Get ('%s', '%s') -> %s",
-	   interface_name, property_name, argv[0]);
-
-    char *tailptr = NULL;
-    switch (properties[i].type)
-      {
-      default:
-	debug (0, "Property %s has unhandled type (%d)!",
-	       property_name, (int) properties[i].type);
-      case G_TYPE_STRING:
-	g_value_init (value, G_TYPE_STRING);
-	if (! argv[0])
-	  g_value_set_static_string (value, "");
-	else
-	  g_value_set_string (value, argv[0]);
-	break;
-      case G_TYPE_BOOLEAN:
-	g_value_init (value, G_TYPE_BOOLEAN);
-	g_value_set_boolean (value,
-			     argv[0] ? strtol (argv[0], &tailptr, 10) : 0);
-	break;
-      case G_TYPE_INT:
-	g_value_init (value, G_TYPE_INT);
-	g_value_set_int (value, argv[0] ? strtol (argv[0], &tailptr, 10) : 0);
-	break;
-      case G_TYPE_UINT:
-	g_value_init (value, G_TYPE_UINT);
-	g_value_set_uint (value,
-			  argv[0] ? strtoul (argv[0], &tailptr, 10) : 0);
-	break;
-      case G_TYPE_INT64:
-	g_value_init (value, G_TYPE_INT64);
-	g_value_set_int64 (value,
-			   argv[0] ? strtoll (argv[0], &tailptr, 10) : 0);
-	break;
-      case G_TYPE_UINT64:
-	g_value_init (value, G_TYPE_UINT64);
-	g_value_set_uint64 (value,
-			    argv[0] ? strtoull (argv[0], &tailptr, 10) : 0);
-	break;
-      }
-    return 0;
-  }
-
-  char *errmsg = NULL;
-  sqlite3_exec_printf
-    (db, "select %s from %s where uuid = '%s';",
-     callback, NULL, &errmsg, property_name, table, object);
-  if (errmsg)
-    {
-      g_set_error (error, G_MURMELTIER_ERROR, 0,
-		   "Internal error at %s:%d: %s",
-		   __FILE__, __LINE__, errmsg);
-      sqlite3_free (errmsg);
-      errmsg = NULL;
-
-      return WOODCHUCK_ERROR_INTERNAL_ERROR;
-    }
-
-  return 0;
+  char *sql = sqlite3_mprintf ("select %s from %s where uuid = '%s';",
+			       property_name, table, object);
+  return property_get_sql (sql, interface_name, property_name,
+			   properties[i].type, NULL, value, error);
 }
 
 static enum woodchuck_error
@@ -2597,9 +2625,49 @@ woodchuck_stream_property_get (const char *object, const char *interface_name,
 			       const char *property_name,
 			       GValue *value, GError **error)
 {
-  return property_get (object, "streams", stream_properties,
-		       "org.woodchuck.stream", interface_name, property_name,
-		       value, error);
+  char *sql = NULL;
+  GType type;
+  const char *default_value;
+  if (strcmp (property_name, "LastUpdateTime") == 0)
+    {
+      sql = sqlite3_mprintf
+	("select transfer_time from stream_updates"
+	 " where uuid = '%s' and status = 0 order by instance desc limit 1",
+	 object);
+      type = G_TYPE_UINT64;
+      default_value = "0";
+    }
+  else if (strcmp (property_name, "LastUpdateAttemptTime") == 0)
+    {
+      sql = sqlite3_mprintf
+	("select transfer_time from stream_updates"
+	 " where uuid = '%s' order by instance desc limit 1",
+	 object);
+      type = G_TYPE_UINT64;
+      default_value = "0";
+    }
+  else if (strcmp (property_name, "LastUpdateAttemptStatus") == 0)
+    {
+      sql = sqlite3_mprintf
+	("select status from stream_updates"
+	 " where uuid = '%s' order by instance desc limit 1",
+	 object);
+      type = G_TYPE_UINT;
+      default_value = "0";
+    }
+
+  if (sql)
+    {
+      enum woodchuck_error err
+	= property_get_sql (sql, interface_name, property_name, type,
+			    default_value, value, error);
+      sqlite3_free (sql);
+      return err;
+    }
+  else
+    return property_get (object, "streams", stream_properties,
+			 "org.woodchuck.stream", interface_name, property_name,
+			 value, error);
 }
 
 enum woodchuck_error
@@ -2617,10 +2685,57 @@ woodchuck_object_property_get (const char *object, const char *interface_name,
 			       const char *property_name,
 			       GValue *value, GError **error)
 {
+  char *sql = NULL;
+  GType type;
+  const char *default_value;
+  if (strcmp (property_name, "LastTransferTime") == 0)
+    {
+      sql = sqlite3_mprintf
+	("select transfer_time from object_instance_status"
+	 " where uuid = '%s' and status = 0 order by instance desc limit 1",
+	 object);
+      type = G_TYPE_UINT64;
+      default_value = "0";
+    }
+  else if (strcmp (property_name, "LastTransferAttemptTime") == 0)
+    {
+      sql = sqlite3_mprintf
+	("select transfer_time from object_instance_status"
+	 " where uuid = '%s' order by instance desc limit 1",
+	 object);
+      type = G_TYPE_UINT64;
+      default_value = "0";
+    }
+  else if (strcmp (property_name, "LastTransferAttemptStatus") == 0)
+    {
+      sql = sqlite3_mprintf
+	("select status from object_instance_status"
+	 " where uuid = '%s' order by instance desc limit 1",
+	 object);
+      type = G_TYPE_UINT;
+      default_value = "0";
+    }
+  else if (strcmp (property_name, "Versions") == 0)
+    {
 #warning Support getting and setting object.Versions
-  return property_get (object, "objects", object_properties,
-		       "org.woodchuck.object", interface_name, property_name,
-		       value, error);
+      g_set_error (error, G_MURMELTIER_ERROR, 0,
+		   "Reading %s not implemented", property_name);
+      return WOODCHUCK_ERROR_NOT_IMPLEMENTED;
+    }
+
+  if (sql)
+    {
+      enum woodchuck_error err
+	= property_get_sql (sql, interface_name, property_name, type,
+			    default_value, value, error);
+      sqlite3_free (sql);
+      return err;
+    }
+  else
+    return property_get
+      (object, "objects", object_properties,
+       "org.woodchuck.object", interface_name, property_name,
+       value, error);
 }
 
 enum woodchuck_error

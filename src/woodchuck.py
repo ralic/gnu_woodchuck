@@ -228,6 +228,12 @@ _stream_properties_to_camel_case = \
                                     False, _ttl),
            "registration_time": ("RegistrationTime", dbus.UInt64, 0,
                                  float("inf")),
+           "last_update_time":
+               ("LastUpdateTime", dbus.UInt64, 0, _ttl),
+           "last_update_attempt_time":
+               ("LastUpdateAttemptTime", dbus.UInt64, 0, _ttl),
+           "last_update_attempt_status":
+               ("LastUpdateAttemptStatus", dbus.UInt32, 0, _ttl),
            })
 _stream_properties_from_camel_case = \
     dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)
@@ -257,6 +263,12 @@ _object_properties_to_camel_case = \
            "publication_time": ("PublicationTime", dbus.UInt64, 0, _ttl),
            "registration_time": ("RegistrationTime", dbus.UInt64, 0,
                                  float("inf")),
+           "last_transfer_time":
+               ("LastTransferTime", dbus.UInt64, 0, _ttl),
+           "last_transfer_attempt_time":
+               ("LastTransferAttemptTime", dbus.UInt64, 0, _ttl),
+           "last_transfer_attempt_status":
+               ("LastTransferAttemptStatus", dbus.UInt32, 0, _ttl),
            })
 _object_properties_from_camel_case = \
     dict([[k2, (k, t, d, ttl)] for k, (k2, t, d, ttl)

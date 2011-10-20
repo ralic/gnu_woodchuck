@@ -158,5 +158,14 @@
 
     <!-- The time at which the stream was registered.  -->
     <property name="RegistrationTime" type="t" access="read"/>
+
+    <!-- The time at which the stream was last successfully updated. -->
+    <property name="LastUpdateTime" type="t" access="read"/>
+
+    <!-- The time at which the last update attempt occured .  -->
+    <property name="LastUpdateAttemptTime" type="t" access="read"/>
+
+    <!-- The status code of the last update attempt .  -->
+    <property name="LastUpdateAttemptStatus" type="u" access="read"/>
   </interface>
 </node>

@@ -24,6 +24,7 @@ from optparse import OptionParser
 import traceback
 import shlex
 import readline
+import time
 
 # Load woodchuck.
 
@@ -254,10 +255,21 @@ class Shell(object):
                 return
 
             for prop in sorted(o.property_map.keys(), key=str.lower):
-                if prop == 'versions':
-                    continue
-                print("%s%s: %s"
-                      % ("  " * indent, prop, o.__getattribute__(prop)))
+                try:
+                    value = o.__getattribute__(prop)
+
+                    if prop.endswith('_time'):
+                        try:
+                            if int(value) > 0:
+                                t = time.localtime(int(value))
+                                value = ("%s (%s)"
+                                         % (time.strftime ("%c", t), value))
+                        except Exception, e:
+                            import logging
+                            logging.exception("%s", e)
+                except Exception, e:
+                    value = "Error: %s" % e
+                print("%s%s: %s" % ("  " * indent, prop, value))
             
         if len(args) == 0:
             for i, _ in enumerate(objects()):

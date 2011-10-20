@@ -255,5 +255,15 @@
 
     <!-- The time at which the object was registered.  -->
     <property name="RegistrationTime" type="t" access="read"/>
+
+    <!-- The time at which the object was last successfully
+         transferred. -->
+    <property name="LastTransferTime" type="t" access="read"/>
+
+    <!-- The time at which the last transfer attempt occured .  -->
+    <property name="LastTransferAttemptTime" type="t" access="read"/>
+
+    <!-- The status code of the last transfer attempt .  -->
+    <property name="LastTransferAttemptStatus" type="u" access="read"/>
   </interface>
 </node>
