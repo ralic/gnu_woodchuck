@@ -449,6 +449,34 @@ wc_battery_monitor_list (WCBatteryMonitor *m)
   return list;
 }
 
+bool
+wc_battery_monitor_charging (WCBatteryMonitor *m)
+{
+  GList *l;
+  for (l = m->batteries; l; l = l->next)
+    {
+      WCBattery *b = WC_BATTERY (l->data);
+      if (wc_battery_is_charging (b))
+	return true;
+    }
+
+  return false;
+}
+
+bool
+wc_battery_monitor_discharging (WCBatteryMonitor *m)
+{
+  GList *l;
+  for (l = m->batteries; l; l = l->next)
+    {
+      WCBattery *b = WC_BATTERY (l->data);
+      if (wc_battery_is_discharging (b))
+	return true;
+    }
+
+  return false;
+}
+
 WCBatteryMonitor *
 wc_battery_monitor_new (void)
 {

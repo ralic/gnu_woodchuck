@@ -23,6 +23,7 @@
 #include <glib-object.h>
 
 #include <stdint.h>
+#include <stdbool.h>
 
 #include "config.h"
 
@@ -116,6 +117,12 @@ extern WCBatteryMonitor *wc_battery_monitor_new (void);
      g_slist_free (list);
 */
 extern GSList *wc_battery_monitor_list (WCBatteryMonitor *m);
+
+/* Return true if any battery is charging.  */
+extern bool wc_battery_monitor_charging (WCBatteryMonitor *m);
+
+/* Return true if any battery is discharging.  */
+extern bool wc_battery_monitor_discharging (WCBatteryMonitor *m);
 
 /* Returns a battery's identifier.  */
 extern const char *wc_battery_id (WCBattery *b);
