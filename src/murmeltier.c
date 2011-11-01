@@ -465,7 +465,74 @@ upcall_execute_callback (gpointer user_data)
 
 static guint schedule_id;
 
-static uint64_t last_schedule;
+/* The time of the last N schedulings.  N should be a multiple of 8.  */
+static uint64_t schedule_records[8];
+#define schedule_records_count \
+  (sizeof (schedule_records) / sizeof (schedule_records[0]))
+static int schedule_record_oldest;
+
+/* On average, schedule at most every 30 minutes.  */
+#define SCHEDULING_THRESHOLD (schedule_records_count * 30 * 60 * 1000)
+/* But don't allow burts to exceed approximately every 10 minutes.  */
+#define SCHEDULING_NEWEST_QUARTER_THRESHOLD \
+  ((schedule_records_count / 4) * 10 * 60 * 1000)
+
+/* Remember that a scheduling occured.  */
+static void
+schedule_notice ()
+{
+  schedule_records[schedule_record_oldest] = now ();
+
+  schedule_record_oldest ++;
+  if (schedule_record_oldest == schedule_records_count)
+    schedule_record_oldest = 0;
+}
+
+static uint64_t
+schedule_last_schedule ()
+{
+  int i = schedule_record_oldest - 1;
+  if (i < 0)
+    i += schedule_records_count;
+
+  return schedule_records[i];
+}
+
+/* Check if scheduling occurs too frequently.  */
+static bool
+schedule_frequency_check ()
+{
+  uint64_t n = now ();
+
+  uint64_t total = 0;
+  uint64_t newest_quarter_total = 0;
+  int newest_quarter_count = schedule_records_count / 4;
+
+  int i;
+  for (i = 0; i < schedule_records_count; i ++)
+    {
+      /* Newest to oldest.  */
+      int j = schedule_record_oldest - (i + 1);
+      if (j < 0)
+	j += schedule_records_count;
+
+      total += n - schedule_records[j];
+
+      if (i < newest_quarter_count)
+	newest_quarter_total += n - schedule_records[j];
+    }
+
+  uint64_t average = total / schedule_records_count;
+  uint64_t newest_quarter_average
+    = newest_quarter_total / newest_quarter_count;
+
+  debug (3, "Average time since last %d scans: "TIME_FMT"; %d scans: "TIME_FMT,
+	 (int) schedule_records_count, TIME_PRINTF (average),
+	 newest_quarter_count, TIME_PRINTF (newest_quarter_average));
+
+  return (average > SCHEDULING_THRESHOLD
+	  && newest_quarter_average > SCHEDULING_NEWEST_QUARTER_THRESHOLD);
+}
 
 #define IDLE_TIME_BEFORE_SCHEDULE (5 * 60)
 
@@ -777,7 +844,7 @@ do_schedule_worker (void *arg)
     }
 
  out:
-  last_schedule = now ();
+  schedule_notice ();
 
   scheduler_running = false;
 
@@ -828,6 +895,12 @@ do_schedule (gpointer user_data)
   if (mt->user_really_idling_timeout_id)
     g_source_remove (mt->user_really_idling_timeout_id);
   mt->user_really_idling_timeout_id = 0;
+
+  if (! schedule_frequency_check ())
+    {
+      debug (3, "Not scheduling: scheduler run too frequently recently.");
+      goto out;
+    }
 
   NCNetworkConnection *dc = nc_network_monitor_default_connection (mt->nm);
   if (! dc)
@@ -881,12 +954,13 @@ schedule (void)
   if (schedule_id)
     return;
 
-  int64_t last_schedule_delta = (now () - last_schedule) / 1000;
+  int64_t last_schedule_delta
+    = (now () - schedule_last_schedule ()) / 1000;
   /* Minimum interval: 2 minutes.  But at least 10 sec to aggregate
      multiple events.  */
   int delay = MAX (10, 120LL - last_schedule_delta);
-  debug (3, "Running scheduler in %d seconds (last schedule delta: %"PRId64")",
-	 delay, last_schedule_delta);
+  debug (3, "Running scheduler in %d seconds (last schedule delta: "TIME_FMT")",
+	 delay, TIME_PRINTF(1000 * last_schedule_delta));
 
   schedule_id = g_timeout_add_seconds (delay, do_schedule, NULL);
 }
