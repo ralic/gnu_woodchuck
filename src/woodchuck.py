@@ -356,7 +356,8 @@ class _BaseObject(object):
             # name is cached and it is still valid.
             return properties[name][0]
 
-        value = self.dbus_properties.Get("", property_map[name][0])
+        value = self.dbus_properties.Get(
+            dbus.String(""), dbus.String(property_map[name][0]))
 
         if property_map[name][3] is not None:
             # TTL is not None.  Cache the value.
@@ -368,8 +369,9 @@ class _BaseObject(object):
     def __setattr__(self, name, value):
         if ('property_map' in self.__dict__ and name in self.property_map):
             # Write through...
-            self.dbus_properties.Set("", self.property_map[name][0],
-                                     self.property_map[name][1] (value))
+            self.dbus_properties.Set(
+                dbus.String(""), dbus.String(self.property_map[name][0]),
+                self.property_map[name][1](value))
             if self.property_map[name][3] is not None:
                 # Cache the value.
                 self.properties[name] = [ value, time.time () ]
@@ -406,9 +408,9 @@ class _Object(_BaseObject):
             actual values.
         """
 
-        self.proxy = dbus.SessionBus().get_object ('org.woodchuck',
-                                                   '/org/woodchuck/object/'
-                                                   + properties['UUID'])
+        self.proxy = dbus.SessionBus().get_object(
+            'org.woodchuck', '/org/woodchuck/object/' + properties['UUID'],
+            introspect=False)
         try:
             self.dbus = dbus.Interface (self.proxy,
                                         dbus_interface='org.woodchuck.object')
@@ -445,7 +447,7 @@ class _Object(_BaseObject):
             possible values.
         """
         try:
-            self.dbus.Transfer (request_type)
+            self.dbus.Transfer(dbus.UInt32(request_type))
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
@@ -506,33 +508,33 @@ class _Object(_BaseObject):
               files=( ("/home/user/Podcasts/Foo/Episode1.ogg", True,
                        woodchuck.DeletionPolicy.DeleteWithoutConsultation),))
         """
-        status = dbus.UInt32 (status)
+        status = dbus.UInt32(status)
 
         if indicator is None:
             indicator = 0x80000000
-        indicator = dbus.UInt32 (indicator)
+        indicator = dbus.UInt32(indicator)
 
         if transferred_up is None:
             transferred_up = 2 ** 64 - 1
-        transferred_up = dbus.UInt64 (transferred_up)
+        transferred_up = dbus.UInt64(transferred_up)
 
         if transferred_down is None:
             transferred_down = 2 ** 64 - 1
-        transferred_down = dbus.UInt64 (transferred_down)
+        transferred_down = dbus.UInt64(transferred_down)
 
         if transfer_time is None:
             transfer_time = int (time.time ())
-        transfer_time = dbus.UInt64 (transfer_time)
+        transfer_time = dbus.UInt64(transfer_time)
 
         if transfer_duration is None:
             transfer_duration = 0
-        transfer_duration = dbus.UInt32 (transfer_duration)
+        transfer_duration = dbus.UInt32(transfer_duration)
 
         if object_size is None:
             object_size = 2 ** 64 - 1
-        object_size = dbus.UInt64 (object_size)
+        object_size = dbus.UInt64(object_size)
 
-        files = dbus.Array (files if files is not None else [], "(sbu)")
+        files = dbus.Array(files if files is not None else [], "(sbu)")
 
         try:
             self.dbus.TransferStatus(status, indicator,
@@ -540,7 +542,7 @@ class _Object(_BaseObject):
                                      transfer_time, transfer_duration,
                                      object_size, files)
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
     @_check_main_thread
     def used(self, start=None, duration=None, use_mask=None):
@@ -566,10 +568,13 @@ class _Object(_BaseObject):
         """
         if start is None:
             start = int (time.time ())
+        start = dbus.UInt64(start)
         if duration is None:
             duration = 2 ** 64 - 1
+        duration = dbus.UInt64(duration)
         if use_mask is None:
             use_mask = 2 ** 64 - 1
+        use_mask = dbus.UInt64(use_mask)
 
         try:
             self.dbus.Used(start, duration, use_mask)
@@ -611,6 +616,9 @@ class _Object(_BaseObject):
                 arg = int (time.time ()) + 5 * 60
             elif update == DeletionResponse.Compressed:
                 arg = 2 ** 64 - 1
+
+        update = dbus.UInt32(update)
+        arg = dbus.UInt64(arg)
         
         try:
             self.dbus.FilesDeleted(update, arg)
@@ -660,9 +668,9 @@ class _Stream(_BaseObject):
             actual values.
         """
 
-        self.proxy = dbus.SessionBus().get_object \
-            ('org.woodchuck',
-             '/org/woodchuck/stream/' + properties['UUID'])
+        self.proxy = dbus.SessionBus().get_object(
+            'org.woodchuck', '/org/woodchuck/stream/' + properties['UUID'],
+            introspect=False)
         try:
             self.dbus = dbus.Interface (self.proxy,
                                         dbus_interface='org.woodchuck.stream')
@@ -693,9 +701,9 @@ class _Stream(_BaseObject):
                   % (str (stream), exception)
         """
         try:
-            ret = self.dbus.Unregister (only_if_empty)
+            ret = self.dbus.Unregister(dbus.Boolean(only_if_empty))
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
         if ret:
             del _streams[self.UUID]
@@ -719,13 +727,16 @@ class _Stream(_BaseObject):
         """
         try:
             UUID = self.dbus.ObjectRegister \
-                (_keys_convert (properties, _object_properties_to_camel_case),
-                 only_if_cookie_unique)
+                (dbus.Dictionary(
+                    _keys_convert(properties,
+                                  _object_properties_to_camel_case),
+                    'sv'),
+                 dbus.Boolean(only_if_cookie_unique))
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
         properties['UUID'] = UUID
-        return Object (**properties)
+        return Object(**properties)
 
     @_check_main_thread
     def list_objects(self):
@@ -740,9 +751,9 @@ class _Stream(_BaseObject):
             return [Object(UUID=UUID, human_readable_name=human_readable_name,
                            cookie=cookie, parent_UUID=self.UUID)
                     for UUID, cookie, human_readable_name
-                    in self.dbus.ListObjects ()]
+                    in self.dbus.ListObjects()]
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
     @_check_main_thread
     def lookup_object_by_cookie(self, cookie):
@@ -759,9 +770,10 @@ class _Stream(_BaseObject):
             return [Object(UUID=UUID, human_readable_name=human_readable_name,
                            cookie=cookie, parent_UUID=self.UUID)
                     for UUID, human_readable_name
-                    in self.dbus.LookupObjectByCookie (cookie)]
+                    in self.dbus.LookupObjectByCookie(
+                        dbus.String(_str_to_dbus_str(cookie)))]
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
     @_check_main_thread
     def update_status(self, status, indicator=None,
@@ -835,22 +847,39 @@ class _Stream(_BaseObject):
           stream.update_status (woodchuck.TransientNetwork,
                                 transferred_up=100)
         """
+        status = dbus.UInt32(status)
+
         if indicator is None:
             indicator = 0
+        indicator = dbus.UInt32(indicator)
+
         if transferred_up is None:
             transferred_up = 2 ** 64 - 1
+        transferred_up = dbus.UInt64(transferred_up)
+
         if transferred_down is None:
             transferred_down = 2 ** 64 - 1
+        transferred_down = dbus.UInt64(transferred_down)
+
         if transfer_time is None:
             transfer_time = 0
+        transfer_time = dbus.UInt64(transfer_time)
+
         if transfer_duration is None:
             transfer_duration = 0
+        transfer_duration = dbus.UInt32(transfer_duration)
+
         if new_objects is None:
             new_objects = 2 ** 32 - 1
+        new_objects = dbus.UInt32(new_objects)
+
         if updated_objects is None:
             updated_objects = 2 ** 32 - 1
+        updated_objects = dbus.UInt32(updated_objects)
+
         if objects_inline is None:
             objects_inline = 2 ** 32 - 1
+        objects_inline = dbus.UInt32(objects_inline)
 
         try:
             self.dbus.UpdateStatus(status, indicator,
@@ -858,7 +887,7 @@ class _Stream(_BaseObject):
                                    transfer_time, transfer_duration,
                                    new_objects, updated_objects, objects_inline)
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
 _streams = {}
 def Stream(**properties):
@@ -903,9 +932,9 @@ class _Manager(_BaseObject):
             manager's actual values.
         """
 
-        self.proxy = dbus.SessionBus().get_object \
-            ('org.woodchuck',
-             '/org/woodchuck/manager/' + properties['UUID'])
+        self.proxy = dbus.SessionBus().get_object(
+            'org.woodchuck', '/org/woodchuck/manager/' + properties['UUID'],
+            introspect=False)
         try:
             self.dbus = dbus.Interface (self.proxy,
                                         dbus_interface='org.woodchuck.manager')
@@ -940,9 +969,9 @@ class _Manager(_BaseObject):
               print "Can't remove manager %s: Not empty: %s" \\
                   % (str (manager), exception)"""
         try:
-            ret = self.dbus.Unregister (only_if_empty)
+            ret = self.dbus.Unregister(dbus.Boolean(only_if_empty))
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
         if ret:
             del _managers[self.UUID]
 
@@ -984,13 +1013,16 @@ class _Manager(_BaseObject):
         """
         try:
             UUID = self.dbus.ManagerRegister \
-                (_keys_convert (properties, _manager_properties_to_camel_case),
-                 only_if_cookie_unique)
+                (dbus.Dictionary(
+                    _keys_convert(properties,
+                                  _manager_properties_to_camel_case),
+                    'sv'),
+                 dbus.Boolean(only_if_cookie_unique))
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
         properties['UUID'] = UUID
-        return Manager (**properties)
+        return Manager(**properties)
 
     @_check_main_thread
     def list_managers(self, recursive=False):
@@ -1009,9 +1041,9 @@ class _Manager(_BaseObject):
             return [Manager(UUID=UUID, human_readable_name=human_readable_name,
                             cookie=cookie, parent_UUID=parent_UUID)
                     for UUID, cookie, human_readable_name, parent_UUID
-                    in self.dbus.ListManagers (recursive)]
+                    in self.dbus.ListManagers(dbus.Boolean(recursive))]
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
     @_check_main_thread
     def lookup_manager_by_cookie(self, cookie, recursive=False):
@@ -1031,7 +1063,9 @@ class _Manager(_BaseObject):
             return [Manager(UUID=UUID, human_readable_name=human_readable_name,
                             cookie=cookie, parent_UUID=parent_UUID)
                     for UUID, human_readable_name, parent_UUID
-                    in self.dbus.LookupManagerByCookie (cookie, recursive)]
+                    in self.dbus.LookupManagerByCookie(
+                        dbus.String(_str_to_dbus_str(cookie)),
+                        dbus.Boolean(recursive))]
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
@@ -1069,13 +1103,16 @@ class _Manager(_BaseObject):
         """
         try:
             UUID = self.dbus.StreamRegister \
-                (_keys_convert (properties, _stream_properties_to_camel_case),
-                 only_if_cookie_unique)
+                (dbus.Dictionary(
+                    _keys_convert(properties,
+                                  _stream_properties_to_camel_case),
+                    'sv'),
+                 dbus.Boolean(only_if_cookie_unique))
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
         properties['UUID'] = UUID
-        return Stream (**properties)
+        return Stream(**properties)
 
     @_check_main_thread
     def list_streams(self):
@@ -1090,9 +1127,9 @@ class _Manager(_BaseObject):
             return [Stream(UUID=UUID, human_readable_name=human_readable_name,
                            cookie=cookie, parent_UUID=self.UUID)
                     for UUID, cookie, human_readable_name
-                    in self.dbus.ListStreams ()]
+                    in self.dbus.ListStreams()]
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
     @_check_main_thread
     def lookup_stream_by_cookie(self, cookie):
@@ -1109,7 +1146,8 @@ class _Manager(_BaseObject):
             return [Stream(UUID=UUID, human_readable_name=human_readable_name,
                            cookie=cookie, parent_UUID=self.UUID)
                     for UUID, human_readable_name
-                    in self.dbus.LookupStreamByCookie (cookie)]
+                    in self.dbus.LookupStreamByCookie(
+                        dbus.String(_str_to_dbus_str(cookie)))]
         except dbus.exceptions.DBusException, exception:
             _dbus_exception_to_woodchuck_exception (exception)
 
@@ -1150,9 +1188,9 @@ class _Manager(_BaseObject):
                 # subscription (which can be shared).
                 assert self.feedback_subscriptions[0] > 0
 
-                h = self.dbus.FeedbackSubscribe (True)
-                self.dbus.FeedbackUnsubscribe \
-                    (self.feedback_subscription_handle)
+                h = self.dbus.FeedbackSubscribe(dbus.Boolean(True))
+                self.dbus.FeedbackUnsubscribe(
+                    dbus.String(self.feedback_subscription_handle))
                 self.feedback_subscription_handle = h
 
                 self.feedback_subscriptions[idx] += 1
@@ -1165,7 +1203,7 @@ class _Manager(_BaseObject):
             assert self.feedback_subscriptions[1] == 0
 
             self.feedback_subscription_handle \
-                = self.dbus.FeedbackSubscribe (descendents_too)
+                = self.dbus.FeedbackSubscribe(dbus.Boolean(descendents_too))
             self.feedback_subscriptions[idx] = 1
 
         return idx
@@ -1184,7 +1222,8 @@ class _Manager(_BaseObject):
         if (self.feedback_subscriptions[0]
             + self.feedback_subscriptions[1] == 1):
             # No subscriptions left.
-            self.dbus.FeedbackUnsubscribe (self.feedback_subscription_handle)
+            self.dbus.FeedbackUnsubscribe(
+                dbus.String(self.feedback_subscription_handle))
             self.feedback_subscription_handle = None
 
             self.feedback_subscriptions[handle] -= 1
@@ -1196,8 +1235,9 @@ class _Manager(_BaseObject):
             # The last descendents_too subscription is now gone, but
             # we still have non-descendent subscriptions.  Get an
             # appropriate subscription.
-            h = self.dbus.FeedbackSubscribe (False)
-            self.dbus.FeedbackUnsubscribe (self.feedback_subscription_handle)
+            h = self.dbus.FeedbackSubscribe(dbus.Boolean(False))
+            self.dbus.FeedbackUnsubscribe(
+                dbus.String(self.feedback_subscription_handle))
             self.feedback_subscription_handle = h
 
             self.feedback_subscriptions[1] = 0
@@ -1207,9 +1247,11 @@ class _Manager(_BaseObject):
     def feedback_ack(self, object_UUID, object_instance):
         """Invoke org.woodchuck.manager.FeedbackAck."""
         try:
-            self.dbus.FeedbackAck (object_UUID, object_instance)
+            self.dbus.FeedbackAck(
+                dbus.String(_str_to_dbus_str(object_UUID)),
+                dbus.UInt32(object_instance))
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
 _managers = {}
 def Manager(**properties):
@@ -1243,9 +1285,8 @@ class _Woodchuck(object):
     def __init__(self):
         # Establish a connection with the Woodchuck server.
         try:
-            self._woodchuck_object \
-                = dbus.SessionBus().get_object ('org.woodchuck',
-                                                '/org/woodchuck')
+            self._woodchuck_object = dbus.SessionBus().get_object(
+                'org.woodchuck', '/org/woodchuck', introspect=False)
             self._woodchuck \
                 = dbus.Interface (self._woodchuck_object,
                                   dbus_interface='org.woodchuck')
@@ -1283,13 +1324,15 @@ class _Woodchuck(object):
         assert 'parent_UUID' not in properties
         try:
             UUID = self._woodchuck.ManagerRegister \
-                (_keys_convert (properties, _manager_properties_to_camel_case),
-                 only_if_cookie_unique)
+                (dbus.Dictionary(
+                    _keys_convert(properties,
+                                  _manager_properties_to_camel_case)),
+                 dbus.Boolean(only_if_cookie_unique))
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
     
         properties['UUID'] = UUID
-        return Manager (**properties)
+        return Manager(**properties)
     
     @_check_main_thread
     def list_managers(self, recursive=False):
@@ -1311,9 +1354,9 @@ class _Woodchuck(object):
             return [Manager(UUID=UUID, human_readable_name=human_readable_name,
                             cookie=cookie, parent_UUID=parent_UUID)
                     for UUID, cookie, human_readable_name, parent_UUID
-                    in self._woodchuck.ListManagers (recursive)]
+                    in self._woodchuck.ListManagers(dbus.Boolean(recursive))]
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
     
     @_check_main_thread
     def lookup_manager_by_cookie(self, cookie, recursive=False):
@@ -1347,10 +1390,11 @@ class _Woodchuck(object):
             return [Manager(UUID=UUID, human_readable_name=human_readable_name,
                             cookie=cookie, parent_UUID=parent_UUID)
                     for UUID, human_readable_name, parent_UUID
-                    in self._woodchuck.LookupManagerByCookie \
-                        (cookie, recursive)]
+                    in self._woodchuck.LookupManagerByCookie(
+                        dbus.String(_str_to_dbus_str(cookie)),
+                        dbus.Boolean(recursive))]
         except dbus.exceptions.DBusException, exception:
-            _dbus_exception_to_woodchuck_exception (exception)
+            _dbus_exception_to_woodchuck_exception(exception)
 
 _woodchuck = None
 def Woodchuck():
