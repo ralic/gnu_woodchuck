@@ -18,6 +18,7 @@
 #include "config.h"
 #include "network-monitor.h"
 #include "user-activity-monitor.h"
+#include "battery-monitor.h"
 
 #include <assert.h>
 #include <stdio.h>
@@ -78,6 +79,8 @@ struct _Murmeltier
   NCNetworkMonitor *nm;
   WCUserActivityMonitor *uam;
   guint user_really_idling_timeout_id;
+
+  WCBatteryMonitor *bm;
 
   DBusGConnection *session_bus;
 
@@ -538,6 +541,12 @@ schedule_frequency_check ()
 
 static bool scheduler_running;
 
+struct scheduler_args
+{
+  int freshness_factor_numerator;
+  int freshness_factor_denominator;
+};
+
 static void *
 do_schedule_worker (void *arg)
 {
@@ -545,6 +554,12 @@ do_schedule_worker (void *arg)
   /* The following is a very simple scheduler.  We look for streams
      and objects that have not been updated recently and update
      them.  */
+
+  struct scheduler_args *args = arg;
+
+  debug (3, "do_schedule_worker (%d, %d)",
+	 args->freshness_factor_numerator,
+	 args->freshness_factor_denominator);
 
   /* Every thread must have its own sqlite3 instance.  */
   sqlite3 *db = NULL;
@@ -577,16 +592,22 @@ do_schedule_worker (void *arg)
       /* Never update this stream.  */
       return 0;
 
+    uint32_t freshness_real = freshness;
+    freshness = (freshness * args->freshness_factor_numerator)
+      / args->freshness_factor_denominator;
+
     int64_t timeleft = 0;
     if (transfer_time)
       timeleft = (transfer_time + freshness) - n / 1000;
 
     debug (3, "%s: %s stream: next update in "TIME_FMT" "
-	   "(transfer_time: "TIME_FMT"; freshness: "TIME_FMT")",
+	   "(transfer_time: "TIME_FMT"; "
+	   "freshness adjusted: "TIME_FMT", real: "TIME_FMT")",
 	   manager_cookie, stream_cookie,
 	   TIME_PRINTF (1000 * timeleft),
 	   TIME_PRINTF (transfer_time == 0 ? 0 : transfer_time * 1000 - n),
-	   TIME_PRINTF (freshness * 1000));
+	   TIME_PRINTF (freshness * 1000),
+	   TIME_PRINTF (freshness_real * 1000));
 
     GSList *list = g_hash_table_lookup (mt->manager_to_subscription_list_hash,
 					manager_uuid);
@@ -596,10 +617,12 @@ do_schedule_worker (void *arg)
 	GString *s = g_string_new ("");
 	g_string_append_printf
 	  (s, "Stream: %s, %s; Manager: %s, %s; "
-	   "Freshness: %"PRId32"; Transfer time: %"PRId64"/delta: "TIME_FMT"; "
+	   "Freshness: "TIME_FMT" (adjusted: "TIME_FMT"); "
+	   "Transfer time: %"PRId64"/delta: "TIME_FMT"; "
 	   "last try's status: %"PRId32" ->",
 	   stream_uuid, stream_cookie, manager_uuid, manager_cookie,
-	   freshness, transfer_time,
+	   TIME_PRINTF (freshness * 1000), TIME_PRINTF (freshness_real * 1000),
+	   transfer_time,
 	   TIME_PRINTF (transfer_time == 0 ? 0 : (transfer_time * 1000 - n)),
 	   last_trys_status);
 
@@ -850,6 +873,8 @@ do_schedule_worker (void *arg)
 
   sqlite3_close (db);
 
+  free (arg);
+
   return NULL;
 }
 
@@ -938,7 +963,22 @@ do_schedule (gpointer user_data)
 
   scheduler_running = true;
 
-  pthread_create (&do_schedule_worker_tid, NULL, do_schedule_worker, NULL);
+  struct scheduler_args *args = calloc (1, sizeof (*args));
+
+  if (wc_battery_monitor_charging (mt->bm))
+    {
+      args->freshness_factor_numerator = 3;
+      args->freshness_factor_denominator = 4;
+    }
+  else
+    /* If the battery is discharging, wait up to twice as long to
+       update streams.  */
+    {
+      args->freshness_factor_numerator = 2;
+      args->freshness_factor_denominator = 1;
+    }
+
+  pthread_create (&do_schedule_worker_tid, NULL, do_schedule_worker, args);
   pthread_detach (do_schedule_worker_tid);
 
  out:
@@ -1130,6 +1170,8 @@ murmeltier_init (Murmeltier *mt)
 
   g_signal_connect (G_OBJECT (mt->uam), "user-idle-active",
 		    G_CALLBACK (user_idle_active), mt);
+
+  mt->bm = wc_battery_monitor_new ();
 }
 
 static enum woodchuck_error
