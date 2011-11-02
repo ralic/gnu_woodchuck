@@ -138,7 +138,7 @@ struct _NCNetworkMonitorClass
   guint default_connection_changed_signal_id;
 
   /* "scan-results" signal: A network scan completed.  Passed a GSList
-     of struct nm_aps describing the available access points.  This is
+     of struct nm_ap's describing the available access points.  This is
      invoked once with all visible access points for each type of
      infrastructure, e.g., WLAN_INFRA, WLAN_ADHOC and GPRS.  */
   guint scan_results_signal_id;
@@ -186,6 +186,26 @@ extern NCNetworkConnection *
 /* Initiate a network scan.  Any results will be provided via the
    "scan-results" signal.  */
 extern void nm_scan (NCNetworkMonitor *m);
+
+/* Connect to one of the networks described by NETWORKS (a list of
+   struct nm_ap's, the only fields of which you have to provide are
+   network_id and network_type).  If NETWORKS in NULL, then connect to
+   any known network.
+
+   Returns true, if the connection attempt was initiated, false
+   otherwise.  Any changes to the connection state will be exposed by
+   the "new-connection" and "default-connection-changed" signals.  */
+extern bool nm_connect (NCNetworkMonitor *m, GSList *networks);
+
+/* Disconnect the specified networks (a lsit of struct nm_ap's, the
+   only fields of which you have to provide are network_id and
+   network_type).  If NETWORKS in NULL, then disconnect all extant
+   connections.
+
+   Returns true, if the disconnect attempt was initiated, false
+   otherwise.  Any changes to the connection state will be exposed by
+   the "disconnected" and "default-connection-changed" signals.  */
+extern bool nm_disconnect (NCNetworkMonitor *m, GSList *networks);
 
 /* The type of medium.  The values were choosen so that a bitmask can
    be made.  */

@@ -947,6 +947,46 @@ nm_scan (NCNetworkMonitor *m)
     }
 }
 
+bool
+nm_connect (NCNetworkMonitor *m, GSList *networks)
+{
+  GError *error = NULL;
+  /* We don't use ICD_CONNECTION_FLAG_APPLICATION_EVENT: that causes
+     ICD to connect if connections are marked as auto-connect.  */
+  if (! com_nokia_icd2_connect_req (m->icd2_proxy,
+				    ICD_CONNECTION_FLAG_USER_EVENT,
+				    &error))
+    {
+      debug (0, "Error invoking connect_req: %s", error->message);
+      g_error_free (error);
+
+      return false;
+    }
+
+  debug (3, "Network connect attempt initiated.");
+  return true;
+}
+
+bool
+nm_disconnect (NCNetworkMonitor *m, GSList *networks)
+{
+  GError *error = NULL;
+  /* We don't use ICD_CONNECTION_FLAG_APPLICATION_EVENT: that causes
+     ICD to connect if connections are marked as auto-connect.  */
+  if (! com_nokia_icd2_disconnect_req (m->icd2_proxy,
+				       ICD_CONNECTION_FLAG_USER_EVENT,
+				       &error))
+    {
+      debug (0, "Error invoking disconnect_req: %s", error->message);
+      g_error_free (error);
+
+      return false;
+    }
+
+  debug (3, "Network disconnect initiated.");
+  return true;
+}
+
 static void
 cell_info_changed (NCNetworkMonitor *m, struct nm_cell *proposed)
 {

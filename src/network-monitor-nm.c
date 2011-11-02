@@ -506,6 +506,20 @@ nm_scan (NCNetworkMonitor *m)
 #warning Implement nm_scan.
 }
 
+bool
+nm_connect (NCNetworkMonitor *m, GSList *networks)
+{
+#warning Implement nm_connect.
+  return false;
+}
+
+bool
+nm_disconnect (NCNetworkMonitor *m, GSList *networks)
+{
+#warning Implement nm_disconnect.
+  return false;
+}
+
 /* Enumerate all network devices, create corresponding local objects
    and start listening for state changes.  */
 static gboolean

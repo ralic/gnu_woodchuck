@@ -32,5 +32,11 @@
     </method>
     <method name="scan_cancel_req">
     </method>
+    <method name="connect_req">
+      <arg name="connection_flags" type="u"/>
+    </method>
+    <method name="disconnect_req">
+      <arg name="connection_flags" type="u"/>
+    </method>
   </interface>
 </node>
