@@ -8,7 +8,7 @@ Vcs-Git: git://hssl.cs.jhu.edu/~neal/woodchuck.git
 Homepage: http://hssl.cs.jhu.edu/~neal/woodchuck
 
 Package: smart-storage-logger
-Section: user/science
+Section: user/network
 Architecture: amd64 armel
 Priority: optional
 Depends: ${shlibs:Depends}, wget
@@ -151,7 +151,7 @@ XB-Maemo-Icon-26:
  fxJFvOzh1pC+AAAAAElFTkSuQmCC
 
 Package: murmeltier
-Section: user/net
+Section: user/network
 Architecture: any
 Priority: optional
 Depends: ${shlibs:Depends}, pywoodchuck
@@ -356,7 +356,7 @@ Description: Version control system synchronizer
  synchronizations when good opportunities arise.
 
 Package: apt-woodchuck
-Section: user/net
+Section: user/network
 Architecture: all
 Priority: optional
 Depends: python, python-dbus, woodchuck, pywoodchuck, python-apt
