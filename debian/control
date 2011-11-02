@@ -9,7 +9,7 @@ Homepage: http://hssl.cs.jhu.edu/~neal/woodchuck
 
 Package: smart-storage-logger
 Section: user/science
-Architecture: any
+Architecture: amd64 armel
 Priority: optional
 Depends: ${shlibs:Depends}, wget
 Description: Data logger for the smart storage experiment.
