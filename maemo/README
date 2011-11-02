@@ -3,7 +3,7 @@ Compiling and Uploading the Package
 
 Compile:
 
-  VERSION=0.2
+  VERSION=$(awk '/^woodchuck / { gsub("[()]", "", $2); print $2; exit; }' debian/changelog)
   cd ~/src/woodchuck/build
   make dist
   cd ~/src
@@ -19,24 +19,24 @@ Create directory on server:
 
   ssh hssl.cs.jhu.edu
   mkdir -p ~/public_html/woodchuck/dists/fremantle/maemo/binary-armel
-  ln -s fremantle ~/public_html/woodchuck/dists/fremantle-1.2
+  ln -s fremantle ~/public_html/woodchuck/dists/fremantle-1.3
 
-Copy binaries to:
+Copy binaries (don't forget the .dsc, .changes and .tar.gz files!):
 
   scp ~/src/woodchuck*_${VERSION}* \
     hssl.cs.jhu.edu:public_html/woodchuck/dists/fremantle/maemo/binary-armel
 
+Or, if building for Harmattan:
+
+  scp ~/src/woodchuck*_${VERSION}* \
+    hssl.cs.jhu.edu:public_html/woodchuck/dists/harmattan/harmattan/binary-armel
 
 In the <SOMEPLACE> directory, run:
 
   cd ~/public_html/woodchuck
-  apt-ftparchive packages dists | gzip > dists/fremantle-1.2/maemo/binary-armel/Packages.gz
+  apt-ftparchive packages dists/fremantle | gzip > dists/fremantle/maemo/binary-armel/Packages.gz
 
-Or to only include the packages in a particular distribution:
-
-  cd ~/public_html/woodchuck
-  apt-ftparchive packages dists/fremantle-1.2/maemo/binary-armel | gzip > dists/fremantle-1.2/maemo/binary-armel/Packages.gz
-
+  apt-ftparchive packages dists/harmattan | gzip > dists/harmattan/harmattan/binary-armel/Packages.gz
 
 
 Distributing the Package
