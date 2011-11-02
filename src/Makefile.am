@@ -4,8 +4,11 @@ CLEANFILES =
 
 do_subst = sed -e 's,[@]bindir[@],$(bindir),g'
 
-bin_PROGRAMS = murmeltier smart-storage-logger smart-storage-logger-recover \
-	process-tracer ssl-tail gwoodchuck
+bin_PROGRAMS = murmeltier ssl-tail gwoodchuck
+if SUPPORTED_ARCH
+  bin_PROGRAMS += smart-storage-logger smart-storage-logger-recover \
+	process-tracer 
+endif
 bin_SCRIPTS = smart-storage-logger-consent
 CLEANFILES += $(bin_SCRIPTS)
 
@@ -164,9 +167,6 @@ monitors = \
 	\
 	battery-monitor.h battery-monitor.c \
 	\
-	service-monitor.h service-monitor.c \
-	\
-	process-monitor-ptrace.h process-monitor-ptrace.c \
 	signal-handler.h signal-handler.c \
 	files.h files.c \
 	\
@@ -191,6 +191,8 @@ murmeltier_LDADD = $(BASE_LIBS)
 
 smart_storage_logger_SOURCES = $(dbus_interfaces_h) $(monitors) \
 	smart-storage-logger.c \
+	process-monitor-ptrace.h process-monitor-ptrace.c \
+	service-monitor.h service-monitor.c \
 	smart-storage-logger-uploader.h smart-storage-logger-uploader.c \
 	pidfile.h pidfile.c \
 	md5.h md5.c \

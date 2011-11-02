@@ -106,6 +106,18 @@ AC_DEFINE_UNQUOTED(SUDOERS_D_DIR,
 	"$SUDOERS_D_DIR",
 	[sudo's sudoers.d directory.])
 
+AC_MSG_CHECKING([whether to build the process monitor])
+AC_PREPROC_IFELSE(
+        [AC_LANG_PROGRAM([[
+#if !(defined(__arm__) || defined (__x86_64__))
+# error Unsupported architecture.
+#endif
+]],
+                         [[]])],
+        [AC_MSG_RESULT([OK]); SUPPORTED_ARCH=1],
+        [AC_MSG_RESULT([architecture not supported.]); SUPPORTED_ARCH=0])
+AM_CONDITIONAL(SUPPORTED_ARCH, test $SUPPORTED_ARCH = 1)
+
 AC_CONFIG_FILES([Makefile
 		src/Makefile
 		clients/Makefile
