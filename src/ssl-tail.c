@@ -59,8 +59,8 @@ main (int argc, char *argv[])
        "Filter is an SQL expression on level, timestamp (MS in UTC),\n"
        "function, file or line.\n"
        "\n"
-       "To see all entries in the last 24 hours, run:\n"
-       "  %s --all 'timestamp > strftime (\"now\") - 24 * 60 * 60'\n"
+       "To see all entries in the last hour, run:\n"
+       "  %s --all 'timestamp / 1000 > strftime (\"%%s\", \"now\") - 60 * 60'\n"
        "\n"
        "To see all entries since the last start, run:\n"
        "  %s --all 'ROWID >= (select max (ROWID) from log where message like \"smart-storage-logger compiled on %%\")'\n",
