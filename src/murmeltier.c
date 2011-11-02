@@ -931,6 +931,10 @@ do_schedule (gpointer user_data)
   if (! dc)
     /* No connection.  */
     {
+      if (wc_battery_monitor_charging (mt->bm))
+	/* We're connect to power.  Try to connect.  */
+	nm_connect (mt->nm, NULL);
+
       debug (3, "Not scheduling: No default connection.");
       goto out;
     }
