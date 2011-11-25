@@ -119,7 +119,6 @@ static struct property manager_properties[]
       { "DBusObject", G_TYPE_STRING, true },
       { "Cookie", G_TYPE_STRING, true },
       { "Priority", G_TYPE_UINT, true },
-      { "DiscoveryTime", G_TYPE_UINT64, true },
       { "PublicationTime", G_TYPE_UINT64, true },
       /* Readonly.  */
       { "RegistrationTime", G_TYPE_UINT64, false },
