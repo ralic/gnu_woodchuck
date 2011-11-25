@@ -6,7 +6,7 @@ then
     # Activate the sudoers file.
     update-sudoers
     # Initialize apt-woodchuck.
-    run-standalone.sh bash -c 'killall apt-woodchuck;
+    run-standalone.sh sh -c 'killall apt-woodchuck;
       sleep 2;
       killall -9 apt-woodchuck;
       apt-woodchuck'
