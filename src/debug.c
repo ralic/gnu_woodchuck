@@ -25,6 +25,41 @@ int output_debug_global = 3;
 __thread int output_debug = 3;
 #endif
 
+#define DEBUG_STDERR(function, line, return_address, msg)	\
+  ({								\
+    time_t __t = time (NULL);					\
+    struct tm __tm;						\
+    localtime_r (&__t, &__tm);					\
+    								\
+    fprintf (stderr, "%d.%d.%d %d:%02d.%02d:%s:%d:(%p): %s\n",		\
+	     1900 + __tm.tm_year, __tm.tm_mon + 1, __tm.tm_mday,	\
+	     __tm.tm_hour, __tm.tm_min, __tm.tm_sec,			\
+	     function, line, return_address, msg);			\
+    fflush (stderr);							\
+  })
+
+#ifdef LOG_TO_DB
+static void
+sqlq_error_handler (const char *file, const char *func, int line,
+		    const char *sql, const char *error_message)
+{
+  char *msg = NULL;
+  asprintf (&msg, "%s:%s:%d: Executing sql '%s': %s\n",
+	    file, func, line, sql, error_message);
+
+  static __thread bool in;
+  if (! in)
+    /* Try to use debug, but don't end up in an infinite loop.  */
+    {
+      in = true;
+      debug (0, msg);
+      in = false;
+    }
+
+  DEBUG_STDERR (__func__, __LINE__, __builtin_return_address (0), msg);
+}
+#endif
+
 void
 debug_ (const char *file, const char *function, int line,
 	void *return_address, int level,
@@ -65,7 +100,8 @@ debug_ (const char *file, const char *function, int line,
   /* Only initialize the buffer once we see an async message.  */
   if (! debug_output_buffer && async)
     {
-      debug_output_buffer = sqlq_new (debug_output_file, 8 * 4096, 30);
+      debug_output_buffer = sqlq_new (debug_output_file, 8 * 4096, 30,
+				      &sqlq_error_handler);
 
       /* Flush and destroy the buffer when the thread exists.  */
       void destructor (void *value)
@@ -107,15 +143,7 @@ debug_ (const char *file, const char *function, int line,
 
   sqlite3_free (sql);
 #else
-  time_t __t = time (NULL);
-  struct tm __tm;
-  localtime_r (&__t, &__tm);
-
-  fprintf (stderr, "%d.%d.%d %d:%02d.%02d:%s:%d:(%p): %s\n",
-	   1900 + __tm.tm_year, __tm.tm_mon + 1, __tm.tm_mday,
-	   __tm.tm_hour, __tm.tm_min, __tm.tm_sec,
-	   function, line, return_address, msg);
-  fflush (stderr);
+  DEBUG_STDERR(function, line, return_address, msg);
 #endif
 
   free (msg);

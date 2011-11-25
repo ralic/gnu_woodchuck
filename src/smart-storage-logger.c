@@ -1523,7 +1523,7 @@ main (int argc, char *argv[])
   db_init ();
 
   /* Set up an sql queue.  Buffer data at most 20 seconds.  */
-  sqlq = sqlq_new_static (db, sqlq_buffer, sizeof (sqlq_buffer), 20);
+  sqlq = sqlq_new_static (db, sqlq_buffer, sizeof (sqlq_buffer), 20, NULL);
 
   /* Initialize the unix signal catcher.  */
   signal_handler_init ();

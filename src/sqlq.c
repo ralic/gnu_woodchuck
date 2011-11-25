@@ -15,6 +15,7 @@
    along with this program; if not, write to the Free Software
    Foundation, Inc., 59 Temple Place - Suite 330, Boston, MA  02111, USA. */
 
+#include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sqlite3.h>
@@ -22,10 +23,43 @@
 #include <assert.h>
 
 #include "sqlq.h"
+#undef sqlq_append
+#undef sqlq_append_printf
 #include "debug.h"
 
+struct statement
+{
+  const char *file;
+  const char *func;
+  int line;
+  char sql[];
+};
+
+/* Round ADDR up to a multiple of uintptr_t.  */
+static uintptr_t
+alignment_fixup (uintptr_t addr)
+{
+  int alignment = __alignof__ (uintptr_t);
+  return (addr + alignment - 1) & ~(alignment - 1);
+}
+
+static void
+default_error_handler (const char *file, const char *func, int line,
+		       const char *sql, const char *error_message)
+{
+  debug (0, "%s:%s:%d: Executing %s: %s",
+	 file, func, line, sql, error_message);
+}
+
+#define ERROR_HANDLER(__eh_q, __eh_file, __eh_func, __eh_line,	 \
+		      __eh_sql, __eh_error_message)		 \
+  (((__eh_q)->error_handler ?: default_error_handler)		 \
+   ((__eh_file), (__eh_func), (__eh_line),			 \
+    (__eh_sql), (__eh_error_message)))
+
 struct sqlq *
-sqlq_new_static (sqlite3 *db, void *buffer, int size, int flush_delay)
+sqlq_new_static (sqlite3 *db, void *buffer, int size, int flush_delay,
+		 sqlq_error_handler_t error_handler)
 {
   assert (sizeof (struct sqlq) <= size);
 
@@ -36,17 +70,20 @@ sqlq_new_static (sqlite3 *db, void *buffer, int size, int flush_delay)
   q->size = size - sizeof (*q);
   q->flush_delay = flush_delay;
   q->flush_source = 0;
+  q->error_handler = error_handler;
 
   return q;
 }
 
 struct sqlq *
-sqlq_new (sqlite3 *db, int size, int flush_delay)
+sqlq_new (sqlite3 *db, int size, int flush_delay,
+	  sqlq_error_handler_t error_handler)
 {
   size += sizeof (struct sqlq);
 
   void *buffer = malloc (size);
-  struct sqlq *q = sqlq_new_static (db, buffer, size, flush_delay);
+  struct sqlq *q = sqlq_new_static (db, buffer, size, flush_delay,
+				    error_handler);
   q->malloced = true;
   return q;
 }
@@ -55,7 +92,11 @@ void
 sqlq_free (struct sqlq *q)
 {
   if (q->used != 0)
-    debug (0, "sqlq_free with unflushed data!");
+    {
+      q->buffer[q->used] = 0;
+      ERROR_HANDLER (q, NULL, NULL, 0, q->buffer,
+		     "sqlq_free called, but still have unflushed data!");
+    }
 
   if (q->flush_source)
     {
@@ -71,26 +112,21 @@ sqlq_free (struct sqlq *q)
 }
 
 static void
-flush (sqlite3 *db, const char *command_string1, const char *command_string2)
+flush (struct sqlq *q, struct statement *statement)
 {
-  const char *c[2] = { command_string1, command_string2 };
+  struct statement *statement_block = q->buffer;
+  int statement_block_len = q->used;
 
-  debug (5, "Flushing (`%s', `%s')", c[0], c[1]);
-
-  int i;
-  for (i = 0; i < sizeof (c) / sizeof (c[0]); i ++)
-    if (c[i] && c[i][0] != 0)
-      break;
-  if (i == sizeof (c) / sizeof (c[0]))
-    /* All strings are empty.  Nothing to do.  */
+  if (statement_block_len == 0 && ! statement)
+    /* Nothing to do.  */
     return;
 
   /* Wrap the command in a transaction.  */
   char *errmsg = NULL;
-  sqlite3_exec (db, "begin transaction", NULL, NULL, &errmsg);
+  sqlite3_exec (q->db, "begin transaction", NULL, NULL, &errmsg);
   if (errmsg)
     {
-      debug (0, "begin transaction: %s", errmsg);
+      ERROR_HANDLER (q, NULL, NULL, 0, "begin transaction", errmsg);
       sqlite3_free (errmsg);
       errmsg = NULL;
 
@@ -98,24 +134,45 @@ flush (sqlite3 *db, const char *command_string1, const char *command_string2)
     }
 
   /* Execute the commands.  */
-  for (i = 0; i < sizeof (c) / sizeof (c[0]); i ++)
-    {
-      if (! c[i] || c[i][0] == 0)
-	continue;
+  void execute (struct sqlq *q, struct statement *s)
+  {
+    char *errmsg = NULL;
+    sqlite3_exec (q->db, s->sql, NULL, NULL, &errmsg);
+    if (errmsg)
+      {
+	ERROR_HANDLER (q, s->file, s->func, s->line, s->sql, errmsg);
+	sqlite3_free (errmsg);
+	errmsg = NULL;
+      }
+  }
 
-      sqlite3_exec (db, c[i], NULL, NULL, &errmsg);
-      if (errmsg)
+  /* First iterate over the command block.  */
+  if (statement_block)
+    {
+      struct statement *s = statement_block;
+      int remaining = statement_block_len;
+      while (remaining > 0)
 	{
-	  debug (0, "%s -> %s", c[i], errmsg);
-	  sqlite3_free (errmsg);
-	  errmsg = NULL;
+	  int len = alignment_fixup (sizeof (*s) + strlen (s->sql) + 1);
+	  remaining -= len;
+	  assert (remaining >= 0);
+
+	  execute (q, s);
+
+	  s = (void *) (uintptr_t) s + len;
 	}
+      assert (remaining == 0);
+      q->used = 0;
     }
-	
-  sqlite3_exec (db, "end transaction", NULL, NULL, &errmsg);
+
+  /* Then execute any "hanging command."  */
+  if (statement)
+    execute (q, statement);
+
+  sqlite3_exec (q->db, "end transaction", NULL, NULL, &errmsg);
   if (errmsg)
     {
-      debug (0, "end transaction: %s", errmsg);
+      ERROR_HANDLER (q, NULL, NULL, 0, "end transaction", errmsg);
       sqlite3_free (errmsg);
       errmsg = NULL;
     }
@@ -137,28 +194,51 @@ do_delayed_flush (gpointer user_data)
 }
 
 bool
-sqlq_append (struct sqlq *q, bool force_flush, const char *command)
+sqlq_append (const char *file, const char *func, int line,
+	     struct sqlq *q, bool force_flush, const char *sql)
 {
   if (q->flush_delay == 0)
     force_flush = true;
 
-  /* Whether there is space for a string of length LEN (LEN does
-     not include the NUL terminator).  */
-  bool have_space (int len)
-  {
-    return len + 1 <= q->size - q->used;
-  }
-
-  int len = command ? strlen (command) : 0;
-  if (force_flush || ! have_space (len))
-    /* Need to flush the buffer first.  */
+  /* Append the command.  */
+  struct statement *s = NULL;
+  if (sql)
     {
-      /* NUL terminate the string.  */
-      q->buffer[q->used] = 0;
-      q->used = 0;
+      int free_space = q->size - q->used;
 
-      /* Flush the commands.  */
-      flush (q->db, q->buffer, command);
+      struct statement *s = NULL;
+      int sql_len = strlen (sql) + 1;
+      int s_len = alignment_fixup ((uintptr_t) sizeof (*s) + sql_len);
+
+      if (s_len <= free_space)
+	{
+	  s = (struct statement *) &q->buffer[q->used];
+	  q->used += s_len;
+	  free_space -= s_len;
+
+	  if (free_space < sizeof (*s) + 30)
+	    /* There is unlikely to be enough space for another
+	       command.  Flush now to avoid allocating on the stack
+	       later.  */
+	    force_flush = true;
+	}
+      else
+	{
+	  s = alloca (s_len);
+	  force_flush = true;
+	}
+
+      s->file = file;
+      s->func = func;
+      s->line = line;
+      memcpy (s->sql, sql, sql_len);
+    }
+
+  if (force_flush)
+    /* Flush the pending commands: either the user explicitly
+       requested it, or we are out of space in our buffer.  */
+    {
+      flush (q, s);
 
       if (q->flush_source)
 	{
@@ -168,8 +248,7 @@ sqlq_append (struct sqlq *q, bool force_flush, const char *command)
     }
   else
     {
-      memcpy (&q->buffer[q->used], command, len);
-      q->used += len;
+      assert (! s);
 
       if (! q->flush_source)
 	/* Wait at most Q->FLUSH_DELAY seconds before flushing.  */
@@ -181,16 +260,17 @@ sqlq_append (struct sqlq *q, bool force_flush, const char *command)
 }
 
 bool
-sqlq_append_printf (struct sqlq *sqlq, bool force_flush,
-		    const char *command, ...)
+sqlq_append_printf (const char *file, const char *func, int line,
+		    struct sqlq *sqlq, bool force_flush,
+		    const char *sql_fmt, ...)
 {
   va_list ap;
-  va_start (ap, command);
+  va_start (ap, sql_fmt);
 
-  char *s = sqlite3_vmprintf (command, ap);
+  char *s = sqlite3_vmprintf (sql_fmt, ap);
   debug (5, "%s", s);
 
-  bool ret = sqlq_append (sqlq, force_flush, s);
+  bool ret = sqlq_append (file, func, line, sqlq, force_flush, s);
 
   sqlite3_free (s);
 
@@ -202,7 +282,7 @@ sqlq_append_printf (struct sqlq *sqlq, bool force_flush,
 void
 sqlq_flush (struct sqlq *q)
 {
-  sqlq_append (q, true, NULL);
+  sqlq_append (NULL, NULL, 0, q, true, NULL);
 }
 
 void

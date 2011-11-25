@@ -21,6 +21,10 @@
 #include <sqlite3.h>
 #include <stdbool.h>
 
+typedef void (*sqlq_error_handler_t) (const char *file, const char *func,
+				      int line, const char *sql,
+				      const char *error_message);
+
 struct sqlq
 {
   sqlite3 *db;
@@ -29,33 +33,55 @@ struct sqlq
   bool malloced;
   int flush_delay;
   int flush_source;
+  sqlq_error_handler_t error_handler;
   char buffer[0];
 };
 
 /* Allocate a new SQL command queue with a size of SIZE.  FLUSH_DELAY
-   is the maximum number of seconds we can delay flushing any
-   command.  */
-extern struct sqlq *sqlq_new (sqlite3 *db, int size, int flush_delay);
+   is the maximum number of seconds we can delay flushing any command.
+   ERROR_HANDLER is a function that will be called if an error occurs
+   while executing some SQL.  It may be NULL, in which case the
+   debugging module is used.  */
+extern struct sqlq *sqlq_new (sqlite3 *db, int size, int flush_delay,
+			      sqlq_error_handler_t error_handler);
 
 /* Allocate a new SQL command queue from the buffer BUFFER, which has
    a size of SIZE.  */
 extern struct sqlq *sqlq_new_static (sqlite3 *db, void *buffer, int size,
-				     int flush_delay);
+				     int flush_delay,
+				     sqlq_error_handler_t error_handler);
 
 /* Release a command queue.  Does not flush any pending commands!  */
 extern void sqlq_free (struct sqlq *sqlq);
 
 /* Append a command to the queue.  May flush the queue if there is not
    enough space.  If FORCE_FLUSH is true, always flushes the queue.
-   Returns true if there is buffered data, false otherwise.  */
-extern bool sqlq_append (struct sqlq *sqlq, bool force_flush,
+   Returns true if there is buffered data, false otherwise.
+
+   NOTE: You do not need to specify the FILE, FUNC AND LINE arguments,
+   this will be filled in automatically via macro expansion to the
+   correspond to the call site.  */
+extern bool sqlq_append (const char *file, const char *func, int line,
+			 struct sqlq *sqlq, bool force_flush,
 			 const char *command);
 
+#define sqlq_append(_sa_sqlq, _sa_force_flush, _sa_command) \
+  sqlq_append(__FILE__, __func__, __LINE__,		    \
+	      _sa_sqlq, _sa_force_flush, _sa_command)
+
 /* Append a command to the queue.  May flush the queue if there is not
-   enough space.  If FORCE_FLUSH is true, always flushes the
-   queue.  */
-extern bool sqlq_append_printf (struct sqlq *sqlq, bool force_flush,
+   enough space.  If FORCE_FLUSH is true, always flushes the queue.
+
+   NOTE: You do not need to specify the FILE, FUNC AND LINE arguments,
+   this will be filled in automatically via macro expansion to the
+   correspond to the call site.  */
+extern bool sqlq_append_printf (const char *file, const char *func, int line,
+				struct sqlq *sqlq, bool force_flush,
 				const char *command, ...);
+
+#define sqlq_append_printf(_sa_sqlq, _sa_force_flush, _sa_command, ...)	\
+  sqlq_append_printf(__FILE__, __func__, __LINE__,			\
+		     _sa_sqlq, _sa_force_flush, _sa_command, ##__VA_ARGS__)
 
 /* Flushes the sql command queue.  */
 extern void sqlq_flush (struct sqlq *sqlq);
