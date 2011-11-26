@@ -314,6 +314,52 @@ def _check_main_thread(f):
         return f(*args, **kwargs)
     return wrapper
 
+class DBusIndirectObject(object):
+    """
+    Wrap a DBus object.  Bind the server name lazily, i.e., if the
+    server exits and appears under a different private name,
+    transparently use that.
+    """
+    __slots__ = ('bus', 'args', 'kwargs', 'real_object')
+    def __init__(self, bus, *args, **kwargs):
+        self.bus = bus
+        self.args = args
+        self.kwargs = kwargs
+        self.bind_object()
+
+    def bind_object(self):
+        self.real_object = self.bus.get_object(*self.args, **self.kwargs)
+
+    def __getattr__(self, attr):
+        if attr in self.__slots__:
+            return super(DBusIndirectObject, self).__getattr__(attr)
+        return getattr(self.real_object, attr)
+
+    def __setattr__(self, attr, value):
+        if attr in self.__slots__:
+            return super(DBusIndirectObject, self).__setattr__(attr, value)
+        return setattr(self.real_object, attr, value)
+
+    def get_dbus_method(self, *args, **kwargs):
+        def wrap(*m_args, **m_kwargs):
+            def invoke():
+                m = self.real_object.get_dbus_method(*args, **kwargs)
+                return m(*m_args, **m_kwargs)
+            try:
+                return invoke()
+            except dbus.exceptions.DBusException, exception:
+                try:
+                    dbus_name = str (exception.get_dbus_name ())
+                except AttributeError:
+                    dbus_name = ""
+                if dbus_name == "org.freedesktop.DBus.Error.ServiceUnknown":
+                    self.bind_object()
+                    return invoke()
+                else:
+                    raise
+
+        return wrap
+
 class _BaseObject(object):
     """
     _Object, _Stream and _Manager inherit from this class, which
@@ -418,7 +464,8 @@ class _Object(_BaseObject):
             actual values.
         """
 
-        self.proxy = dbus.SessionBus().get_object(
+        self.proxy = DBusIndirectObject(
+            dbus.SessionBus(),
             'org.woodchuck', '/org/woodchuck/object/' + properties['UUID'],
             introspect=False)
         try:
@@ -678,7 +725,8 @@ class _Stream(_BaseObject):
             actual values.
         """
 
-        self.proxy = dbus.SessionBus().get_object(
+        self.proxy = DBusIndirectObject(
+            dbus.SessionBus(),
             'org.woodchuck', '/org/woodchuck/stream/' + properties['UUID'],
             introspect=False)
         try:
@@ -942,7 +990,8 @@ class _Manager(_BaseObject):
             manager's actual values.
         """
 
-        self.proxy = dbus.SessionBus().get_object(
+        self.proxy = DBusIndirectObject(
+            dbus.SessionBus(),
             'org.woodchuck', '/org/woodchuck/manager/' + properties['UUID'],
             introspect=False)
         try:
@@ -1295,7 +1344,8 @@ class _Woodchuck(object):
     def __init__(self):
         # Establish a connection with the Woodchuck server.
         try:
-            self._woodchuck_object = dbus.SessionBus().get_object(
+            self._woodchuck_object = DBusIndirectObject(
+                dbus.SessionBus(),
                 'org.woodchuck', '/org/woodchuck', introspect=False)
             self._woodchuck \
                 = dbus.Interface (self._woodchuck_object,
