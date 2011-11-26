@@ -172,6 +172,11 @@
          manager.  -->
     <property name="Priority" type="u" access="readwrite"/>
 
+    <!-- Whether the manager is enabled.  If a manager is disabled,
+         any streams or objects managed by it (or any descendents)
+         will be updated or transferred, respectively.  -->
+    <property name="Enabled" type="b" access="readwrite"/>
+
     <!-- The time at which the object was registered.  -->
     <property name="RegistrationTime" type="t" access="read"/>
   </interface>

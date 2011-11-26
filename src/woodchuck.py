@@ -208,6 +208,7 @@ _manager_properties_to_camel_case = \
            "dbus_service_name": ("DBusServiceName", _str_to_dbus_str, "", _ttl),
            "dbus_object": ("DBusObject", _str_to_dbus_str, "", _ttl),
            "priority": ("Priority", dbus.UInt32, 0, _ttl),
+           "enabled": ("Enabled", dbus.Boolean, True, _ttl),
            "registration_time": ("RegistrationTime", dbus.UInt64, 0,
                                  float("inf")),
           })

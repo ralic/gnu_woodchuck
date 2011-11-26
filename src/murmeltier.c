@@ -120,6 +120,7 @@ static struct property manager_properties[]
       { "Cookie", G_TYPE_STRING, true },
       { "Priority", G_TYPE_UINT, true },
       { "PublicationTime", G_TYPE_UINT64, true },
+      { "Enabled", G_TYPE_BOOLEAN, true },
       /* Readonly.  */
       { "RegistrationTime", G_TYPE_UINT64, false },
       { "ParentUUID", G_TYPE_STRING, false },
@@ -676,7 +677,7 @@ do_schedule_worker (void *arg)
      "     and streams.instance == stream_updates.instance + 1)"
      " join managers on streams.parent_uuid == managers.uuid"
      /* A value of -1 means never update.  */
-     " where streams.Freshness != (1 << 32)-1;",
+     " where streams.Freshness != (1 << 32)-1 and managers.Enabled == 1;",
      streams_callback, NULL, &errmsg);
   if (errmsg)
     {
@@ -843,7 +844,7 @@ do_schedule_worker (void *arg)
      "     and objects.Instance == object_instance_status.instance + 1)"
      " join streams on objects.parent_uuid == streams.uuid"
      " join managers on managers.uuid == streams.parent_uuid"
-     " where objects.DontTransfer == 0"
+     " where managers.Enabled == 1 and objects.DontTransfer == 0"
      "  and (coalesce (object_instance_status.transfer_time, 0) == 0"
      "       or objects.NeedUpdate == 1"
      "       or objects.TransferFrequency > 0);",
@@ -2941,7 +2942,7 @@ main (int argc, char *argv[])
     (db,
      "create table if not exists managers"
      " (uuid PRIMARY KEY, parent_uuid NOT NULL, HumanReadableName,"
-     "  DBusServiceName, DBusObject, Cookie, Priority,"
+     "  DBusServiceName, DBusObject, Cookie, Priority, Enabled default 1,"
      "  RegistrationTime DEFAULT (strftime ('%s', 'now')));"
      "create index if not exists managers_cookie_index on managers (cookie);"
      "create index if not exists managers_parent_uuid_index on managers"
@@ -3012,11 +3013,22 @@ main (int argc, char *argv[])
      NULL, NULL, &errmsg);
   if (errmsg)
     {
-      if (err != SQLITE_ABORT)
-	debug (0, "%d: %s", err, errmsg);
+      debug (0, "Creating tables: %s", errmsg);
       sqlite3_free (errmsg);
       errmsg = NULL;
       return 1;
+    }
+
+  sqlite3_exec
+    (db,
+     "alter table managers add column Enabled default 1;",
+     NULL, NULL, &errmsg);
+  if (errmsg)
+    {
+      if (! strstr (errmsg, "duplicate column name"))
+	debug (0, "Adding column managers.Enabled: %s", errmsg);
+      sqlite3_free (errmsg);
+      errmsg = NULL;
     }
 
   properties_init ();
