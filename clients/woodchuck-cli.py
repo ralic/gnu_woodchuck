@@ -311,7 +311,18 @@ class Shell(object):
         """
         i = int(args[0]) - 1
         property = args[1]
-        value = args[2]
+
+        # Try to convert the value to an integer.  If this fails, just
+        # use the supplied string.  This prevents confusion regarding
+        # dbus.Boolean("0") = True but dbus.Boolean(0) = False.  This
+        # heuristic has its own trade-off: the user might specify
+        # something like '01' and really want the string 01, but this
+        # will be parsed as the integer 1.  But, this is rather
+        # unlikely.
+        try:
+            value = int(args[2])
+        except ValueError:
+            value = args[2]
 
         o = object_get(i)
 
