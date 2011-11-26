@@ -335,9 +335,12 @@ class _BaseObject(object):
             = dict ([[k, [ v, now ]] for k, v in initial_properties.items ()])
         self.property_map = property_map
 
-        self.dbus_properties \
-            = dbus.Interface (self.proxy,
-                              dbus_interface='org.freedesktop.DBus.Properties')
+        try:
+            self.dbus_properties = dbus.Interface(
+                self.proxy,
+                dbus_interface='org.freedesktop.DBus.Properties')
+        except dbus.exceptions.DBusException, exception:
+            _dbus_exception_to_woodchuck_exception(exception)
 
     @_check_main_thread
     def __getattribute__(self, name):
@@ -357,8 +360,11 @@ class _BaseObject(object):
             # name is cached and it is still valid.
             return properties[name][0]
 
-        value = self.dbus_properties.Get(
-            dbus.String(""), dbus.String(property_map[name][0]))
+        try:
+            value = self.dbus_properties.Get(
+                dbus.String(""), dbus.String(property_map[name][0]))
+        except dbus.exceptions.DBusException, exception:
+            _dbus_exception_to_woodchuck_exception(exception)
 
         if property_map[name][3] is not None:
             # TTL is not None.  Cache the value.
@@ -370,9 +376,12 @@ class _BaseObject(object):
     def __setattr__(self, name, value):
         if ('property_map' in self.__dict__ and name in self.property_map):
             # Write through...
-            self.dbus_properties.Set(
-                dbus.String(""), dbus.String(self.property_map[name][0]),
-                self.property_map[name][1](value))
+            try:
+                self.dbus_properties.Set(
+                    dbus.String(""), dbus.String(self.property_map[name][0]),
+                    self.property_map[name][1](value))
+            except dbus.exceptions.DBusException, exception:
+                _dbus_exception_to_woodchuck_exception(exception)
             if self.property_map[name][3] is not None:
                 # Cache the value.
                 self.properties[name] = [ value, time.time () ]
