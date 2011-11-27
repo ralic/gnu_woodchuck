@@ -18,7 +18,7 @@
 import sys
 import xml.parsers.expat
 
-comment = None
+last_comment = None
 interface = None
 method = None
 method_comment = None
