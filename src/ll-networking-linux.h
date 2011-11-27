@@ -1,14 +1,14 @@
 /* linux.h - Network monitor low-level Linux support.
    Copyright 2010 Neal H. Walfield <neal@walfield.org>
 
-   This file is part of Netczar.
+   This file is part of Woodchuck.
 
-   Netczar is free software; you can redistribute it and/or modify it
+   Woodchuck is free software; you can redistribute it and/or modify it
    under the terms of the GNU General Public License as published by
    the Free Software Foundation; either version 3 of the License, or
    (at your option) any later version.
 
-   Netczar is distributed in the hope that it will be useful, but WITHOUT
+   Woodchuck is distributed in the hope that it will be useful, but WITHOUT
    ANY WARRANTY; without even the implied warranty of MERCHANTABILITY
    or FITNESS FOR A PARTICULAR PURPOSE.  See the GNU General Public
    License for more details.
