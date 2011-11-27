@@ -314,6 +314,7 @@ PyWoodchuck
         stream_update_failed, stream_unregister, object_register,
         objects_list, object_unregister, object_transferred,
         object_transfer_failed, object_used, object_files_deleted,
+	manager_property_get, manager_property_set,
 	stream_property_get, stream_property_set,
 	object_property_get, object_property_set,
         object_transferred_cb, stream_update_cb, object_transfer_cb,

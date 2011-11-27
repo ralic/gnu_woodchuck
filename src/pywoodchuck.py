@@ -56,6 +56,18 @@ class _BaseObject(object):
     Code common to the _Object and _Stream classes.
     """
     def __init__(self, containing_dict, llobject):
+        """
+        containing_dict is a dictionary that contains a mapping from
+        this object's identifier/cookie to this object.  If the
+        object's cookie is changed, this mapping will be updated.
+
+        If containing_dict is None, this functionality is not
+        implemented.
+
+        llobject is the low-level object (i.e., the woodchuck object)
+        corresponding to this high-level object (i.e., the pywoodchuck
+        object).
+        """
         super (_BaseObject, self).__init__ ()
 
         self.containing_dict = containing_dict
@@ -94,7 +106,7 @@ class _BaseObject(object):
                 # Rename the entry in the containing map.
                 oldvalue = self['cookie']
             self.llobject.__setattr__ (name, value)
-            if name == 'cookie':
+            if self.containing_dict is not None and name == 'cookie':
                 assert oldvalue in self.containing_dict
                 del self.containing_dict[oldvalue]
                 self.containing_dict[value] = self
@@ -753,7 +765,7 @@ class _Stream(_BaseObject, DictMixin):
         """
         return self[object_identifier].files_deleted (*args, **kwargs)
 
-class PyWoodchuck(DictMixin):
+class PyWoodchuck(DictMixin, _BaseObject):
     """
     A high-level, pythonic interface to Woodchuck.
 
@@ -871,6 +883,8 @@ class PyWoodchuck(DictMixin):
 
             self.pywoodchuck.object_delete_files_cb (stream, object)
 
+    property_list = woodchuck.manager_properties
+
     def __init__(self, human_readable_name, dbus_service_name,
                  request_feedback=True):
         """
@@ -969,6 +983,8 @@ class PyWoodchuck(DictMixin):
                 pass
             else:
                 self.upcalls = self._upcalls (self)
+
+        super (PyWoodchuck, self).__init__ (None, self.manager)
 
     def _stream_lookup(self, stream_identifier, UUID=None):
         if stream_identifier not in self._streams:
@@ -1320,6 +1336,32 @@ class PyWoodchuck(DictMixin):
         :param object_identifier: The object's identifier.
         """
         return self[stream_identifier][object_identifier].unregister ()
+
+    def manager_property_get(self, property):
+        """
+        Get a property associated with the manager (i.e., the
+        application).
+
+        :param property: A property, e.g., enabled.
+
+        See :func:`stream_property_set` for an example use of a
+        similar function.
+        """
+        return self.__getattribute__(property)
+
+    def manager_property_set(self, property, value):
+        """
+        Set a property associated with the manager (i.e., the
+        application).
+
+        :param property: A property, e.g., enabled.
+
+        :param value: The new value.
+
+        See :func:`stream_property_set` for an example use of a
+        similar function.
+        """
+        return self.__setattr__(property, value)
 
     def stream_property_get(self, stream_identifier, property):
         """
