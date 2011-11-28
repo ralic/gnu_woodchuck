@@ -2934,6 +2934,9 @@ main (int argc, char *argv[])
     error (1, 0, "sqlite3_open (%s): %s",
 	   db_filename, sqlite3_errmsg (db));
 
+  debug (0, "STARTING (pid: %d, built on "__DATE__" at "__TIME__"): state: %s",
+	 (int) getpid (), db_filename);
+
   /* Wait a while before timing out.  */
   sqlite3_busy_timeout (db, 5 * 60 * 1000);
 
