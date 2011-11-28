@@ -121,15 +121,26 @@ flush (struct sqlq *q, struct statement *statement)
     return;
 
   /* Wrap the command in a transaction.  */
+  bool nested_transaction = false;
   char *errmsg = NULL;
   sqlite3_exec (q->db, "begin transaction", NULL, NULL, &errmsg);
   if (errmsg)
     {
-      ERROR_HANDLER (q, NULL, NULL, 0, "begin transaction", errmsg);
+      /* Would be nice to have a real error code...  */
+      nested_transaction
+	= strstr (errmsg, "cannot start a transaction within a transaction");
+
+      char *msg = NULL;
+      asprintf (&msg, "begin transaction;\n(%s: %s)",
+		statement->sql, nested_transaction ? "" : "dropping");
+      ERROR_HANDLER (q, NULL, NULL, 0, msg, errmsg);
+      free (msg);
+
       sqlite3_free (errmsg);
       errmsg = NULL;
 
-      return;
+      if (! nested_transaction)
+	return;
     }
 
   /* Execute the commands.  */
@@ -145,8 +156,10 @@ flush (struct sqlq *q, struct statement *statement)
       }
   }
 
-  /* First iterate over the command block.  */
-  if (statement_block)
+  /* First iterate over the command block.  If we are in a nested
+     transaction, we don't empty the buffer: we don't want to print
+     the same messages multiple times.  */
+  if (! nested_transaction && statement_block)
     {
       struct statement *s = statement_block;
       int remaining = statement_block_len;
@@ -161,19 +174,34 @@ flush (struct sqlq *q, struct statement *statement)
 	  s = (void *) (uintptr_t) s + len;
 	}
       assert (remaining == 0);
-      q->used = 0;
+
+      /* We could add something to the buffer while executing this
+	 code, e.g., if the ERROR_HANDLER callback uses an output
+	 routine that uses sqlq.  Deal with that gracefully, i.e.,
+	 without dropping any message.  */
+      if (q->used != statement_block_len)
+	{
+	  assert (q->used > statement_block_len);
+	  memmove (q->buffer, &q->buffer[statement_block_len],
+		   q->used - statement_block_len);
+	}
+      q->used -= statement_block_len;
+      assert (q->used >= 0);
     }
 
   /* Then execute any "hanging command."  */
   if (statement)
     execute (q, statement);
 
-  sqlite3_exec (q->db, "end transaction", NULL, NULL, &errmsg);
-  if (errmsg)
+  if (! nested_transaction)
     {
-      ERROR_HANDLER (q, NULL, NULL, 0, "end transaction", errmsg);
-      sqlite3_free (errmsg);
-      errmsg = NULL;
+      sqlite3_exec (q->db, "end transaction", NULL, NULL, &errmsg);
+      if (errmsg)
+	{
+	  ERROR_HANDLER (q, NULL, NULL, 0, "end transaction", errmsg);
+	  sqlite3_free (errmsg);
+	  errmsg = NULL;
+	}
     }
 }
 
