@@ -360,6 +360,34 @@ addrinfo_req (gpointer user_data)
   return false;
 }
 
+/* Return the time that the oldest scan that we track completed.  */
+static uint64_t
+oldest_recorded_scan_completed (NCNetworkMonitor *m)
+{
+  int i;
+  uint64_t oldest = m->scan_completed[0];
+  for (i = 1;
+       i < sizeof (m->scan_completed) / sizeof (m->scan_completed[0]);
+       i ++)
+    oldest = MIN (oldest, m->scan_completed[i]);
+
+  return oldest;
+}
+
+static void
+note_scan_completed (NCNetworkMonitor *m)
+{
+  int i;
+  uint64_t oldest_idx = 0;
+  for (i = 1;
+       i < sizeof (m->scan_completed) / sizeof (m->scan_completed[0]);
+       i ++)
+    if (m->scan_completed[i] > m->scan_completed[oldest_idx])
+      oldest_idx = i;
+
+  m->scan_completed[oldest_idx] = now ();
+}
+
 static void
 icd2_state_sig_2_cb (DBusGProxy *proxy,
 		     char *network_type,
@@ -373,9 +401,17 @@ icd2_state_sig_2_cb (DBusGProxy *proxy,
 
   if (nstate == ICD_STATE_SEARCH_START)
     {
-      debug (4, "Noticed scan.  Am %sscanning.  Last scan completed: "TIME_FMT,
+      uint64_t n = now ();
+
+      build_assert (sizeof (m->scan_completed)
+		    / sizeof (m->scan_completed[0]) == 3);
+
+      debug (4, "Noticed scan.  Am %sscanning.  "
+	     "Last scans completed: "TIME_FMT", "TIME_FMT", "TIME_FMT,
 	     m->am_scanning ? "" : "not ",
-	     TIME_PRINTF (now () - m->scan_completed));
+	     TIME_PRINTF (n - m->scan_completed[0]),
+	     TIME_PRINTF (n - m->scan_completed[1]),
+	     TIME_PRINTF (n - m->scan_completed[2]));
       if (! m->am_scanning)
 	/* We are not scanning, but ICD2 emitted some scan results.
 	   If we request a scan, we'll get the results as well.
@@ -385,10 +421,9 @@ icd2_state_sig_2_cb (DBusGProxy *proxy,
 	   completes, we cancel our interest, but, before ICD2 notices
 	   that we cancelled, it could already have started a new
 	   scan.  We need to ignore these results.  We only register
-	   interest if the last scan that we requested completed more
-	   than a minute ago.  */
-	if (now () - m->scan_completed > 60 * 1000)
-	  /* The last completed scan was more than a minute ago.  */
+	   interest if the oldest recorded scan that we requested
+	   completed more than a minute ago.  */
+	if (n - oldest_recorded_scan_completed (m) > 60 * 1000)
 	  nm_scan (m);
     }
 }
@@ -780,7 +815,7 @@ icd2_scan_sig_cb (DBusGProxy *proxy,
 	      do_debug (3)
 		s = g_string_new ("Network scan completed:");
 
-	      m->scan_completed = now ();
+	      note_scan_completed (m);
 
 	      GError *error = NULL;
 	      if (! com_nokia_icd2_scan_cancel_req (m->icd2_proxy, &error))

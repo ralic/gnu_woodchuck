@@ -298,7 +298,7 @@ struct _NCNetworkMonitor
      are struct nm_aps.  */
   GHashTable *network_type_to_scan_results_hash;
   int am_scanning;
-  uint64_t scan_completed;
+  uint64_t scan_completed[3];
 #endif
 
 #if HAVE_ICD2
