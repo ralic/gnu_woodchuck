@@ -226,10 +226,10 @@ class Job(threading.Thread):
 
 APT_CACHE_DIRECTORY = "/var/cache/apt/archives"
 
+dbus_service_name = "org.woodchuck.apt-woodchuck"
+
 # Class that receives and processes Woodchuck upcalls.
 class AptWoodchuck(PyWoodchuck):
-    dbus_service_name = "org.woodchuck.apt-woodchuck"
-
     packages_stream_identifier = 'packages'
 
     def __init__(self, daemon):
@@ -254,12 +254,12 @@ class AptWoodchuck(PyWoodchuck):
             # (DBus queues messages for 25 seconds.  Sometimes, that is
             # just not enough.)
             try:
-                self.bus_name = dbus.service.BusName(self.dbus_service_name,
+                self.bus_name = dbus.service.BusName(dbus_service_name,
                                                      bus=dbus.SessionBus(),
                                                      do_not_queue=True)
             except dbus.exceptions.NameExistsException, e:
                 print_and_log("Already running (Unable to claim %s: %s)."
-                              % (self.dbus_service_name, str(e)))
+                              % (dbus_service_name, str(e)))
                 sys.exit(1)
 
 
@@ -271,7 +271,7 @@ class AptWoodchuck(PyWoodchuck):
         # service name to identify itself to Woodchuck.
         PyWoodchuck.__init__(
             self, human_readable_name="Application Update Manager",
-            dbus_service_name=self.dbus_service_name,
+            dbus_service_name=dbus_service_name,
             request_feedback=daemon)
 
         # Check if Woodchuck is really available.  If not, bail.
