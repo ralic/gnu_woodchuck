@@ -21,6 +21,9 @@ import woodchuck
 from UserDict import DictMixin
 from weakref import WeakValueDictionary
 
+import logging
+logger = logging.getLogger(__name__)
+
 def _singleton(cls, identifier, *init_args):
     """
     Ensure that there is only a single instance of a given object type
@@ -89,7 +92,20 @@ class _BaseObject(object):
             name = 'cookie'
 
         if name != 'property_list' and name in self.property_list:
-            return self.llobject.__getattribute__ (name)
+            try:
+                llobject = self.llobject
+            except AttributeError:
+                # Someone inherited from e.g. PyWoodchuck but has not
+                # yet called PyWoodchuck's init function.
+                logger.exception(
+                    "Incorrect usage of %s: you can't lookup properties"
+                    " (in this case %s) until you've called __init__.",
+                    self.__class__.__name__, name)
+                llobject = None
+
+            if llobject is not None:
+                return llobject.__getattribute__ (name)
+
         return super (_BaseObject, self).__getattribute__ (name)
 
     def __setattr__(self, name, value):
@@ -105,7 +121,18 @@ class _BaseObject(object):
             if name == 'cookie':
                 # Rename the entry in the containing map.
                 oldvalue = self['cookie']
-            self.llobject.__setattr__ (name, value)
+            try:
+                llobject = self.llobject
+            except AttributeError:
+                # Someone inherited from e.g. PyWoodchuck but has not
+                # yet called PyWoodchuck's init function.
+                logger.exception(
+                    "Incorrect usage of %s: you can't set properties"
+                    " (in this case %s) until you've called __init__.",
+                    self.__class__.__name__, name)
+                raise
+
+            llobject.__setattr__ (name, value)
             if self.containing_dict is not None and name == 'cookie':
                 assert oldvalue in self.containing_dict
                 del self.containing_dict[oldvalue]
