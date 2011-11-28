@@ -116,29 +116,8 @@ debug_ (const char *file, const char *function, int line,
 
   /* Only initialize the buffer once we see an async message.  */
   if (! debug_output_buffer && async)
-    {
-      debug_output_buffer = sqlq_new (debug_output_file, 8 * 4096, 30,
-				      &sqlq_error_handler);
-
-      /* Flush and destroy the buffer when the thread exists.  */
-      void destructor (void *value)
-      {
-	sqlq_flush (debug_output_buffer);
-	sqlq_free (debug_output_buffer);
-	debug_output_buffer = NULL;
-      }
-
-      static pthread_key_t key;
-
-      void set_destructor (void)
-      {
-	pthread_key_create (&key, destructor);
-      }
-      static pthread_once_t set_destructor_once = PTHREAD_ONCE_INIT;
-      pthread_once (&set_destructor_once, set_destructor);
-
-      pthread_setspecific (key, debug_output_buffer);
-    }
+    debug_output_buffer = sqlq_new (debug_output_file, 8 * 4096, 30,
+				    &sqlq_error_handler);
 
   /* If we have a debug buffer, we use it unconditionally to ensure
      messages are ordered chronologically.  If we don't have a debug
@@ -209,6 +188,35 @@ debug_init_ (void)
       sqlite3_free (errmsg);
       errmsg = NULL;
     }
+
+  /* Flush and destroy any buffer when the thread exists and close the
+     database connection.  */
+  void destructor (void *value)
+  {
+    if (debug_output_buffer)
+      {
+	sqlq_flush (debug_output_buffer);
+	sqlq_free (debug_output_buffer);
+	debug_output_buffer = NULL;
+      }
+
+    if (debug_output_file)
+      {
+	sqlite3_close (debug_output_file);
+	debug_output_file = NULL;
+      }
+  }
+
+  static pthread_key_t key;
+
+  void set_destructor (void)
+  {
+    pthread_key_create (&key, destructor);
+  }
+  static pthread_once_t set_destructor_once = PTHREAD_ONCE_INIT;
+  pthread_once (&set_destructor_once, set_destructor);
+
+  pthread_setspecific (key, debug_output_file);
 
   return debug_output_filename;
 #else
