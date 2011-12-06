@@ -703,9 +703,6 @@ pcb_free (struct pcb *pcb)
 	  /* We are our parent's last descendant and it is a zombie.
 	     Free it.  */
 	  {
-	    /* XXX: Don't assert that the parent is a top-level.  See
-	       the assertion correction below..  */
-	    // assert (pcb->parent->top_level);
 	    p = pcb->parent;
 	  }
       }
@@ -746,42 +743,38 @@ pcb_free (struct pcb *pcb)
       /* We are not a top-level.  We can exit now.  Our parent
 	 inherits our children.  */
 
-      if (! pcb->parent)
-	/* We are not a top level process and we don't have a parent.
-	   Something went wrong!  Print some debugging information
-	   out.
+      /* Note: It is possible that our parent is NULL and we are not a
+	 top-level.  Consider:
 
-	   XXX: If you fix this, reenable the assertion towards the
-	   start of this function.  */
-	debug (0, "Assertion failure: pcb->top_level is false and "
-	       "pcb->parent is NULL for "PCB_FMT,
-	       PCB_PRINTF(pcb));
-
+           - We are tracing process A
+           - Process A spawns process B
+           - Process B spawns process C
+           - Process C spawns process D
+           - We notice processes C and D.
+             - C is not a top-level but its parent is NULL because
+                we haven't noticed B yet.
+           - C quits and we notice.
+             - C is now a zombie (it has children)
+           - D quits and we notice.
+             - C is a zombie, with no children and no parent!
+           - Now we notice B.
+      */
       GSList *l;
       for (l = pcb->children; l; l = l->next)
 	{
 	  struct pcb *child = l->data;
 
-	  if (! pcb->parent)
-	    debug (0, "child: "PCB_FMT, PCB_PRINTF(child));
-
 	  assert (child->parent == pcb);
 
-	  if (pcb->parent)
-	    child->parent = pcb->parent;
+	  child->parent = pcb->parent;
 	}
 
-      if (! pcb->parent)
-	/* XXX: Avoid crashing...  Try to recover by pretending that
-	   we are a top-level.  */
-	{
-	  pcb->top_level = true;
-	  pcb->zombie = true;
-	  return;
-	}
+      if (pcb->parent)
+	pcb->parent->children = g_slist_concat (pcb->parent->children,
+						pcb->children);
+      else
+	g_slist_free (pcb->children);
 
-      pcb->parent->children
-	= g_slist_concat (pcb->parent->children, pcb->children);
       pcb->children = NULL;
     }
 
