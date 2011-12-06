@@ -323,6 +323,7 @@ static GSList *suspended_tcbs;
 static struct tcb *thread_trace (pid_t tid, struct pcb *parent,
 				 bool already_ptracing);
 static void thread_untrace (struct tcb *tcb, bool need_detach);
+static struct pcb *pcb_parent (struct pcb *pcb);
 
 /* A process's control block.  All threads in the same process are
    mapped to the same pcb.  */
@@ -468,7 +469,9 @@ callback_enqueue (struct tcb *tcb, int op,
       tl = tcb->pcb;
       while (! tl->top_level)
 	{
-	  if (! tl->parent)
+	  struct pcb *parent = pcb_parent (tl);
+
+	  if (! parent)
 	    /* It is possible that we have a process that doesn't have
 	       a parent and is not a top-level process.  How?  It is
 	       possible that we find out about a process because we
@@ -479,7 +482,7 @@ callback_enqueue (struct tcb *tcb, int op,
 	      break;
 	    }
 
-	  tl = tl->parent;
+	  tl = parent;
 	}
     }
 
@@ -645,6 +648,62 @@ pcb_parent_set (struct pcb *pcb, struct pcb *parent)
   parent->children = g_slist_prepend (parent->children, pcb);
 }
 
+/* Return the pcb corresponding to the TID's parent, or NULL if we
+   aren't tracing its parent.  */
+static struct pcb *
+pcb_find_parent_of (pid_t tid)
+{
+  pid_t ppid = tid_to_ppid (tid);
+  if (! ppid)
+    return NULL;
+
+  struct pcb *parent = g_hash_table_lookup (pcbs, (gpointer) (uintptr_t) ppid);
+  if (! parent)
+    return NULL;
+
+  assertx (parent->group_leader.tid == ppid,
+	   "pcbs hash inconsistent: %d != %d!",
+	   parent->group_leader.tid, ppid);
+
+  return parent;
+}
+
+/* Return PCB's parent, or NULL if we aren't tracing its parent.  */
+static struct pcb *
+pcb_parent (struct pcb *pcb)
+{
+  /* Note: If PCB->PARENT is set, it may not be the process's unix
+     parent.  Consider:
+
+      - Process A spawns process B
+      - Process B spawns process C
+      - Process B exits
+  
+    Since B is not a top-level, we don't want to keep it around as a
+    zombie so we have A inherit B's children.  Now, C->PARENT is A,
+    not B.  */
+
+  if (pcb->parent)
+    return pcb->parent;
+  if (pcb->top_level)
+    /* It's a top-level and has no parent.  We are not tracing its
+       parent.  */
+    return NULL;
+
+  pid_t tid = pcb->group_leader.tid;
+  struct pcb *parent = pcb_find_parent_of (tid);
+
+  if (parent)
+    {
+      pcb_parent_set (pcb, parent);
+
+      debug (3, PCB_FMT": Found parent via /proc: "PCB_FMT,
+	     PCB_PRINTF (pcb), PCB_PRINTF (parent));
+    }
+
+  return parent;
+}
+
 /* Remove a PCB from the PCBS hash and release the PCB data structure.
    All the process's threads must be freed.  */
 static void
@@ -666,8 +725,8 @@ pcb_free (struct pcb *pcb)
     if (! g_hash_table_remove (pcbs,
 			       (gpointer) (uintptr_t) pcb->group_leader.tid))
       {
-	debug (0, "Failed to remove pcb for %d from hash table?!?",
-	       (int) pcb->group_leader.tid);
+	debug (0, "Failed to remove pcb "PCB_FMT" from hash table?!?",
+	       PCB_PRINTF (pcb));
 	assert (0 == 1);
       }
 
@@ -693,17 +752,38 @@ pcb_free (struct pcb *pcb)
     callback_enqueue (&pcb->group_leader,
 		      -1, NULL, NULL, 0, (void *) pcb->exe);
 
+    struct pcb *parent = pcb_parent (pcb);
+
     struct pcb *p = NULL;
-    if (pcb->parent)
+    if (parent)
       /* Remove ourself from our parent.  */
       {
-	pcb->parent->children = g_slist_remove (pcb->parent->children, pcb);
+	parent->children = g_slist_remove (parent->children, pcb);
 
-	if (! pcb->parent->children && pcb->parent->zombie)
+	if (! parent->children && parent->zombie)
 	  /* We are our parent's last descendant and it is a zombie.
 	     Free it.  */
 	  {
-	    p = pcb->parent;
+	    /* A zombie has no threads.  */
+	    assert (! parent->tcbs);
+
+	    /* Note: It is conceivable that although PARENT is a
+	       zombie, it is not a top-level.
+
+	       - We are tracing process A
+	       - Process A spawns process B
+	       - Process B spawns process C
+	       - Process C spawns process D
+	       - We notice processes C and D.
+	         - C is not a top-level but its parent is NULL because
+                   we haven't noticed B yet.
+	       - C quits and we notice.
+	         - C is now a zombie (it has children)
+	       - D quits and we notice.
+	         - C is a zombie, with no children and no parent!
+	       - Now we notice B.
+	    */
+	    p = parent;
 	  }
       }
 
@@ -723,7 +803,7 @@ pcb_free (struct pcb *pcb)
 				     pcb->group_leader.tid);
       if (errmsg)
 	{
-	  debug (0, "Saving patch %d: %s", err, errmsg);
+	  debug (0, "Deleting patch %d: %s", err, errmsg);
 	  sqlite3_free (errmsg);
 	  errmsg = NULL;
 	}
@@ -759,6 +839,7 @@ pcb_free (struct pcb *pcb)
              - C is a zombie, with no children and no parent!
            - Now we notice B.
       */
+      struct pcb *parent = pcb_parent (pcb);
       GSList *l;
       for (l = pcb->children; l; l = l->next)
 	{
@@ -766,12 +847,13 @@ pcb_free (struct pcb *pcb)
 
 	  assert (child->parent == pcb);
 
-	  child->parent = pcb->parent;
+	  /* We don't use pcb_parent_set so as to avoid an O(n^2)
+	     algorithm.  */
+	  child->parent = parent;
 	}
 
-      if (pcb->parent)
-	pcb->parent->children = g_slist_concat (pcb->parent->children,
-						pcb->children);
+      if (parent)
+	parent->children = g_slist_concat (parent->children, pcb->children);
       else
 	g_slist_free (pcb->children);
 
@@ -2355,6 +2437,11 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
 {
   assert (pthread_equal (pthread_self (), process_monitor_tid));
 
+  /* If PARENT is NULL, look up the parent's PCB using tid's ppid and
+     fix up PARENT.  */
+  if (! parent)
+    parent = pcb_find_parent_of (tid);
+
   debug (3, "thread_trace (tid: %d, parent: %d, %s attached)",
 	 (int) tid, parent ? parent->group_leader.tid : 0,
 	 already_ptracing ? "already" : "need to");
@@ -2515,9 +2602,10 @@ process_untrace (pid_t pid)
       return;
     }
 
+  struct pcb *parent = pcb_parent (pcb);
   if (! pcb->top_level)
     {
-      assert (pcb->parent);
+      assert (parent);
       debug (0, "Bad untrace: %d never explicitly traced.", pid);
       return;
     }
@@ -2528,7 +2616,7 @@ process_untrace (pid_t pid)
       return;
     }
 
-  if (pcb->parent)
+  if (parent)
     /* Don't actually detach.  An ancestor is still traced.  */
     {
       pcb->top_level = false;
