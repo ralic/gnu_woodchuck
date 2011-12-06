@@ -2422,7 +2422,7 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
 	/* We've added a thread before we've added the group leader.
 	   (It can happen depending on how thread creation events are
 	   ordered.)  Add the group leader now.  Then add TID.  */
-	thread_trace (pgl, NULL, false);
+	thread_trace (pgl, parent, false);
 
       /* We'll figure out the process's parent when the group leader
 	 gets explicitly added.  */
