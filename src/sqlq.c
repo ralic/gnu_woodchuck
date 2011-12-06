@@ -20,6 +20,7 @@
 #include <sqlite3.h>
 #include <glib.h>
 #include <assert.h>
+#include <inttypes.h>
 
 #include "sqlq.h"
 #undef sqlq_append
@@ -38,8 +39,10 @@ struct statement
 static uintptr_t
 alignment_fixup (uintptr_t addr)
 {
-  int alignment = __alignof__ (uintptr_t);
-  return (addr + alignment - 1) & ~(alignment - 1);
+  uintptr_t alignment = __alignof__ (uintptr_t);
+  uintptr_t result = (addr + alignment - 1) & ~(alignment - 1);
+  assertx (result >= addr, "%"PRIxPTR" >= %"PRIxPTR, result, addr);
+  return result;
 }
 
 static void
