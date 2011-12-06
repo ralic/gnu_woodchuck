@@ -184,9 +184,18 @@ flush (struct sqlq *q, struct statement *statement)
 	 without dropping any message.  */
       if (q->used != statement_block_len)
 	{
-	  assert (q->used > statement_block_len);
-	  memmove (q->buffer, &q->buffer[statement_block_len],
-		   q->used - statement_block_len);
+	  if (q->used < statement_block_len)
+	    /* WTF?!?.  */
+	    {
+	      debug (0, "Assertion failure: "
+		     "q->used (%d) >= statement_block_len (%d)",
+		     q->used, statement_block_len);
+	      /* Attempt to recover.  */
+	      q->used = statement_block_len;
+	    }
+	  else
+	    memmove (q->buffer, &q->buffer[statement_block_len],
+		     q->used - statement_block_len);
 	}
       q->used -= statement_block_len;
       assert (q->used >= 0);
