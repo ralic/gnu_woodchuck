@@ -116,7 +116,7 @@ sqlq_free (struct sqlq *q)
 static void
 flush (struct sqlq *q, struct statement *statement)
 {
-  struct statement *statement_block = q->buffer;
+  struct statement *statement_block = (void *) q->buffer;
   int statement_block_len = q->used;
 
   if (statement_block_len == 0 && ! statement)

@@ -1285,8 +1285,8 @@ org_woodchuck_upcall_object_transfer (GWoodchuck *wc,
 
   if (wc->vtable && wc->vtable->object_transfer)
     {
-      uint32_t ret = wc->vtable->object_transfer (stream_cookie, object_cookie,
-						  quality, wc->user_data);
+      wc->vtable->object_transfer (stream_cookie, object_cookie,
+				   quality, wc->user_data);
       return TRUE;
     }
 

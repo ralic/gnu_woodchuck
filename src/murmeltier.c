@@ -29,6 +29,8 @@
 #include <dbus/dbus-glib-bindings.h>
 #include <sqlite3.h>
 #include <pthread.h>
+#include <unistd.h>
+#include <sys/types.h>
 
 #include "murmeltier-dbus-server.h"
 

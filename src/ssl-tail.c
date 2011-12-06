@@ -40,7 +40,8 @@ main (int argc, char *argv[])
     const char *timestamp = argv[i ++];
     const char *tz = argv[i ++];
     const char *function = argv[i ++];
-    const char *file = argv[i ++];
+    // const char *file = argv[i ++];
+    i ++;
     const char *line = argv[i ++];
     const char *return_address = argv[i ++];
     const char *msg = argv[i ++];
