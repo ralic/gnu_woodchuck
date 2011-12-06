@@ -2427,7 +2427,18 @@ thread_trace (pid_t tid, struct pcb *parent, bool already_ptracing)
       /* We'll figure out the process's parent when the group leader
 	 gets explicitly added.  */
     }
+  else
+    /* Consider the following sequence of events:
 
+       - We start tracing the first thread in process A (A.1)
+       - A spawns a new process, B, we start tracing B.1.
+       - A starts a new thread A.2
+       - A.1 exits: it has no other TCBs, but it does have
+         a child.  Therefore, we mark it as a zombie.
+       - We now notice A.2.  The pcb for A.1 is still around, but we need
+         to clear its zombie!
+    */
+    pcb->zombie = false;
 
   if (tid == pgl)
     {
