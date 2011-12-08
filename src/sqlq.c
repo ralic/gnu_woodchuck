@@ -96,7 +96,7 @@ sqlq_free (struct sqlq *q)
   if (q->used != 0)
     {
       q->buffer[q->used] = 0;
-      ERROR_HANDLER (q, NULL, NULL, 0, q->buffer,
+      ERROR_HANDLER (q, NULL, NULL, 0, "",
 		     "sqlq_free called, but still have unflushed data!");
     }
 
