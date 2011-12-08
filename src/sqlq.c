@@ -135,7 +135,8 @@ flush (struct sqlq *q, struct statement *statement)
 
       char *msg = NULL;
       asprintf (&msg, "begin transaction;\n(%s: %s)",
-		statement->sql, nested_transaction ? "" : "dropping");
+		statement ? statement->sql : "",
+		nested_transaction ? "" : "dropping");
       ERROR_HANDLER (q, NULL, NULL, 0, msg, errmsg);
       free (msg);
 
